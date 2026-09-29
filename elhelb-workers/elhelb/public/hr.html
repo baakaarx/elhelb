@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>الموارد البشرية</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<header class="hd"><img class="lg" src="/logo.png" alt="ELHELB GROUP"><div class="tt">قاعدة بيانات العاملين</div><div class="st">Employees Database</div></header><div class="bar"></div>
+<div class="w">
+<div class="c" id="login"><div class="ch">دخول الموارد البشرية</div>
+<label for="u">اسم المستخدم</label><input type="text" id="u" autocomplete="username">
+<label for="pw">كلمة السر</label><input type="password" id="pw" autocomplete="current-password">
+<div class="row"><a class="btn" style="background:#fff;color:#444;border:1px solid var(--bd);margin-top:18px;text-align:center;flex:1" href="/">رجوع</a><button id="in" style="flex:1">دخول</button></div>
+<div class="m er" id="lm"></div></div>
+<div id="panel" hidden>
+<div class="c"><div class="bar2"><b>العاملين المسجلين</b><span><a class="btn" href="/api/export.docx">⬇️ تنزيل Word بالصور</a> <button class="g" id="out" style="width:auto;margin:0;padding:9px 14px;font-size:14px">خروج</button></span></div><div id="ls"></div></div>
+<div class="c"><b>سجل النشاط</b><div id="lg"></div></div>
+</div></div>
+<script src="/hr.js"></script></body></html>

@@ -1,0 +1,26 @@
+databases:
+  - name: elhelb-db
+    region: frankfurt
+    plan: basic-256mb   # مدفوعة وبياناتها دايمة. خطة free بتنتهي بعد فترة وبتمسح الداتا
+services:
+  - type: web
+    name: elhelb-workers
+    runtime: node
+    region: frankfurt
+    plan: free          # غيّرها لـ starter لو عايز الموقع ميبطّاش
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: elhelb-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: HR_USER
+        sync: false
+      - key: HR_PASSWORD
+        sync: false
