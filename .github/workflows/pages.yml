@@ -1,6 +1,6 @@
-# نشر تلقائي لـ new ai على GitHub Pages
+# نشر تلقائي لـ ELHELP AI على GitHub Pages
 # كل ما يتعمل push على main، الموقع بيتحدث لوحده
-name: Deploy new ai to GitHub Pages
+name: Deploy ELHELP AI to GitHub Pages
 
 on:
   push:
