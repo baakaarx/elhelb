@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>new ai 🤖</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="hd">
+  <div class="brand">🤖 new ai</div>
+  <div class="hd-btns">
+    <button id="btnNew" title="محادثة جديدة (الذاكرة بتفضل محفوظة)">🗑️ محادثة جديدة</button>
+    <button id="btnSettings" title="الإعدادات والمفتاح">⚙️ الإعدادات</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ===== منطقة الشات ===== -->
+  <section class="chat">
+    <div id="msgs" class="msgs">
+      <div class="bubble bot">
+        أهلاً! أنا new ai — الايجنت الشخصي بتاعك 👋<br>
+        كلّمني عن نفسك وهفتكر اللي تقوله (بصّ على لوحة الذاكرة جنبك).<br>
+        أول مرة؟ دوس على <b>⚙️ الإعدادات</b> وحط مفتاح API مجاني.
+      </div>
+    </div>
+    <div class="inputbar">
+      <textarea id="box" rows="1" placeholder="اكتب رسالتك هنا..."></textarea>
+      <button id="btnSend">إرسال</button>
+    </div>
+  </section>
+
+  <!-- ===== اللوحة الجانبية: الذاكرة + المعرفة ===== -->
+  <aside class="side">
+    <h3>🧠 الذاكرة الشخصية</h3>
+    <p class="hint">الموديل بيقرر لوحده يحفظ إيه عنك هنا بأداة save_memory</p>
+    <ul id="memList" class="mem-list"></ul>
+
+    <h3>📚 قاعدة المعرفة (علّمه أي حاجة)</h3>
+    <p class="hint">كل اللي علّمته للايجنت — بيدوّر هنا بأداة search_knowledge قبل ما يرد (دي فكرة الـ RAG)</p>
+    <div class="teach-btns">
+      <button id="btnTeach">➕ علّمه حاجة</button>
+      <button id="btnUpload">📄 ارفع ملف نصي</button>
+      <input id="fileIn" type="file" accept=".txt,.md,.csv,.json" multiple hidden>
+    </div>
+    <ul id="knList" class="mem-list"></ul>
+
+    <h3>🛠️ آخر استخدام للأدوات</h3>
+    <div id="toolLog" class="tool-log">لسه مفيش</div>
+  </aside>
+
+</main>
+
+<!-- ===== نافذة الإعدادات ===== -->
+<dialog id="dlg">
+  <h3>⚙️ الإعدادات</h3>
+  <label>المزوّد (كله مجاني):</label>
+  <select id="provider">
+    <option value="groq">Groq — سريع جداً (console.groq.com)</option>
+    <option value="gemini">Google Gemini (aistudio.google.com)</option>
+  </select>
+  <label>مفتاح الـ API:</label>
+  <input id="apiKey" type="password" placeholder="الصق المفتاح هنا" autocomplete="off">
+  <label>اسم الموديل (سيبه فاضي للافتراضي):</label>
+  <input id="modelName" type="text" placeholder="مثال: llama-3.3-70b-versatile">
+  <p class="hint">
+    المفتاح بيتحفظ في متصفحك بس (localStorage) ومش بيتبعت لأي حد غير المزوّد نفسه.<br>
+    📖 طريقة الحصول على مفتاح مجاني موجودة في ملف README.md
+  </p>
+  <div class="dlg-btns">
+    <button id="btnSave">حفظ</button>
+    <button id="btnClose" type="button">إغلاق</button>
+  </div>
+</dialog>
+
+<!-- ===== نافذة "علّمه حاجة" ===== -->
+<dialog id="dlgTeach">
+  <h3>📚 علّم الايجنت حاجة جديدة</h3>
+  <label>عنوان الموضوع:</label>
+  <input id="knTopic" type="text" placeholder="مثال: أسعار منتجات شركتي">
+  <label>المحتوى:</label>
+  <textarea id="knContent" rows="7" placeholder="اكتب كل التفاصيل اللي عايزه يعرفها عن الموضوع ده..."></textarea>
+  <p class="hint">ممكن كمان تعلّمه من الشات مباشرة: اكتبله "اتعلم إن..." وهو هيحفظها بنفسه.</p>
+  <div class="dlg-btns">
+    <button id="btnTeachSave">حفظ</button>
+    <button id="btnTeachClose" type="button">إغلاق</button>
+  </div>
+</dialog>
+
+<script src="config.js"></script> <!-- إعداد محلي اختياري: لو مش موجود الصفحة شغالة عادي -->
+<script src="agent.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

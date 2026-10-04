@@ -1,0 +1,115 @@
+/* تصميم بسيط ونضيف — RTL بالكامل */
+* { box-sizing: border-box; margin: 0; }
+:root {
+  --bg: #0f1420; --panel: #1a2232; --panel2: #202b40;
+  --txt: #e8edf5; --mut: #8b97ab; --ac: #4f8cff; --ok: #39d98a;
+}
+body {
+  font-family: 'Segoe UI', Tahoma, Arial, sans-serif;
+  background: var(--bg); color: var(--txt);
+  height: 100vh; display: flex; flex-direction: column;
+}
+
+/* الهيدر */
+.hd {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 18px; background: var(--panel); border-bottom: 1px solid #2a3650;
+}
+.brand { font-size: 1.15rem; font-weight: 700; }
+.hd-btns button {
+  background: var(--panel2); color: var(--txt); border: 1px solid #2a3650;
+  border-radius: 8px; padding: 7px 12px; margin-inline-start: 8px; cursor: pointer;
+}
+.hd-btns button:hover { border-color: var(--ac); }
+
+/* التقسيمة */
+.layout { flex: 1; display: flex; min-height: 0; }
+.chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.side {
+  width: 300px; background: var(--panel); border-inline-start: 1px solid #2a3650;
+  padding: 14px; overflow-y: auto;
+}
+.side h3 { font-size: .95rem; margin-bottom: 8px; color: var(--ac); }
+.hint { font-size: .78rem; color: var(--mut); margin-bottom: 10px; line-height: 1.5; }
+
+/* الذاكرة */
+.mem-list { list-style: none; margin-bottom: 18px; }
+.mem-list li {
+  background: var(--panel2); border-radius: 8px; padding: 8px 10px;
+  margin-bottom: 6px; font-size: .85rem; display: flex; justify-content: space-between; gap: 6px;
+}
+.mem-list li.empty { color: var(--mut); background: none; }
+.mem-list button {
+  background: none; border: none; color: var(--mut); cursor: pointer; font-size: .8rem;
+}
+.mem-list button:hover { color: #ff6b6b; }
+.teach-btns { display: flex; gap: 6px; margin-bottom: 10px; }
+.teach-btns button {
+  flex: 1; background: var(--panel2); color: var(--txt); border: 1px solid #2a3650;
+  border-radius: 8px; padding: 7px 6px; cursor: pointer; font-size: .78rem;
+}
+.teach-btns button:hover { border-color: var(--ok); }
+.mem-list li span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog textarea {
+  width: 100%; background: var(--panel2); color: var(--txt);
+  border: 1px solid #2a3650; border-radius: 8px; padding: 9px 12px;
+  font-size: .95rem; font-family: inherit; resize: vertical;
+}
+.tool-log {
+  background: var(--panel2); border-radius: 8px; padding: 8px 10px;
+  font-size: .75rem; color: var(--ok); direction: ltr; text-align: left;
+  word-break: break-all; font-family: monospace;
+}
+
+/* الرسايل */
+.msgs { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+.bubble {
+  max-width: 75%; padding: 10px 14px; border-radius: 14px;
+  line-height: 1.6; white-space: pre-wrap; word-wrap: break-word;
+}
+.bubble.me { background: var(--ac); align-self: flex-start; border-bottom-right-radius: 4px; }
+.bubble.bot { background: var(--panel2); align-self: flex-end; border-bottom-left-radius: 4px; }
+.bubble.typing { color: var(--mut); }
+
+/* شريط الكتابة */
+.inputbar {
+  display: flex; gap: 10px; padding: 12px 18px;
+  background: var(--panel); border-top: 1px solid #2a3650;
+}
+#box {
+  flex: 1; background: var(--panel2); color: var(--txt);
+  border: 1px solid #2a3650; border-radius: 10px; padding: 10px 14px;
+  font-family: inherit; font-size: 1rem; resize: none;
+}
+#box:focus { outline: none; border-color: var(--ac); }
+#btnSend {
+  background: var(--ac); color: #fff; border: none; border-radius: 10px;
+  padding: 0 22px; font-size: 1rem; cursor: pointer;
+}
+#btnSend:disabled { opacity: .5; }
+
+/* الإعدادات */
+dialog {
+  background: var(--panel); color: var(--txt); border: 1px solid #2a3650;
+  border-radius: 14px; padding: 22px; width: min(420px, 92vw); direction: rtl;
+}
+dialog::backdrop { background: rgba(0,0,0,.6); }
+dialog h3 { margin-bottom: 14px; }
+dialog label { display: block; margin: 10px 0 4px; font-size: .85rem; color: var(--mut); }
+dialog input, dialog select {
+  width: 100%; background: var(--panel2); color: var(--txt);
+  border: 1px solid #2a3650; border-radius: 8px; padding: 9px 12px; font-size: .95rem;
+}
+.dlg-btns { display: flex; gap: 10px; margin-top: 16px; }
+.dlg-btns button {
+  flex: 1; padding: 10px; border: none; border-radius: 8px; cursor: pointer; font-size: .95rem;
+}
+#btnSave { background: var(--ac); color: #fff; }
+#btnClose { background: var(--panel2); color: var(--txt); }
+
+/* موبايل */
+@media (max-width: 720px) {
+  .layout { flex-direction: column; }
+  .side { width: 100%; border: none; border-top: 1px solid #2a3650; max-height: 35vh; }
+  .bubble { max-width: 90%; }
+}
