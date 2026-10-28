@@ -122,26 +122,6 @@ export default function App() {
     }
   }
 
-  async function handleQuickSwitchAccount(username, password) {
-    try {
-      const res = await apiFetch('/api/auth/login', {
-        method: 'POST',
-        body: { username, password },
-      });
-      setStoredToken(res.token);
-      setUser(res.user);
-      setActiveBoardId(null);
-      setInitialCardId(null);
-      setActiveTab('boards');
-      showToast(
-        `تم التبديل إلى حساب (${res.user.fullName}) — ${res.user.roleName}`,
-        'success'
-      );
-    } catch (err) {
-      showToast(err.message || 'تعذر تبديل الحساب', 'error');
-    }
-  }
-
   async function handleLogout() {
     try {
       await apiFetch('/api/auth/logout', { method: 'POST', suppressPermissionModal: true });
@@ -206,7 +186,6 @@ export default function App() {
         <WaitingOnboardingView
           user={user}
           onRefreshMe={refreshMe}
-          onQuickSwitchAccount={handleQuickSwitchAccount}
           onLogout={handleLogout}
           showToast={showToast}
         />
@@ -223,7 +202,6 @@ export default function App() {
         onSelectTab={handleSelectTab}
         onOpenBoard={handleOpenBoard}
         onOpenRequestModal={(ctx) => setRequestModalContext(ctx || {})}
-        onQuickSwitchAccount={handleQuickSwitchAccount}
         onLogout={handleLogout}
         onRefreshMe={refreshMe}
       />

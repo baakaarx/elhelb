@@ -1,19 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import {
   ShieldCheck,
-  Lock,
-  Users,
   Building2,
   LogIn,
-  KeyRound,
   UserPlus,
   Eye,
   EyeOff,
-  Crown,
+  Mail,
   X,
 } from 'lucide-react';
 import { apiFetch, setStoredToken } from '../api';
-import { getInitials } from '../constants';
 
 function GoogleMark() {
   return (
@@ -47,10 +43,9 @@ function FacebookMark() {
 }
 
 export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
-  const [username, setUsername] = useState('chairman');
-  const [password, setPassword] = useState('123456');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
-  const [demoAccounts, setDemoAccounts] = useState([]);
   const [oauthInfo, setOauthInfo] = useState({
     googleConfigured: false,
     facebookConfigured: false,
@@ -59,39 +54,29 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(initialOAuthError || '');
 
-  // Social Entry Modal state (used when external OAuth keys aren't configured yet, or for instant signup)
-  const [socialModalProvider, setSocialModalProvider] = useState(null); // 'google' | 'facebook' | null
+  // Social Entry Dialog (when external redirect keys aren't set yet)
+  const [socialModalProvider, setSocialModalProvider] = useState(null);
   const [socialFullName, setSocialFullName] = useState('');
   const [socialEmail, setSocialEmail] = useState('');
-  const [socialDeptId, setSocialDeptId] = useState('');
-  const [socialJobTitle, setSocialJobTitle] = useState('');
   const [socialSubmitting, setSocialSubmitting] = useState(false);
   const [socialError, setSocialError] = useState('');
 
   useEffect(() => {
-    apiFetch('/api/auth/demo-accounts')
-      .then((list) => setDemoAccounts(Array.isArray(list) ? list : []))
-      .catch(() => {});
-
     apiFetch('/api/auth/oauth/providers')
       .then((info) => {
-        if (info) {
-          setOauthInfo(info);
-          if (Array.isArray(info.departments) && info.departments.length > 0) {
-            setSocialDeptId(info.departments[0].id);
-          }
-        }
+        if (info) setOauthInfo(info);
       })
       .catch(() => {});
   }, []);
 
-  async function performLogin(u, p) {
+  async function handleSubmit(e) {
+    e.preventDefault();
     setError('');
     setLoading(true);
     try {
       const res = await apiFetch('/api/auth/login', {
         method: 'POST',
-        body: { username: u, password: p },
+        body: { username, password },
       });
       onLoginSuccess(res.token, res.user);
     } catch (err) {
@@ -99,11 +84,6 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
     } finally {
       setLoading(false);
     }
-  }
-
-  function handleSubmit(e) {
-    e.preventDefault();
-    performLogin(username, password);
   }
 
   function handleSocialButtonClick(provider) {
@@ -150,124 +130,18 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
         <div className="login-brand-header">
           <img src="/logo.png" alt="ELHELB GROUP" />
           <h1>مجموعة الهلب — ELHELB GROUP</h1>
-          <p>منصة إدارة المهام والأقسام بنظام الصلاحيات الديناميكية</p>
+          <p>بوابة إدارة الأعمال واللوحات للأقسام والقطاعات</p>
           <div className="gold-divider" />
         </div>
 
-        {/* Employee Social Login (Google & Facebook) */}
-        <div style={{ marginBottom: 16 }}>
-          <div
-            style={{
-              fontSize: 12,
-              fontWeight: 800,
-              color: '#0b2545',
-              marginBottom: 8,
-              textAlign: 'center',
-            }}
-          >
-            تسجيل دخول الموظفين الجدد والحاليين بالاسم الحقيقي:
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <button
-              type="button"
-              disabled={loading}
-              onClick={() => handleSocialButtonClick('google')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 8,
-                padding: '10px 10px',
-                borderRadius: 10,
-                background: '#ffffff',
-                border: '1.5px solid #cbd5e1',
-                color: '#0f172a',
-                fontWeight: 800,
-                fontSize: 13,
-                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-              }}
-            >
-              <GoogleMark />
-              <span>دخول بـ Google</span>
-            </button>
-
-            <button
-              type="button"
-              disabled={loading}
-              onClick={() => handleSocialButtonClick('facebook')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 8,
-                padding: '10px 10px',
-                borderRadius: 10,
-                background: '#1877F2',
-                border: '1.5px solid #1877F2',
-                color: '#ffffff',
-                fontWeight: 800,
-                fontSize: 13,
-                boxShadow: '0 1px 2px rgba(24,119,242,0.25)',
-              }}
-            >
-              <FacebookMark />
-              <span>دخول بـ Facebook</span>
-            </button>
-          </div>
-          <div style={{ fontSize: 11, color: '#64748b', textAlign: 'center', marginTop: 6 }}>
-            بعد التسجيل بـ Google أو Facebook يقوم <strong>رئيس القسم</strong> بضمك لقسمك بضغطة واحدة
-          </div>
-        </div>
-
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            margin: '12px 0 14px',
-            color: '#94a3b8',
-            fontSize: 11.5,
-            fontWeight: 700,
-          }}
-        >
-          <div style={{ flex: 1, height: 1, background: '#e2e8f0' }} />
-          <span>أو الدخول بحسابات الإدارة ورؤساء الأقسام</span>
-          <div style={{ flex: 1, height: 1, background: '#e2e8f0' }} />
-        </div>
-
-        {/* Sovereign & Admin Ready Credentials Box */}
-        <div
-          style={{
-            background: '#fffbeb',
-            border: '1px solid #fde68a',
-            borderRadius: 10,
-            padding: '10px 12px',
-            marginBottom: 14,
-            fontSize: 12,
-            color: '#78350f',
-          }}
-        >
-          <div style={{ fontWeight: 900, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5 }}>
-            <Crown size={14} color="#b45309" />
-            حساب رئيس مجلس الإدارة السيادي (جاهز للدخول):
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
-            <span>
-              المستخدم: <strong dir="ltr">chairman</strong> | قسم الـ IT: <strong dir="ltr">it_mgr</strong>
-            </span>
-            <span>
-              كلمة المرور الموحدة: <strong dir="ltr">123456</strong>
-            </span>
-          </div>
-        </div>
-
+        {/* Standard Username & Password Login */}
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label className="form-label">اسم المستخدم أو البريد الإلكتروني</label>
             <input
               type="text"
               className="form-input"
-              placeholder="مثال: chairman أو it_mgr أو export_mgr"
+              placeholder="أدخل اسم المستخدم"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
@@ -283,7 +157,7 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
               <input
                 type={showPass ? 'text' : 'password'}
                 className="form-input"
-                placeholder="123456"
+                placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
@@ -336,48 +210,84 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
             disabled={loading}
           >
             <LogIn size={18} />
-            {loading ? 'جاري تسجيل الدخول...' : 'دخول فوري إلى المنصة'}
+            {loading ? 'جاري تسجيل الدخول...' : 'تسجيل الدخول'}
           </button>
         </form>
 
-        {/* Compact Quick-Login Pills */}
-        {demoAccounts.length > 0 && (
-          <div style={{ marginTop: 14 }}>
-            <div style={{ fontSize: 11.5, fontWeight: 800, color: '#475569', marginBottom: 6 }}>
-              دخول سريع بضغطة واحدة:
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-              {demoAccounts.slice(0, 6).map((acc) => (
-                <button
-                  key={`quick-${acc.username}`}
-                  type="button"
-                  disabled={loading}
-                  onClick={() => {
-                    setUsername(acc.username);
-                    setPassword(acc.demoPassword);
-                    performLogin(acc.username, acc.demoPassword);
-                  }}
-                  style={{
-                    background: acc.roleSlug === 'chairman' ? '#fef3c7' : '#f1f5f9',
-                    border: `1px solid ${acc.roleSlug === 'chairman' ? '#f59e0b' : '#cbd5e1'}`,
-                    borderRadius: 8,
-                    padding: '4px 8px',
-                    fontSize: 11,
-                    fontWeight: 800,
-                    color: '#0f172a',
-                  }}
-                >
-                  {acc.roleSlug === 'chairman' ? '👑 ' : ''}
-                  {acc.roleName} ({acc.username})
-                </button>
-              ))}
-            </div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            margin: '18px 0 14px',
+            color: '#94a3b8',
+            fontSize: 11.5,
+            fontWeight: 700,
+          }}
+        >
+          <div style={{ flex: 1, height: 1, background: '#e2e8f0' }} />
+          <span>تسجيل موظف جديد لأول مرة</span>
+          <div style={{ flex: 1, height: 1, background: '#e2e8f0' }} />
+        </div>
+
+        {/* Employee Registration / Sign-In via Google & Facebook */}
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => handleSocialButtonClick('google')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                padding: '10px 10px',
+                borderRadius: 10,
+                background: '#ffffff',
+                border: '1.5px solid #cbd5e1',
+                color: '#0f172a',
+                fontWeight: 800,
+                fontSize: 13,
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+              }}
+            >
+              <GoogleMark />
+              <span>دخول بـ Google</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => handleSocialButtonClick('facebook')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                padding: '10px 10px',
+                borderRadius: 10,
+                background: '#1877F2',
+                border: '1.5px solid #1877F2',
+                color: '#ffffff',
+                fontWeight: 800,
+                fontSize: 13,
+                boxShadow: '0 1px 2px rgba(24,119,242,0.25)',
+              }}
+            >
+              <FacebookMark />
+              <span>دخول بـ Facebook</span>
+            </button>
           </div>
-        )}
+          <div style={{ fontSize: 11.5, color: '#64748b', textAlign: 'center', marginTop: 8, lineHeight: 1.6 }}>
+            عند التسجيل عبر Google أو Facebook تقوم بإنشاء <strong>اسم مستخدم وباسورد خاص بك</strong> ثم اختيار قسمك ليقوم <strong>رئيس القسم</strong> بضمك.
+          </div>
+        </div>
       </div>
 
+      {/* Corporate Overview Panel (Zero Demo Accounts) */}
       <div className="login-showcase-panel">
-        <div>
+        <div style={{ margin: 'auto 0' }}>
           <div
             style={{
               display: 'inline-flex',
@@ -386,135 +296,120 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
               background: 'rgba(212, 169, 10, 0.18)',
               border: '1px solid rgba(212, 169, 10, 0.45)',
               color: '#fde68a',
-              padding: '5px 12px',
+              padding: '6px 14px',
               borderRadius: 99,
-              fontSize: 12.5,
-              fontWeight: 700,
-              marginBottom: 14,
+              fontSize: 13,
+              fontWeight: 800,
+              marginBottom: 18,
             }}
           >
-            <KeyRound size={14} />
-            دليل الحسابات الجاهزة للتجربة (كلمة المرور الموحدة: 123456)
+            <ShieldCheck size={16} />
+            المنصة الرقمية الموحدة — ELHELB GROUP
           </div>
 
-          <h2 style={{ margin: '0 0 8px', fontSize: 24, fontWeight: 900 }}>
-            هيكل متكامل لمجلس الإدارة، الـ IT، التصدير، تسجيل المنتجات، وكافة أقسام الشركة
+          <h2 style={{ margin: '0 0 12px', fontSize: 28, fontWeight: 900, lineHeight: 1.4 }}>
+            نظام متابعة المهام وإدارة قطاعات وأقسام مجموعة الهلب
           </h2>
-          <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13.5, maxWidth: 760, lineHeight: 1.7 }}>
-            اضغط على أي حساب بالأسفل للدخول مباشرة ومشاهدة صلاحياته الفعلية وعزل أقسام الشركة:
+          <p style={{ margin: '0 0 28px', color: '#cbd5e1', fontSize: 15, maxWidth: 680, lineHeight: 1.8 }}>
+            منصة عمل مؤسسية مؤمّنة بالكامل لتنظيم لوحات المهام اليومية عبر قطاعات الشركة مع عزل كامل لبيانات كل قسم ونظام صلاحيات وإشعارات بريدية فورية.
           </p>
 
-          <div className="demo-accounts-grid">
-            {demoAccounts.map((acc) => {
-              const isSovereign = acc.roleSlug === 'chairman';
-              return (
-                <button
-                  key={acc.username}
-                  type="button"
-                  className="demo-account-btn"
-                  disabled={loading}
-                  style={
-                    isSovereign
-                      ? {
-                          border: '1.5px solid rgba(251, 191, 36, 0.75)',
-                          background: 'rgba(180, 83, 9, 0.22)',
-                        }
-                      : undefined
-                  }
-                  onClick={() => {
-                    setUsername(acc.username);
-                    setPassword(acc.demoPassword);
-                    performLogin(acc.username, acc.demoPassword);
-                  }}
-                >
-                  <div
-                    className="avatar-circle"
-                    style={{ background: acc.avatarColor, width: 40, height: 40, fontSize: 13 }}
+          {/* Company Departments Strip */}
+          {oauthInfo.departments && oauthInfo.departments.length > 0 && (
+            <div style={{ marginBottom: 30 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: '#fde68a', marginBottom: 10 }}>
+                الأقسام والقطاعات العاملة على المنصة:
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {oauthInfo.departments.map((d) => (
+                  <span
+                    key={d.id}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 7,
+                      padding: '7px 13px',
+                      borderRadius: 10,
+                      background: 'rgba(255,255,255,0.08)',
+                      border: '1px solid rgba(255,255,255,0.14)',
+                      color: '#f8fafc',
+                      fontSize: 12.5,
+                      fontWeight: 700,
+                    }}
                   >
-                    {getInitials(acc.fullName)}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
-                      <span style={{ fontWeight: 800, fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 4 }}>
-                        {isSovereign && <Crown size={14} color="#fbbf24" />}
-                        {acc.fullName}
-                      </span>
-                      <code
-                        dir="ltr"
-                        style={{
-                          background: 'rgba(0,0,0,0.35)',
-                          color: '#fde68a',
-                          padding: '1px 6px',
-                          borderRadius: 5,
-                          fontSize: 11,
-                        }}
-                      >
-                        {acc.username} / 123456
-                      </code>
-                    </div>
-                    <div style={{ fontSize: 11.5, color: '#cbd5e1', marginBottom: 5 }}>
-                      {acc.jobTitle}
-                    </div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                      <span
-                        style={{
-                          background: acc.roleColor || '#0a6fa8',
-                          color: '#fff',
-                          padding: '1px 7px',
-                          borderRadius: 99,
-                          fontSize: 10.5,
-                          fontWeight: 700,
-                        }}
-                      >
-                        {acc.roleName}
-                      </span>
-                      <span
-                        style={{
-                          background: 'rgba(255,255,255,0.14)',
-                          color: '#e2e8f0',
-                          padding: '1px 7px',
-                          borderRadius: 99,
-                          fontSize: 10.5,
-                          fontWeight: 600,
-                        }}
-                      >
-                        {acc.departmentName}
-                      </span>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+                    <span
+                      style={{
+                        width: 9,
+                        height: 9,
+                        borderRadius: '50%',
+                        background: d.color || '#38bdf8',
+                      }}
+                    />
+                    {d.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
-        <div
-          style={{
-            marginTop: 24,
-            paddingTop: 16,
-            borderTop: '1px solid rgba(255,255,255,0.12)',
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-            gap: 14,
-            fontSize: 12.5,
-            color: '#cbd5e1',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Crown size={17} color="#fbbf24" />
-            <span>حساب سيادي أعلى لرئيس مجلس الإدارة + صلاحيات مشتركة لقسم الـ IT</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Building2 size={17} color="#38bdf8" />
-            <span>عزل كامل لأقسام التصدير، تسجيل المنتجات، الـ IT، المبيعات، المشتريات، والميديا</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <UserPlus size={17} color="#34d399" />
-            <span>تسجيل الموظفين بـ Google و Facebook وضمهم عبر رؤساء الأقسام</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <ShieldCheck size={17} color="#c084fc" />
-            <span>صلاحيات ديناميكية في قاعدة البيانات مع نظام طلبات إذن من المدير</span>
+          {/* How Employee Onboarding Works */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+              gap: 14,
+            }}
+          >
+            <div
+              style={{
+                padding: 16,
+                borderRadius: 12,
+                background: 'rgba(255,255,255,0.06)',
+                border: '1px solid rgba(255,255,255,0.12)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800, color: '#fde68a', marginBottom: 6 }}>
+                <UserPlus size={17} />
+                <span>1. تسجيل الموظف الجديد</span>
+              </div>
+              <div style={{ fontSize: 12.5, color: '#cbd5e1', lineHeight: 1.7 }}>
+                يسجل الموظف عبر Google أو Facebook ثم يُنشئ لنفسه اسم مستخدم وباسورد خاصاً به.
+              </div>
+            </div>
+
+            <div
+              style={{
+                padding: 16,
+                borderRadius: 12,
+                background: 'rgba(255,255,255,0.06)',
+                border: '1px solid rgba(255,255,255,0.12)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800, color: '#38bdf8', marginBottom: 6 }}>
+                <Building2 size={17} />
+                <span>2. اختيار القسم واعتماد المدير</span>
+              </div>
+              <div style={{ fontSize: 12.5, color: '#cbd5e1', lineHeight: 1.7 }}>
+                يحدد الموظف قسمه ليصل طلب انضمامه إلى رئيس القسم لاعتماده وتسكينه في لوحات قسمه.
+              </div>
+            </div>
+
+            <div
+              style={{
+                padding: 16,
+                borderRadius: 12,
+                background: 'rgba(255,255,255,0.06)',
+                border: '1px solid rgba(255,255,255,0.12)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800, color: '#34d399', marginBottom: 6 }}>
+                <Mail size={17} />
+                <span>3. إشعارات فورية على Gmail</span>
+              </div>
+              <div style={{ fontSize: 12.5, color: '#cbd5e1', lineHeight: 1.7 }}>
+                ترسل المنصة تنبيهات مباشرة على البريد الإلكتروني عند طلبات الانضمام والصلاحيات والمهام.
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -573,15 +468,15 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
                     lineHeight: 1.65,
                   }}
                 >
-                  بعد تسجيل الدخول بحسابك، ستنتقل تلقائياً إلى <strong>صفحة إنشاء اسم المستخدم وكلمة المرور</strong> الخاصة بك ثم <strong>تحديد القسم</strong> الذي تعمل به.
+                  بعد المتابعة، ستنتقل مباشرة إلى <strong>صفحة إنشاء اسم المستخدم وكلمة المرور</strong> الخاصة بك ثم <strong>تحديد القسم</strong> الذي تعمل به.
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">الاسم الكامل بحسابك *</label>
+                  <label className="form-label">الاسم الكامل للموظف *</label>
                   <input
                     type="text"
                     className="form-input"
-                    placeholder="مثال: كريم محمود عبد الرحمن"
+                    placeholder="اكتب اسمك الكامل"
                     value={socialFullName}
                     onChange={(e) => setSocialFullName(e.target.value)}
                     required

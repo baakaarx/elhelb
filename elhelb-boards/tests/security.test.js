@@ -33,25 +33,77 @@ async function main() {
   }
 
   try {
-    console.log('1️⃣ Testing unauthenticated block...');
+    console.log('1️⃣ Testing clean production seed: ONLY admin (010228513849) exists & quick-login endpoint is removed...');
     const unauth = await api('GET', '/api/boards');
     assert.equal(unauth.status, 401);
 
-    const chairmanTok = await login('chairman', '123456');
-    const adminTok = await login('admin', '123456');
-    const itMgrTok = await login('it_mgr', '123456');
-    const exportMgrTok = await login('export_mgr', '123456');
-    const exportEmpTok = await login('export_emp', '123456');
-    const regEmpTok = await login('reg_emp', '123456');
-    const salesMgrTok = await login('sales_mgr', '123456');
-    const salesEmpTok = await login('sales_emp', '123456');
-    const salesViewerTok = await login('sales_viewer', '123456');
-    const mediaEmpTok = await login('media_emp', '123456');
+    // Quick-login / demo-accounts endpoint must NOT be publicly accessible (401 unauth)
+    const demoEndpointUnauth = await api('GET', '/api/auth/demo-accounts');
+    assert.notEqual(demoEndpointUnauth.status, 200, '/api/auth/demo-accounts must never return accounts');
+
+    // Old demo credentials must fail
+    const oldDemoAttempt = await api('POST', '/api/auth/login', null, {
+      username: 'chairman',
+      password: '123456',
+    });
+    assert.equal(oldDemoAttempt.status, 401, 'Old demo accounts must not exist');
+
+    // Owner sovereign account logs in with admin / 010228513849
+    const chairmanTok = await login('admin', '010228513849');
+
+    // Even when authenticated, /api/auth/demo-accounts returns 404 (route completely removed)
+    const demoEndpointAuth = await api('GET', '/api/auth/demo-accounts', chairmanTok);
+    assert.equal(demoEndpointAuth.status, 404, '/api/auth/demo-accounts route must be 404');
+
+    const initialUsersRes = await api('GET', '/api/admin/users', chairmanTok);
+    assert.equal(initialUsersRes.status, 200);
+    assert.equal(initialUsersRes.data.length, 1, 'Fresh production DB must contain ONLY 1 account (admin)');
+    assert.equal(initialUsersRes.data[0].username, 'admin');
+    assert.equal(initialUsersRes.data[0].role_slug, 'chairman');
+
+    // Fetch roles & departments so we can dynamically create isolated test users inside tmpDb
+    const rolesRes = await api('GET', '/api/admin/roles', chairmanTok);
+    const deptsRes = await api('GET', '/api/admin/departments', chairmanTok);
+    assert.equal(deptsRes.data.length, 8);
+
+    const roleBySlug = (slug) => rolesRes.data.roles.find((r) => r.slug === slug);
+    const deptBySlug = (slug) => deptsRes.data.find((d) => d.slug === slug);
+
+    const chairmanRole = roleBySlug('chairman');
+    const superAdminRole = roleBySlug('super_admin');
+    const itAdminRole = roleBySlug('it_admin');
+    const deptMgrRole = roleBySlug('dept_manager');
+    const staffRole = roleBySlug('staff');
+    const viewerRole = roleBySlug('viewer');
+
+    async function createUser(username, fullName, roleId, departmentId, email = null) {
+      const res = await api('POST', '/api/admin/users', chairmanTok, {
+        username,
+        password: 'TestPass#2026',
+        fullName,
+        email,
+        jobTitle: fullName,
+        roleId,
+        departmentId,
+      });
+      assert.equal(res.status, 201, `Failed creating ${username}: ${JSON.stringify(res.data)}`);
+      return login(username, 'TestPass#2026');
+    }
+
+    const gmTok = await createUser('gm_test', 'مدير عام تجريبي', superAdminRole.id, null);
+    const itMgrTok = await createUser('it_mgr', 'مسؤول IT', itAdminRole.id, deptBySlug('it').id);
+    const exportMgrTok = await createUser('export_mgr', 'رئيس قسم التصدير', deptMgrRole.id, deptBySlug('export').id, 'export.head@gmail.com');
+    const exportEmpTok = await createUser('export_emp', 'موظف تصدير', staffRole.id, deptBySlug('export').id);
+    const regEmpTok = await createUser('reg_emp', 'موظف تسجيل منتجات', staffRole.id, deptBySlug('registration').id);
+    const salesMgrTok = await createUser('sales_mgr', 'رئيس قسم المبيعات', deptMgrRole.id, deptBySlug('sales').id);
+    const salesEmpTok = await createUser('sales_emp', 'موظف مبيعات', staffRole.id, deptBySlug('sales').id);
+    const salesViewerTok = await createUser('sales_viewer', 'متدرب مبيعات', viewerRole.id, deptBySlug('sales').id);
+    const mediaEmpTok = await createUser('media_emp', 'موظف ميديا', staffRole.id, deptBySlug('media').id);
 
     console.log('2️⃣ Testing strict Department Isolation across Export, Product Registration, IT, Sales & Media...');
     const chairmanBoards = await api('GET', '/api/boards', chairmanTok);
     assert.equal(chairmanBoards.status, 200);
-    assert.equal(chairmanBoards.data.length, 8, 'Chairman should see all 8 company boards across all 8 departments');
+    assert.equal(chairmanBoards.data.length, 8, 'Admin (Chairman) should see all 8 company boards across all 8 departments');
 
     const execSummary = await api('GET', '/api/boards/executive-summary', chairmanTok);
     assert.equal(execSummary.status, 200);
@@ -86,28 +138,29 @@ async function main() {
     assert.equal(probeMediaBoard.status, 403);
     assert.equal(probeMediaBoard.data.targetBoardTitle, null, '403 must NOT leak private board title');
 
-    // IDOR attack: Sales employee editing a Media card directly by card ID
+    // Create a card in Media board as mediaEmp, then attempt IDOR attack from salesEmp
     const mediaBoardFull = await api('GET', `/api/boards/${mediaBoard.id}`, mediaEmpTok);
     assert.equal(mediaBoardFull.status, 200);
-    const mediaCard = mediaBoardFull.data.cards[0];
-    const idorAttack = await api('PATCH', `/api/cards/${mediaCard.id}`, salesEmpTok, {
+    const createdMediaCard = await api(
+      'POST',
+      `/api/lists/${mediaBoardFull.data.lists[0].id}/cards`,
+      mediaEmpTok,
+      { title: 'تصميم كتالوج التصدير الدولي' }
+    );
+    assert.equal(createdMediaCard.status, 201);
+
+    const idorAttack = await api('PATCH', `/api/cards/${createdMediaCard.data.id}`, salesEmpTok, {
       title: 'اختراق كارت قسم آخر',
     });
     assert.equal(idorAttack.status, 403, 'Server must block cross-department IDOR on cards');
 
-    console.log('3️⃣ Testing Sovereign Role Hierarchy (Chairman > GM > IT Admin)...');
-    // IT Manager HAS shared administrative access to boards, users, roles & departments
+    console.log('3️⃣ Testing Sovereign Role Hierarchy (admin [Chairman] > GM > IT Admin)...');
     const itDepts = await api('GET', '/api/admin/departments', itMgrTok);
     assert.equal(itDepts.status, 200);
     assert.equal(itDepts.data.length, 8);
 
-    const rolesRes = await api('GET', '/api/admin/roles', chairmanTok);
-    const chairmanRole = rolesRes.data.roles.find((r) => r.slug === 'chairman');
-    const superAdminRole = rolesRes.data.roles.find((r) => r.slug === 'super_admin');
-    const staffRole = rolesRes.data.roles.find((r) => r.slug === 'staff');
-
-    // Neither GM (admin) nor IT Manager (it_mgr) can edit Chairman's sovereign role!
-    const gmTouchChairman = await api('PUT', `/api/admin/roles/${chairmanRole.id}`, adminTok, {
+    // Neither GM nor IT Manager can edit Chairman's sovereign role!
+    const gmTouchChairman = await api('PUT', `/api/admin/roles/${chairmanRole.id}`, gmTok, {
       name: 'تغيير غير مصرح',
     });
     assert.equal(gmTouchChairman.status, 403, 'GM must NOT be able to modify Chairman role');
@@ -117,19 +170,23 @@ async function main() {
     });
     assert.equal(itTouchGm.status, 403, 'IT Admin must NOT be able to modify GM role');
 
-    // Users list check: IT Admin cannot deactivate or downgrade Chairman user
-    const usersList = await api('GET', '/api/admin/users', chairmanTok);
-    const chairmanUser = usersList.data.find((u) => u.username === 'chairman');
-    const itAttackChairmanUser = await api('PATCH', `/api/admin/users/${chairmanUser.id}`, itMgrTok, {
+    // IT Admin cannot deactivate or downgrade sovereign admin account
+    const adminAccount = initialUsersRes.data[0];
+    const itAttackChairmanUser = await api('PATCH', `/api/admin/users/${adminAccount.id}`, itMgrTok, {
       isActive: false,
     });
-    assert.equal(itAttackChairmanUser.status, 403, 'IT Admin must NOT be able to modify Chairman account');
+    assert.equal(itAttackChairmanUser.status, 403, 'IT Admin must NOT be able to modify sovereign admin account');
 
     console.log('4️⃣ Testing Viewer vs Staff Role enforcement on server...');
     const salesBoard1 = salesBoards.data[0];
     const salesBoardFull = await api('GET', `/api/boards/${salesBoard1.id}`, salesEmpTok);
     const salesLists = salesBoardFull.data.lists;
-    const salesCards = salesBoardFull.data.cards;
+
+    // Seed one baseline card in Sales board as salesEmp
+    const baselineSalesCard = await api('POST', `/api/lists/${salesLists[0].id}/cards`, salesEmpTok, {
+      title: 'متابعة عقد التوريد السنوي',
+    });
+    assert.equal(baselineSalesCard.status, 201);
 
     // Viewer cannot create or move cards
     const viewerCreate = await api('POST', `/api/lists/${salesLists[0].id}/cards`, salesViewerTok, {
@@ -137,7 +194,7 @@ async function main() {
     });
     assert.equal(viewerCreate.status, 403);
 
-    const viewerMove = await api('POST', `/api/cards/${salesCards[0].id}/move`, salesViewerTok, {
+    const viewerMove = await api('POST', `/api/cards/${baselineSalesCard.data.id}/move`, salesViewerTok, {
       targetListId: salesLists[1].id,
       targetIndex: 0,
     });
@@ -190,7 +247,7 @@ async function main() {
     assert.equal(moveAllowedAgain.status, 200, 'Restoring permission in DB must immediately allow request');
 
     console.log('6️⃣ Testing Google/Facebook Sign-In -> Create Username/Password -> Pick Department -> Claim + Gmail Logs...');
-    const exportDept = itDepts.data.find((d) => d.slug === 'export');
+    const exportDept = deptBySlug('export');
 
     // New employee signs in via Google with ONLY their real name & Gmail
     const googleSign = await api('POST', '/api/auth/social-entry', null, {
@@ -328,8 +385,7 @@ async function main() {
     assert.equal(mgrApprove.status, 200);
 
     // Trying to delete a DIFFERENT card must STILL fail with 403!
-    const wrongCard = salesCards.find((c) => c.id !== empCreateCard.data.id);
-    const deleteWrongCard = await api('DELETE', `/api/cards/${wrongCard.id}`, salesEmpTok);
+    const deleteWrongCard = await api('DELETE', `/api/cards/${baselineSalesCard.data.id}`, salesEmpTok);
     assert.equal(deleteWrongCard.status, 403, 'Card-scoped grant must NOT allow deleting other cards');
 
     // Deleting the exact approved card succeeds!
@@ -345,27 +401,35 @@ async function main() {
     assert.equal(deleteAfterExhaust.status, 403, 'One-time grant must be exhausted after 1 execution');
 
     console.log('8️⃣ Testing Cross-Department Access Request, Anti-Escalation & Instant Revocation...');
-    const inboxChairman = await api('GET', '/api/requests/inbox', chairmanTok);
-    const crossDeptReq = inboxChairman.data.requests.find(
-      (r) => r.permission_key === 'boards.view_department' && r.status === 'pending'
-    );
-    assert.ok(crossDeptReq, 'Seeded cross-dept request should exist');
+    const mediaDept = deptBySlug('media');
+    const crossDeptCreate = await api('POST', '/api/requests', salesEmpTok, {
+      permissionKey: 'boards.view_department',
+      targetDepartmentId: mediaDept.id,
+      requestedDuration: '24h',
+      reason: 'أحتاج الاطلاع على لوحة الميديا لمراجعة الكتالوج التصديري.',
+    });
+    assert.equal(crossDeptCreate.status, 201);
 
     // Sales Manager MUST NOT be allowed to approve access to Media Department!
     const illegalCrossApprove = await api(
       'POST',
-      `/api/requests/${crossDeptReq.id}/review`,
+      `/api/requests/${crossDeptCreate.data.id}/review`,
       salesMgrTok,
       { decision: 'approved', approvedDuration: '24h' }
     );
     assert.equal(illegalCrossApprove.status, 403);
 
-    // Chairman approves 24h view access to Media Department for Sales Employee
-    const chairmanCrossApprove = await api('POST', `/api/requests/${crossDeptReq.id}/review`, chairmanTok, {
-      decision: 'approved',
-      approvedDuration: '24h',
-      reviewNote: 'مسموح بالاطلاع لمتابعة الكتالوج التصديري.',
-    });
+    // Admin (Chairman) approves 24h view access to Media Department for Sales Employee
+    const chairmanCrossApprove = await api(
+      'POST',
+      `/api/requests/${crossDeptCreate.data.id}/review`,
+      chairmanTok,
+      {
+        decision: 'approved',
+        approvedDuration: '24h',
+        reviewNote: 'مسموح بالاطلاع لمتابعة الكتالوج التصديري.',
+      }
+    );
     assert.equal(chairmanCrossApprove.status, 200);
 
     // Now Sales employee CAN view Media board
@@ -373,7 +437,7 @@ async function main() {
     assert.equal(canViewMediaNow.status, 200);
     assert.ok(canViewMediaNow.data.board.accessViaGrant);
 
-    // Chairman revokes the grant -> access immediately cut off!
+    // Admin revokes the grant -> access immediately cut off!
     const grantId = canViewMediaNow.data.board.accessViaGrant.id;
     const revokeRes = await api('POST', `/api/grants/${grantId}/revoke`, chairmanTok);
     assert.equal(revokeRes.status, 200);
@@ -381,7 +445,7 @@ async function main() {
     const viewAfterRevoke = await api('GET', `/api/boards/${mediaBoard.id}`, salesEmpTok);
     assert.equal(viewAfterRevoke.status, 403, 'Revoked grant must immediately cut off access');
 
-    console.log('\n✅ ALL 8 SOVEREIGN RBAC, EXPORT/REGISTRATION/IT ISOLATION & GOOGLE/FACEBOOK ONBOARDING TESTS PASSED 100%!');
+    console.log('\n✅ ALL 8 PRODUCTION v4 TESTS (SINGLE ADMIN ACCOUNT, ZERO DEMO ACCOUNTS, RBAC, ONBOARDING & GMAIL) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}

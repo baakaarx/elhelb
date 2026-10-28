@@ -22,7 +22,6 @@ export default function TopNavbar({
   onSelectTab,
   onOpenBoard,
   onOpenRequestModal,
-  onQuickSwitchAccount,
   onLogout,
   onRefreshMe,
 }) {
@@ -31,7 +30,6 @@ export default function TopNavbar({
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
-  const [demoAccounts, setDemoAccounts] = useState([]);
 
   const searchRef = useRef(null);
   const notifRef = useRef(null);
@@ -99,15 +97,8 @@ export default function TopNavbar({
     } catch (_) {}
   }
 
-  async function openAccountMenu() {
-    const next = !accountMenuOpen;
-    setAccountMenuOpen(next);
-    if (next && demoAccounts.length === 0) {
-      try {
-        const list = await apiFetch('/api/auth/demo-accounts');
-        setDemoAccounts(list);
-      } catch (_) {}
-    }
+  function openAccountMenu() {
+    setAccountMenuOpen((prev) => !prev);
   }
 
   return (
@@ -415,70 +406,6 @@ export default function TopNavbar({
                   عدد الصلاحيات المفعلة بدورك: <strong>{user.permissions.length}</strong> صلاحية
                 </div>
               </div>
-
-              {demoAccounts.length > 0 && (
-                <div style={{ marginBottom: 10 }}>
-                  <div
-                    style={{
-                      fontSize: 11.5,
-                      fontWeight: 800,
-                      color: '#64748b',
-                      marginBottom: 6,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 5,
-                    }}
-                  >
-                    <Users size={13} />
-                    تبديل سريع للحساب (مجلس الإدارة، IT، الأقسام):
-                  </div>
-                  <div style={{ maxHeight: 235, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    {demoAccounts.map((acc) => {
-                      const isCurrent = acc.username === user.username;
-                      return (
-                        <button
-                          key={acc.username}
-                          type="button"
-                          disabled={isCurrent}
-                          onClick={() => {
-                            setAccountMenuOpen(false);
-                            onQuickSwitchAccount(acc.username, acc.demoPassword);
-                          }}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: 8,
-                            padding: '7px 10px',
-                            borderRadius: 8,
-                            border: `1px solid ${isCurrent ? '#0a6fa8' : '#e2e8f0'}`,
-                            background: isCurrent ? '#f0f9ff' : '#fff',
-                            textAlign: 'right',
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                            <div
-                              className="avatar-circle"
-                              style={{ width: 26, height: 26, fontSize: 10.5, background: acc.avatarColor }}
-                            >
-                              {getInitials(acc.fullName)}
-                            </div>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontSize: 12.5, fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 4 }}>
-                                {acc.roleSlug === 'chairman' && <Crown size={12} color="#d97706" />}
-                                {acc.fullName} {isCurrent ? '(الحالي)' : ''}
-                              </div>
-                              <div style={{ fontSize: 11, color: '#64748b' }}>
-                                {acc.roleName} — {acc.departmentName}
-                              </div>
-                            </div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
 
               <button
                 type="button"

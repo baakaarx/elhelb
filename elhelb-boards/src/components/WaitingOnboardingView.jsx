@@ -20,12 +20,10 @@ import { getInitials } from '../constants';
 export default function WaitingOnboardingView({
   user,
   onRefreshMe,
-  onQuickSwitchAccount,
   onLogout,
   showToast,
 }) {
   const [departments, setDepartments] = useState([]);
-  const [demoAccounts, setDemoAccounts] = useState([]);
 
   // Step 1 state: Create Username & Password
   const [fullName, setFullName] = useState(user.fullName || '');
@@ -64,10 +62,6 @@ export default function WaitingOnboardingView({
           }
         }
       })
-      .catch(() => {});
-
-    apiFetch('/api/auth/demo-accounts', { suppressPermissionModal: true })
-      .then((list) => setDemoAccounts(Array.isArray(list) ? list : []))
       .catch(() => {});
   }, []);
 
@@ -667,34 +661,6 @@ export default function WaitingOnboardingView({
               <ShieldCheck size={15} color="#0a6fa8" />
               يمكنك الآن تسجيل الدخول مستقبلاً سواء عبر {providerLabel} أو مباشرة باسم المستخدم{' '}
               <strong dir="ltr">@{user.username}</strong> وكلمة المرور التي اخترتها.
-            </div>
-          </div>
-        )}
-
-        {/* Quick Manager Switcher for instant testing */}
-        {demoAccounts.length > 0 && (
-          <div className="card-box" style={{ marginTop: 18, padding: 18 }}>
-            <div style={{ fontWeight: 800, fontSize: 13.5, color: '#0b2545', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Users size={16} color="#0a6fa8" />
-              لتجربة خطوة قبول رئيس القسم الآن: انتقل بضغطة واحدة إلى حساب رئيس القسم أو الـ IT:
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {demoAccounts
-                .filter((a) =>
-                  ['chairman', 'it_mgr', 'export_mgr', 'reg_mgr', 'sales_mgr', 'media_mgr'].includes(
-                    a.username
-                  )
-                )
-                .map((acc) => (
-                  <button
-                    key={acc.username}
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => onQuickSwitchAccount(acc.username, acc.demoPassword)}
-                  >
-                    الدخول كـ {acc.fullName} ({acc.roleName})
-                  </button>
-                ))}
             </div>
           </div>
         )}
