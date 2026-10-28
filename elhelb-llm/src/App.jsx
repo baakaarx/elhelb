@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { RotateCcw, AudioLines, X } from 'lucide-react';
 import { getVisitorSessionId, resetVisitorSessionId, apiRequest } from './api';
 import { stopSpeaking } from './voiceEngine';
@@ -13,6 +13,41 @@ export default function App() {
     if (typeof window === 'undefined') return false;
     const params = new URLSearchParams(window.location.search);
     return params.get('embed') === '1';
+  }, []);
+
+  // مزامنة الارتفاع الفعلي للشاشة على الموبايل (iOS Safari + Android) عند فتح أو إغلاق لوحة المفاتيح
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const rootEl = document.documentElement;
+    const syncViewportHeight = () => {
+      const vv = window.visualViewport;
+      const height = vv ? vv.height : window.innerHeight;
+      if (height && height > 0) {
+        rootEl.style.setProperty('--app-height', `${Math.round(height)}px`);
+      }
+      // منع انزلاق الصفحة للأعلى في متصفح سفاري عند فتح الكيبورد
+      if (vv && vv.offsetTop > 0) {
+        window.scrollTo(0, 0);
+      }
+    };
+
+    syncViewportHeight();
+    window.addEventListener('resize', syncViewportHeight);
+    window.addEventListener('orientationchange', syncViewportHeight);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', syncViewportHeight);
+      window.visualViewport.addEventListener('scroll', syncViewportHeight);
+    }
+
+    return () => {
+      window.removeEventListener('resize', syncViewportHeight);
+      window.removeEventListener('orientationchange', syncViewportHeight);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', syncViewportHeight);
+        window.visualViewport.removeEventListener('scroll', syncViewportHeight);
+      }
+    };
   }, []);
 
   async function handleNewChat() {
@@ -42,7 +77,7 @@ export default function App() {
         <div className="chatbot-header-inner">
           <div className="brand-identity">
             <img src="./logo.png" alt="ELHELB GROUP" className="brand-crest" />
-            <div>
+            <div className="brand-text-wrap">
               <div className="brand-name">ELHELB GROUP</div>
               <div className="brand-tagline">المساعد الذكي والعيادة الزراعية</div>
             </div>
@@ -56,7 +91,10 @@ export default function App() {
               title="بدء محادثة صوتية مباشرة"
             >
               <AudioLines size={15} />
-              <span>{isEmbeddedWidget ? 'صوت' : 'تحدث بالصوت'}</span>
+              <span className="voice-btn-label-full">
+                {isEmbeddedWidget ? 'تحدث صوتي' : 'تحدث بالصوت'}
+              </span>
+              <span className="voice-btn-label-compact">صوت</span>
             </button>
 
             {hasMessages && (
@@ -65,9 +103,10 @@ export default function App() {
                 className="new-chat-btn"
                 onClick={handleNewChat}
                 title="محادثة جديدة"
+                aria-label="محادثة جديدة"
               >
-                <RotateCcw size={14} />
-                {!isEmbeddedWidget && <span>محادثة جديدة</span>}
+                <RotateCcw size={15} />
+                {!isEmbeddedWidget && <span className="new-chat-label">محادثة جديدة</span>}
               </button>
             )}
 

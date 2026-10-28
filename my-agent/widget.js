@@ -36,8 +36,8 @@
       ':host { all: initial; }' +
       '.elh-wrap {' +
       '  position: fixed;' +
-      '  bottom: 22px;' +
-      '  ' + side + ': 22px;' +
+      '  bottom: max(20px, env(safe-area-inset-bottom, 20px));' +
+      '  ' + side + ': 20px;' +
       '  z-index: 2147483000;' +
       '  font-family: "Cairo", "Segoe UI", Tahoma, Arial, sans-serif;' +
       '  direction: rtl;' +
@@ -45,7 +45,7 @@
       '.elh-launcher-row {' +
       '  display: flex;' +
       '  align-items: center;' +
-      '  gap: 12px;' +
+      '  gap: 10px;' +
       '  flex-direction: ' + (side === 'right' ? 'row' : 'row-reverse') + ';' +
       '}' +
       '.elh-tooltip {' +
@@ -57,12 +57,17 @@
       '  font-size: 13.5px;' +
       '  font-weight: 700;' +
       '  white-space: nowrap;' +
+      '  max-width: calc(100vw - 108px);' +
       '  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);' +
       '  cursor: pointer;' +
       '  display: flex;' +
       '  align-items: center;' +
       '  gap: 8px;' +
       '  transition: transform 0.2s ease, opacity 0.2s ease;' +
+      '}' +
+      '.elh-tooltip-text {' +
+      '  overflow: hidden;' +
+      '  text-overflow: ellipsis;' +
       '}' +
       '.elh-tooltip:hover { transform: translateY(-2px); }' +
       '.elh-tooltip.hidden { display: none; }' +
@@ -72,10 +77,11 @@
       '  border-radius: 50%;' +
       '  background: #22c55e;' +
       '  box-shadow: 0 0 8px #22c55e;' +
+      '  flex-shrink: 0;' +
       '}' +
       '.elh-btn {' +
-      '  width: 64px;' +
-      '  height: 64px;' +
+      '  width: 62px;' +
+      '  height: 62px;' +
       '  border-radius: 50%;' +
       '  border: 2px solid #d4a90a;' +
       '  background: radial-gradient(circle at 50% 38%, rgba(0, 159, 227, 0.28), #04060b 74%);' +
@@ -85,6 +91,9 @@
       '  display: flex;' +
       '  align-items: center;' +
       '  justify-content: center;' +
+      '  flex-shrink: 0;' +
+      '  touch-action: manipulation;' +
+      '  -webkit-tap-highlight-color: transparent;' +
       '  transition: transform 0.2s ease, box-shadow 0.2s ease;' +
       '  animation: elhPulse 2.8s infinite;' +
       '}' +
@@ -97,10 +106,11 @@
       '}' +
       '.elh-panel {' +
       '  position: fixed;' +
-      '  bottom: 98px;' +
-      '  ' + side + ': 22px;' +
+      '  bottom: 96px;' +
+      '  ' + side + ': 20px;' +
       '  width: 410px;' +
-      '  height: min(640px, calc(100vh - 120px));' +
+      '  height: min(640px, calc(100vh - 118px));' +
+      '  height: min(640px, calc(100dvh - 118px));' +
       '  background: #ffffff;' +
       '  border-radius: 22px;' +
       '  border: 1.5px solid rgba(212, 169, 10, 0.55);' +
@@ -123,15 +133,34 @@
       '  display: block;' +
       '  background: #f6f8fb;' +
       '}' +
-      '@media (max-width: 520px) {' +
-      '  .elh-tooltip { font-size: 12px; padding: 7px 12px; }' +
+      '@media (max-width: 640px) {' +
+      '  .elh-wrap {' +
+      '    bottom: max(14px, env(safe-area-inset-bottom, 14px));' +
+      '    ' + side + ': 14px;' +
+      '  }' +
+      '  .elh-btn {' +
+      '    width: 56px;' +
+      '    height: 56px;' +
+      '    padding: 8px;' +
+      '  }' +
+      '  .elh-tooltip {' +
+      '    font-size: 12px;' +
+      '    padding: 7px 12px;' +
+      '    max-width: calc(100vw - 92px);' +
+      '  }' +
+      '  .elh-wrap.is-open .elh-launcher-row {' +
+      '    display: none;' +
+      '  }' +
       '  .elh-panel {' +
       '    inset: 0;' +
+      '    top: 0;' +
       '    bottom: 0;' +
       '    right: 0;' +
       '    left: 0;' +
-      '    width: 100%;' +
-      '    height: 100%;' +
+      '    width: 100vw;' +
+      '    height: 100vh;' +
+      '    height: 100dvh;' +
+      '    max-height: none;' +
       '    border-radius: 0;' +
       '    border: none;' +
       '  }' +
@@ -156,7 +185,8 @@
 
     var tooltip = document.createElement('div');
     tooltip.className = 'elh-tooltip';
-    tooltip.innerHTML = '<span class="elh-dot"></span><span>' + greeting + '</span>';
+    tooltip.innerHTML =
+      '<span class="elh-dot"></span><span class="elh-tooltip-text">' + greeting + '</span>';
 
     var btn = document.createElement('button');
     btn.type = 'button';
@@ -165,6 +195,12 @@
     btn.innerHTML = '<img src="' + baseUrl + '/logo.png" alt="ELHELB AI" />';
 
     var isOpen = false;
+    var savedBodyOverflow = '';
+
+    function isMobileViewport() {
+      return window.innerWidth <= 640;
+    }
+
     function toggleOpen(forceState) {
       isOpen = typeof forceState === 'boolean' ? forceState : !isOpen;
       if (isOpen && !iframeLoaded) {
@@ -173,9 +209,16 @@
       }
       if (isOpen) {
         panel.classList.add('open');
+        wrap.classList.add('is-open');
         tooltip.classList.add('hidden');
+        if (isMobileViewport()) {
+          savedBodyOverflow = document.documentElement.style.overflow || '';
+          document.documentElement.style.overflow = 'hidden';
+        }
       } else {
         panel.classList.remove('open');
+        wrap.classList.remove('is-open');
+        document.documentElement.style.overflow = savedBodyOverflow;
       }
     }
 

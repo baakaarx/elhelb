@@ -129,6 +129,15 @@ export default function ChatView({
 
   const bottomRef = useRef(null);
   const fileInputRef = useRef(null);
+  const textareaRef = useRef(null);
+
+  // ضبط ارتفاع مربع الكتابة تلقائياً ليتمدد بنعومة على الموبايل والكمبيوتر
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+  }, [input]);
 
   useEffect(() => {
     apiRequest(`/api/chat/history?sessionId=${encodeURIComponent(sessionId)}`)
@@ -546,7 +555,7 @@ export default function ChatView({
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/png,image/jpeg,image/webp"
+              accept="image/*"
               style={{ display: 'none' }}
               onChange={(e) => handleSelectImageFile(e.target.files?.[0])}
             />
@@ -555,7 +564,8 @@ export default function ChatView({
               type="button"
               className="attach-btn"
               onClick={() => fileInputRef.current?.click()}
-              title="إرفاق صورة عبوة أو محصول"
+              title="تصوير بالكاميرا أو إرفاق صورة عبوة أو محصول"
+              aria-label="إرفاق صورة"
               disabled={loading || isMicListening}
             >
               <ImagePlus size={20} />
@@ -566,21 +576,29 @@ export default function ChatView({
               className={`mic-btn ${isMicListening ? 'recording' : ''}`}
               onClick={toggleInlineMic}
               title={isMicListening ? 'إيقاف التسجيل' : 'تكلم بصوتك بالعامية'}
+              aria-label={isMicListening ? 'إيقاف التسجيل' : 'التحدث بالصوت'}
               disabled={loading}
             >
               {isMicListening ? <MicOff size={20} /> : <Mic size={20} />}
             </button>
 
             <textarea
+              ref={textareaRef}
               className="composer-textarea"
               rows={1}
+              enterKeyHint="send"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
+              onFocus={() => {
+                setTimeout(() => {
+                  bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                }, 260);
+              }}
               placeholder={
                 isMicListening
                   ? 'أنا سامعك... اتفضل اتكلم'
-                  : 'اكتب بكلامك العادي أو اضغط المايك 🎙️ وتكلم بصوتك...'
+                  : 'اكتب سؤالك أو اضغط المايك 🎙️ وتكلم...'
               }
               disabled={loading}
             />
