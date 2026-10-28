@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const { all, get, run, transaction } = require('../db');
 const { authenticate, userHasPermission, writeAudit } = require('../rbac');
 const { sendElhelbEmail } = require('../mailer');
+const { getStorageStatus } = require('../cloudSync');
 const adminRoutes = require('./admin');
 
 const router = express.Router();
@@ -300,6 +301,7 @@ router.get('/pending', (req, res) => {
     assignableRoles,
     teamMembers,
     canManageAll,
+    storageStatus: getStorageStatus(),
   });
 });
 

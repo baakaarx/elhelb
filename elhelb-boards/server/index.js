@@ -3,8 +3,9 @@ const fs = require('fs');
 const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
-const { initSchema } = require('./db');
+const { initSchema, runUntracked, getWriteCounters } = require('./db');
 const { seedIfNeeded } = require('./seed');
+const cloudSync = require('./cloudSync');
 
 const authRoutes = require('./routes/auth');
 const { router: oauthRoutes } = require('./routes/oauth');
@@ -14,8 +15,10 @@ const kanbanRoutes = require('./routes/kanban');
 const requestsRoutes = require('./routes/requests');
 const adminRoutes = require('./routes/admin');
 
-initSchema();
-seedIfNeeded();
+runUntracked(() => {
+  initSchema();
+  seedIfNeeded();
+});
 
 const app = express();
 app.set('trust proxy', 1);
@@ -33,9 +36,8 @@ app.use(
 app.use(cookieParser());
 app.use(express.json({ limit: '256kb' }));
 
-// Strict zero-caching on ALL API endpoints so CDNs (Cloudflare, Vercel Edge, ISP proxies)
-// and browsers can NEVER cache or share any user's session across visitors or domains
-app.use('/api', (req, res, next) => {
+// Strict zero-caching on ALL API endpoints + Cloud Persistent DB Sync across Serverless containers
+app.use('/api', async (req, res, next) => {
   res.setHeader(
     'Cache-Control',
     'private, no-store, no-cache, max-age=0, must-revalidate, proxy-revalidate'
@@ -47,11 +49,77 @@ app.use('/api', (req, res, next) => {
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   res.setHeader('Vary', 'Authorization, X-Elhelb-Token, Cookie');
+
+  const forceFreshPull = req.method !== 'GET' && req.method !== 'HEAD';
+  await cloudSync.syncBeforeRequest(forceFreshPull);
+
+  const beforeCounters = getWriteCounters();
+  const origJson = res.json.bind(res);
+  const origSend = res.send.bind(res);
+  const origRedirect = res.redirect.bind(res);
+  let flushed = false;
+
+  res.json = function patchedJson(body) {
+    const afterCounters = getWriteCounters();
+    if (flushed || afterCounters.total === beforeCounters.total) {
+      flushed = true;
+      return origJson(body);
+    }
+    flushed = true;
+    const coreChanged = afterCounters.core !== beforeCounters.core;
+    cloudSync
+      .syncAfterMutation({ coreChanged })
+      .finally(() => origJson(body));
+    return res;
+  };
+
+  res.send = function patchedSend(body) {
+    if (flushed) {
+      return origSend(body);
+    }
+    const afterCounters = getWriteCounters();
+    if (afterCounters.total === beforeCounters.total) {
+      flushed = true;
+      return origSend(body);
+    }
+    flushed = true;
+    const coreChanged = afterCounters.core !== beforeCounters.core;
+    cloudSync
+      .syncAfterMutation({ coreChanged })
+      .finally(() => origSend(body));
+    return res;
+  };
+
+  res.redirect = function patchedRedirect(...args) {
+    if (flushed) {
+      return origRedirect(...args);
+    }
+    const afterCounters = getWriteCounters();
+    if (afterCounters.total === beforeCounters.total) {
+      flushed = true;
+      return origRedirect(...args);
+    }
+    flushed = true;
+    const coreChanged = afterCounters.core !== beforeCounters.core;
+    cloudSync
+      .syncAfterMutation({ coreChanged })
+      .finally(() => origRedirect(...args));
+    return res;
+  };
+
   next();
 });
 
 app.get('/health', (req, res) => {
-  res.json({ ok: true, service: 'elhelb-boards' });
+  const st = cloudSync.getStorageStatus();
+  res.json({
+    ok: true,
+    service: 'elhelb-boards',
+    storage: {
+      persistent: st.persistent,
+      provider: st.provider,
+    },
+  });
 });
 
 app.use('/api/auth', authRoutes);

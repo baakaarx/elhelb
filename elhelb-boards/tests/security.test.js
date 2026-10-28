@@ -614,7 +614,260 @@ async function main() {
     );
     assert.equal((await api('GET', '/api/auth/me', mismatchedUnameTok)).status, 401);
 
-    console.log('\n✅ ALL 10 PRODUCTION v10 TESTS (SESSION ISOLATION, ANTI-CACHE, HR ONBOARDING, DELETION & RBAC) PASSED 100%!');
+    console.log('1️⃣1️⃣ Testing Multi-Container Serverless Cloud Persistence (Upstash KV & Vercel Blob Encrypted Sync)...');
+    const http = require('node:http');
+    const { execFile } = require('node:child_process');
+    const { promisify } = require('node:util');
+    const execFileAsync = promisify(execFile);
+    const { resetCloudSyncStateForTests } = require('../server/cloudSync');
+
+    // --- Part A: Upstash Serverless Redis / Vercel KV cross-container sync ---
+    const kvMemory = new Map();
+    const mockKvServer = http.createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => { raw += c; });
+      req.on('end', () => {
+        const body = JSON.parse(raw || '[]');
+        const execCmd = (cmdArr) => {
+          const op = String(cmdArr[0] || '').toUpperCase();
+          if (op === 'GET') return { result: kvMemory.has(cmdArr[1]) ? kvMemory.get(cmdArr[1]) : null };
+          if (op === 'SET') {
+            kvMemory.set(cmdArr[1], cmdArr[2]);
+            return { result: 'OK' };
+          }
+          return { result: null };
+        };
+        res.setHeader('Content-Type', 'application/json');
+        if (req.url === '/pipeline') {
+          res.end(JSON.stringify(body.map(execCmd)));
+        } else {
+          res.end(JSON.stringify(execCmd(body)));
+        }
+      });
+    });
+    mockKvServer.listen(0, '127.0.0.1');
+    await new Promise((r) => mockKvServer.once('listening', r));
+    const kvPort = mockKvServer.address().port;
+
+    process.env.KV_REST_API_URL = `http://127.0.0.1:${kvPort}`;
+    process.env.KV_REST_API_TOKEN = 'test-kv-secret-token-2026';
+    resetCloudSyncStateForTests();
+
+    try {
+      // Container A creates employee @mo.ai with password 010228513849 as HR Manager
+      const createMoAi = await api('POST', '/api/admin/users', chairmanTok, {
+        username: 'mo.ai',
+        password: '010228513849',
+        fullName: 'محمد عبد الرحمن',
+        email: 'mb9836504@gmail.com',
+        jobTitle: 'مسؤول الموارد البشرية (HR)',
+        roleId: hrMgrRole.id,
+        departmentId: hrDept.id,
+      });
+      assert.equal(createMoAi.status, 201, `Creating @mo.ai failed: ${JSON.stringify(createMoAi.data)}`);
+      assert.ok(kvMemory.get('elhelb:v11:rev'), 'Upstash KV must receive revision key');
+      assert.ok(kvMemory.get('elhelb:v11:state'), 'Upstash KV must receive AES-256-GCM encrypted state');
+      // Verify stored payload is encrypted (does NOT expose plaintext email or username)
+      const rawStateBuf = Buffer.from(kvMemory.get('elhelb:v11:state'), 'base64');
+      assert.equal(rawStateBuf.subarray(0, 4).toString('utf8'), 'EHB1');
+      assert.equal(rawStateBuf.includes(Buffer.from('mb9836504@gmail.com')), false);
+
+      // Brand-new Cold-Started Container B (completely separate tmp SQLite DB in child process!) logs in as mo.ai!
+      const containerBDb = path.join(os.tmpdir(), `elhelb-containerB-kv-${Date.now()}.db`);
+      const { stdout: childOut } = await execFileAsync(
+        process.execPath,
+        [
+          '--no-warnings',
+          '-e',
+          `
+          const app = require('./server/index');
+          (async () => {
+            const srv = app.listen(0, '127.0.0.1');
+            await new Promise((r) => srv.once('listening', r));
+            const p = srv.address().port;
+            const loginRes = await fetch('http://127.0.0.1:' + p + '/api/auth/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username: 'mo.ai', password: '010228513849' })
+            });
+            const loginJson = await loginRes.json();
+            srv.close();
+            console.log(JSON.stringify({ status: loginRes.status, username: loginJson.user?.username, role: loginJson.user?.roleSlug }));
+          })();
+          `,
+        ],
+        {
+          cwd: path.join(__dirname, '..'),
+          env: {
+            ...process.env,
+            DB_PATH: containerBDb,
+            KV_REST_API_URL: `http://127.0.0.1:${kvPort}`,
+            KV_REST_API_TOKEN: 'test-kv-secret-token-2026',
+          },
+          encoding: 'utf8',
+        }
+      );
+      try { fs.unlinkSync(containerBDb); } catch (_) {}
+      try { fs.unlinkSync(`${containerBDb}-wal`); } catch (_) {}
+      try { fs.unlinkSync(`${containerBDb}-shm`); } catch (_) {}
+
+      const parsedB = JSON.parse(childOut.trim().split('\n').pop());
+      assert.equal(parsedB.status, 200, 'Cold-started Container B must authenticate mo.ai immediately via Upstash KV');
+      assert.equal(parsedB.username, 'mo.ai');
+      assert.equal(parsedB.role, 'hr_manager');
+    } finally {
+      delete process.env.KV_REST_API_URL;
+      delete process.env.KV_REST_API_TOKEN;
+      resetCloudSyncStateForTests();
+      mockKvServer.close();
+    }
+
+    // --- Part B: Native Vercel Blob v13 cross-container encrypted sync ---
+    const blobStore = new Map(); // pathname -> Buffer
+    let mockBlobPort = 0;
+    const mockBlobServer = http.createServer((req, res) => {
+      const u = new URL(req.url, `http://127.0.0.1:${mockBlobPort}`);
+      if (req.method === 'PUT' && u.pathname === '/') {
+        const chunks = [];
+        req.on('data', (c) => chunks.push(c));
+        req.on('end', () => {
+          const pathname = u.searchParams.get('pathname');
+          const buf = Buffer.concat(chunks);
+          blobStore.set(pathname, buf);
+          const fileUrl = `http://127.0.0.1:${mockBlobPort}/dl/${encodeURIComponent(pathname)}`;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({
+            url: fileUrl,
+            downloadUrl: `${fileUrl}?download=1`,
+            pathname,
+            contentType: 'application/octet-stream',
+            contentDisposition: 'inline',
+            etag: `"${buf.length}"`,
+          }));
+        });
+        return;
+      }
+      if (req.method === 'GET' && u.pathname === '/') {
+        const prefix = u.searchParams.get('prefix') || '';
+        const blobs = [];
+        for (const [pathname, buf] of blobStore.entries()) {
+          if (pathname.startsWith(prefix)) {
+            const fileUrl = `http://127.0.0.1:${mockBlobPort}/dl/${encodeURIComponent(pathname)}`;
+            blobs.push({
+              url: fileUrl,
+              downloadUrl: `${fileUrl}?download=1`,
+              pathname,
+              size: buf.length,
+              uploadedAt: new Date().toISOString(),
+              etag: `"${buf.length}"`,
+            });
+          }
+        }
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ blobs, hasMore: false }));
+        return;
+      }
+      if (req.method === 'GET' && u.pathname.startsWith('/dl/')) {
+        const pathname = decodeURIComponent(u.pathname.slice(4));
+        const buf = blobStore.get(pathname);
+        if (!buf) {
+          res.statusCode = 404;
+          res.end('Not found');
+          return;
+        }
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.end(buf);
+        return;
+      }
+      if (req.method === 'POST' && u.pathname === '/delete') {
+        let body = '';
+        req.on('data', (c) => { body += c; });
+        req.on('end', () => {
+          const { urls = [] } = JSON.parse(body || '{}');
+          for (const itemUrl of urls) {
+            const p = decodeURIComponent(new URL(itemUrl).pathname.slice(4));
+            blobStore.delete(p);
+          }
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ deleted: urls.length }));
+        });
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+    mockBlobServer.listen(0, '127.0.0.1');
+    await new Promise((r) => mockBlobServer.once('listening', r));
+    mockBlobPort = mockBlobServer.address().port;
+
+    process.env.BLOB_READ_WRITE_TOKEN = 'vercel_blob_rw_storetest123_secretkey2026';
+    process.env.VERCEL_BLOB_API_URL = `http://127.0.0.1:${mockBlobPort}`;
+    resetCloudSyncStateForTests();
+
+    try {
+      // Trigger sync push via registering a second employee on Container A
+      const regBlobUser = await api('POST', '/api/auth/register', null, {
+        fullName: 'سارة علي',
+        username: 'sara.hr',
+        password: '010228513849',
+      });
+      assert.equal(regBlobUser.status, 201);
+      assert.ok(blobStore.size >= 1, 'Vercel Blob store must contain encrypted DB snapshot');
+
+      // Cold-started Container C logs in BOTH mo.ai AND sara.hr from empty DB via Vercel Blob!
+      const containerCDb = path.join(os.tmpdir(), `elhelb-containerC-blob-${Date.now()}.db`);
+      const { stdout: childBlobOut } = await execFileAsync(
+        process.execPath,
+        [
+          '--no-warnings',
+          '-e',
+          `
+          const app = require('./server/index');
+          (async () => {
+            const srv = app.listen(0, '127.0.0.1');
+            await new Promise((r) => srv.once('listening', r));
+            const p = srv.address().port;
+            const r1 = await fetch('http://127.0.0.1:' + p + '/api/auth/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username: 'mo.ai', password: '010228513849' })
+            });
+            const r2 = await fetch('http://127.0.0.1:' + p + '/api/auth/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username: 'sara.hr', password: '010228513849' })
+            });
+            srv.close();
+            console.log(JSON.stringify({ moStatus: r1.status, saraStatus: r2.status }));
+          })();
+          `,
+        ],
+        {
+          cwd: path.join(__dirname, '..'),
+          env: {
+            ...process.env,
+            DB_PATH: containerCDb,
+            BLOB_READ_WRITE_TOKEN: 'vercel_blob_rw_storetest123_secretkey2026',
+            VERCEL_BLOB_API_URL: `http://127.0.0.1:${mockBlobPort}`,
+          },
+          encoding: 'utf8',
+        }
+      );
+      try { fs.unlinkSync(containerCDb); } catch (_) {}
+      try { fs.unlinkSync(`${containerCDb}-wal`); } catch (_) {}
+      try { fs.unlinkSync(`${containerCDb}-shm`); } catch (_) {}
+
+      const parsedC = JSON.parse(childBlobOut.trim().split('\n').pop());
+      assert.equal(parsedC.moStatus, 200, 'Container C must authenticate mo.ai via Vercel Blob');
+      assert.equal(parsedC.saraStatus, 200, 'Container C must authenticate sara.hr via Vercel Blob');
+    } finally {
+      delete process.env.BLOB_READ_WRITE_TOKEN;
+      delete process.env.VERCEL_BLOB_API_URL;
+      resetCloudSyncStateForTests();
+      mockBlobServer.close();
+    }
+
+    console.log('\n✅ ALL 11 PRODUCTION v11 TESTS (CLOUD PERSISTENCE, SESSION ISOLATION, HR ONBOARDING, DELETION & RBAC) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}

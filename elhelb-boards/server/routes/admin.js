@@ -13,9 +13,14 @@ const {
   sendTestGmail,
   getRecentEmailLogs,
 } = require('../mailer');
+const { getStorageStatus } = require('../cloudSync');
 
 const router = express.Router();
 router.use(authenticate);
+
+router.get('/storage-status', (req, res) => {
+  res.json(getStorageStatus());
+});
 
 function makeSlug(text, prefix = 'item') {
   const clean = String(text || '')

@@ -44,11 +44,44 @@ function all(sql, params = []) {
   return rows.map((r) => ({ ...r }));
 }
 
+let localWriteCounter = 0;
+let coreWriteCounter = 0;
+let suppressWriteTracking = false;
+
+function runUntracked(fn) {
+  const prev = suppressWriteTracking;
+  suppressWriteTracking = true;
+  try {
+    return fn();
+  } finally {
+    suppressWriteTracking = prev;
+  }
+}
+
+function getWriteCounters() {
+  return {
+    total: localWriteCounter,
+    core: coreWriteCounter,
+  };
+}
+
 function run(sql, params = []) {
   const res = db.prepare(sql).run(...params.map(normalizeParam));
+  const changes = Number(res.changes);
+  if (!suppressWriteTracking && changes > 0) {
+    localWriteCounter += 1;
+    const trimmed = String(sql || '').trim();
+    const isAuxLogOnly =
+      /^(INSERT|UPDATE|DELETE)\s+(?:OR\s+\w+\s+)?INTO\s+"?(audit_logs|email_logs)"?\b/i.test(
+        trimmed
+      );
+    if (!isAuxLogOnly) {
+      coreWriteCounter += 1;
+    }
+  }
   return {
     lastInsertRowid: Number(res.lastInsertRowid),
-    changes: Number(res.changes),
+    changes,
   };
 }
 
@@ -361,14 +394,140 @@ function initSchema() {
   `);
 }
 
+const SNAPSHOT_TABLES_FORWARD = [
+  'system_settings',
+  'departments',
+  'permissions',
+  'roles',
+  'role_permissions',
+  'users',
+  'boards',
+  'board_stars',
+  'board_labels',
+  'lists',
+  'cards',
+  'card_assignees',
+  'card_label_links',
+  'checklist_items',
+  'card_comments',
+  'permission_requests',
+  'permission_grants',
+  'notifications',
+  'audit_logs',
+  'email_logs',
+  'email_verifications',
+];
+
+const SNAPSHOT_TABLES_REVERSE = [...SNAPSHOT_TABLES_FORWARD].reverse();
+
+function getTableColumnSet(tableName) {
+  const info = all(`PRAGMA table_info("${tableName}")`);
+  return new Set(info.map((c) => c.name));
+}
+
+function exportDatabaseSnapshot() {
+  const tables = {};
+  for (const table of SNAPSHOT_TABLES_FORWARD) {
+    if (table === 'audit_logs') {
+      tables[table] = all(
+        `SELECT * FROM (SELECT * FROM audit_logs ORDER BY id DESC LIMIT 500) ORDER BY id ASC`
+      );
+    } else if (table === 'email_logs') {
+      tables[table] = all(
+        `SELECT * FROM (SELECT * FROM email_logs ORDER BY id DESC LIMIT 200) ORDER BY id ASC`
+      );
+    } else if (table === 'email_verifications') {
+      tables[table] = all(
+        `SELECT * FROM (SELECT * FROM email_verifications ORDER BY id DESC LIMIT 100) ORDER BY id ASC`
+      );
+    } else {
+      tables[table] = all(`SELECT * FROM "${table}"`);
+    }
+  }
+
+  let sqliteSequence = [];
+  try {
+    sqliteSequence = all(`SELECT name, seq FROM sqlite_sequence`);
+  } catch (_) {}
+
+  return {
+    schemaVersion: 11,
+    exportedAt: new Date().toISOString(),
+    tables,
+    sqliteSequence,
+  };
+}
+
+function importDatabaseSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || !snapshot.tables) {
+    throw new Error('Invalid database snapshot payload');
+  }
+
+  runUntracked(() => {
+    db.exec('PRAGMA foreign_keys = OFF;');
+    try {
+      db.exec('BEGIN IMMEDIATE;');
+      try {
+        for (const table of SNAPSHOT_TABLES_REVERSE) {
+          db.exec(`DELETE FROM "${table}";`);
+        }
+        try {
+          db.exec(`DELETE FROM sqlite_sequence;`);
+        } catch (_) {}
+
+        for (const table of SNAPSHOT_TABLES_FORWARD) {
+          const rows = snapshot.tables[table];
+          if (!Array.isArray(rows) || rows.length === 0) continue;
+          const validCols = getTableColumnSet(table);
+          const cols = Object.keys(rows[0]).filter((c) => validCols.has(c));
+          if (cols.length === 0) continue;
+
+          const colSql = cols.map((c) => `"${c}"`).join(', ');
+          const placeholders = cols.map(() => '?').join(', ');
+          const stmt = db.prepare(
+            `INSERT INTO "${table}" (${colSql}) VALUES (${placeholders})`
+          );
+          for (const row of rows) {
+            stmt.run(...cols.map((c) => normalizeParam(row[c])));
+          }
+        }
+
+        if (Array.isArray(snapshot.sqliteSequence) && snapshot.sqliteSequence.length > 0) {
+          const seqStmt = db.prepare(
+            `INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)`
+          );
+          for (const item of snapshot.sqliteSequence) {
+            if (item && item.name && item.seq !== undefined && item.seq !== null) {
+              seqStmt.run(String(item.name), Number(item.seq));
+            }
+          }
+        }
+
+        db.exec('COMMIT;');
+      } catch (err) {
+        try {
+          db.exec('ROLLBACK;');
+        } catch (_) {}
+        throw err;
+      }
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON;');
+    }
+  });
+}
+
 module.exports = {
   db,
   DB_PATH,
   get,
   all,
   run,
+  runUntracked,
+  getWriteCounters,
   transaction,
   initSchema,
   getSetting,
   setSetting,
+  exportDatabaseSnapshot,
+  importDatabaseSnapshot,
 };
