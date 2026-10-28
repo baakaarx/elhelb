@@ -19,6 +19,7 @@ seedIfNeeded();
 
 const app = express();
 app.set('trust proxy', 1);
+app.set('etag', false);
 
 // Configured for both production security and seamless iframe Live Preview embedding
 app.use(
@@ -31,6 +32,23 @@ app.use(
 );
 app.use(cookieParser());
 app.use(express.json({ limit: '256kb' }));
+
+// Strict zero-caching on ALL API endpoints so CDNs (Cloudflare, Vercel Edge, ISP proxies)
+// and browsers can NEVER cache or share any user's session across visitors or domains
+app.use('/api', (req, res, next) => {
+  res.setHeader(
+    'Cache-Control',
+    'private, no-store, no-cache, max-age=0, must-revalidate, proxy-revalidate'
+  );
+  res.setHeader('CDN-Cache-Control', 'no-store');
+  res.setHeader('Vercel-CDN-Cache-Control', 'no-store');
+  res.setHeader('Cloudflare-CDN-Cache-Control', 'no-store');
+  res.setHeader('Surrogate-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Vary', 'Authorization, X-Elhelb-Token, Cookie');
+  next();
+});
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, service: 'elhelb-boards' });
