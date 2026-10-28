@@ -4,15 +4,9 @@ import {
   UserPlus,
   Eye,
   EyeOff,
-  Mail,
-  CheckCircle2,
   Sprout,
   Globe2,
-  ArrowRight,
-  RefreshCw,
-  Settings,
-  ExternalLink,
-  X,
+  ArrowLeft,
 } from 'lucide-react';
 import { apiFetch, setStoredToken } from '../api';
 
@@ -74,40 +68,25 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(initialOAuthError || '');
 
-  // Email-verified registration state
-  const [regStep, setRegStep] = useState(1); // 1: enter name+email -> 2: enter 6-digit OTP
+  // Direct Registration state (no OTP / no email verification block)
   const [regFullName, setRegFullName] = useState('');
+  const [regUsername, setRegUsername] = useState('');
+  const [regPassword, setRegPassword] = useState('');
+  const [regConfirmPassword, setRegConfirmPassword] = useState('');
   const [regEmail, setRegEmail] = useState('');
-  const [otpCode, setOtpCode] = useState('');
+  const [showRegPass, setShowRegPass] = useState(false);
   const [regLoading, setRegLoading] = useState(false);
   const [regError, setRegError] = useState('');
-  const [regErrorCode, setRegErrorCode] = useState('');
-  const [regNotice, setRegNotice] = useState('');
-
-  // Inline 1-Step Admin Gmail Setup Modal (pre-filled with mb9836504@gmail.com)
-  const [gmailModalOpen, setGmailModalOpen] = useState(false);
-  const [setupGmailUser, setSetupGmailUser] = useState('mb9836504@gmail.com');
-  const [setupGmailAppPass, setSetupGmailAppPass] = useState('');
-  const [setupAdminPass, setSetupAdminPass] = useState('');
-  const [setupSaving, setSetupSaving] = useState(false);
-  const [setupError, setSetupError] = useState('');
 
   const [oauthInfo, setOauthInfo] = useState({
     googleConfigured: false,
-    gmailConfigured: false,
-    defaultGmailUser: 'mb9836504@gmail.com',
     departments: [],
   });
 
   useEffect(() => {
     apiFetch('/api/auth/oauth/providers')
       .then((info) => {
-        if (info) {
-          setOauthInfo(info);
-          if (info.defaultGmailUser) {
-            setSetupGmailUser(info.defaultGmailUser);
-          }
-        }
+        if (info) setOauthInfo(info);
       })
       .catch(() => {});
   }, []);
@@ -137,86 +116,30 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
     }
   }
 
-  async function handleSendVerificationCode(e) {
-    if (e) e.preventDefault();
+  async function handleRegisterSubmit(e) {
+    e.preventDefault();
     setRegError('');
-    setRegErrorCode('');
-    setRegNotice('');
+
+    if (regPassword !== regConfirmPassword) {
+      setRegError('كلمتا المرور غير متطابقتين — يرجى التأكد من كتابتهما بشكل متطابق');
+      return;
+    }
+
     setRegLoading(true);
     try {
-      const res = await apiFetch('/api/auth/email/send-code', {
+      const res = await apiFetch('/api/auth/register', {
         method: 'POST',
         body: {
           fullName: regFullName.trim(),
+          username: regUsername.trim().toLowerCase(),
+          password: regPassword,
           email: regEmail.trim(),
-        },
-      });
-      setRegStep(2);
-      setOtpCode('');
-      setRegNotice(res.message || 'تم إرسال كود التأكيد المكون من 6 أرقام إلى بريدك الإلكتروني');
-    } catch (err) {
-      const code = err.code || (err.payload && err.payload.code) || '';
-      setRegErrorCode(code);
-      setRegError(err.message || 'تعذر إرسال كود التأكيد');
-      if (code === 'GMAIL_NOT_CONFIGURED') {
-        setSetupError('');
-        setGmailModalOpen(true);
-      }
-    } finally {
-      setRegLoading(false);
-    }
-  }
-
-  async function handleQuickSetupGmailSubmit(e) {
-    e.preventDefault();
-    setSetupError('');
-    setSetupSaving(true);
-    try {
-      const res = await apiFetch('/api/auth/quick-setup-gmail', {
-        method: 'POST',
-        body: {
-          adminPassword: setupAdminPass,
-          gmailUser: setupGmailUser.trim(),
-          gmailAppPassword: setupGmailAppPass,
-          pendingEmail: regEmail.trim(),
-          pendingFullName: regFullName.trim(),
-        },
-      });
-      setOauthInfo((prev) => ({ ...prev, gmailConfigured: true }));
-      setGmailModalOpen(false);
-      setSetupGmailAppPass('');
-      setSetupAdminPass('');
-      setRegError('');
-      setRegErrorCode('');
-      if (res.codeSent) {
-        setRegStep(2);
-        setOtpCode('');
-        setRegNotice(res.message);
-      }
-    } catch (err) {
-      setSetupError(err.message || 'تعذر تفعيل بريد Gmail');
-    } finally {
-      setSetupSaving(false);
-    }
-  }
-
-  async function handleVerifyCodeSubmit(e) {
-    e.preventDefault();
-    setRegError('');
-    setRegLoading(true);
-    try {
-      const res = await apiFetch('/api/auth/email/verify-code', {
-        method: 'POST',
-        body: {
-          email: regEmail.trim(),
-          code: otpCode.replace(/\s+/g, ''),
-          fullName: regFullName.trim(),
         },
       });
       setStoredToken(res.token);
       onLoginSuccess(res.token, res.user);
     } catch (err) {
-      setRegError(err.message || 'كود التأكيد غير صحيح');
+      setRegError(err.message || 'تعذر إنشاء الحساب');
     } finally {
       setRegLoading(false);
     }
@@ -224,7 +147,7 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
 
   return (
     <div className="login-shell">
-      {/* Right Panel: Animated Official GIF Logo + Clean Login / Email-Verified Registration */}
+      {/* Right Panel: Animated Official GIF Logo + Clean Login / Direct Employee Registration */}
       <div className="login-card-panel">
         <div className="login-brand-header">
           <div className="prime-logo-crest">
@@ -264,11 +187,11 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
           {mode === 'login' ? (
             <form onSubmit={handleLoginSubmit}>
               <div className="form-group">
-                <label className="form-label">اسم المستخدم أو البريد الإلكتروني</label>
+                <label className="form-label">اسم المستخدم</label>
                 <input
                   type="text"
                   className="form-input"
-                  placeholder="Username or Email"
+                  placeholder="Username"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   autoComplete="username"
@@ -368,29 +291,13 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
                   }}
                 >
                   <GoogleMark />
-                  <span>المتابعة بحساب Google الموثق</span>
+                  <span>المتابعة بحساب Google</span>
                 </button>
               )}
             </form>
-          ) : regStep === 1 ? (
-            <form onSubmit={handleSendVerificationCode}>
-              <div
-                style={{
-                  background: '#f0fdf4',
-                  border: '1px solid #bbf7d0',
-                  borderRadius: 10,
-                  padding: '9px 12px',
-                  fontSize: 12,
-                  color: '#166534',
-                  fontWeight: 700,
-                  marginBottom: 14,
-                  lineHeight: 1.65,
-                }}
-              >
-                أدخل اسمك وبريدك الإلكتروني ليصلك <strong>كود تأكيد من 6 أرقام</strong> على البريد قبل إنشاء حسابك واختيار قسمك.
-              </div>
-
-              <div className="form-group">
+          ) : (
+            <form onSubmit={handleRegisterSubmit}>
+              <div className="form-group" style={{ marginBottom: 12 }}>
                 <label className="form-label">الاسم الكامل للموظف *</label>
                 <input
                   type="text"
@@ -402,145 +309,91 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
                 />
               </div>
 
-              <div className="form-group">
-                <label className="form-label">البريد الإلكتروني لتأكيد الحساب *</label>
+              <div className="form-group" style={{ marginBottom: 12 }}>
+                <label className="form-label">اسم المستخدم للدخول (بالإنجليزية) *</label>
                 <input
-                  type="email"
+                  type="text"
                   className="form-input"
                   dir="ltr"
                   style={{ textAlign: 'left', fontWeight: 700 }}
-                  placeholder="name@gmail.com"
-                  value={regEmail}
-                  onChange={(e) => setRegEmail(e.target.value)}
+                  placeholder="mohamed.export"
+                  value={regUsername}
+                  onChange={(e) =>
+                    setRegUsername(e.target.value.replace(/\s+/g, '').toLowerCase())
+                  }
+                  autoComplete="username"
                   required
                 />
               </div>
 
-              {regError && (
-                <div
-                  style={{
-                    background: '#fee2e2',
-                    color: '#b91c1c',
-                    padding: '10px 12px',
-                    borderRadius: 10,
-                    fontSize: 12.5,
-                    fontWeight: 700,
-                    marginBottom: 14,
-                    border: '1px solid #fecaca',
-                  }}
-                >
-                  <div>{regError}</div>
-                  {regErrorCode === 'GMAIL_NOT_CONFIGURED' && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: 8,
+                  marginBottom: 12,
+                }}
+              >
+                <div>
+                  <label className="form-label">كلمة المرور *</label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type={showRegPass ? 'text' : 'password'}
+                      className="form-input"
+                      dir="ltr"
+                      style={{ textAlign: 'left', paddingRight: 32, fontWeight: 700 }}
+                      placeholder="6+ أحرف"
+                      value={regPassword}
+                      onChange={(e) => setRegPassword(e.target.value)}
+                      autoComplete="new-password"
+                      required
+                    />
                     <button
                       type="button"
-                      onClick={() => {
-                        setSetupError('');
-                        setGmailModalOpen(true);
-                      }}
+                      onClick={() => setShowRegPass((s) => !s)}
                       style={{
-                        marginTop: 8,
-                        width: '100%',
-                        padding: '8px 10px',
-                        borderRadius: 8,
+                        position: 'absolute',
+                        right: 6,
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'transparent',
                         border: 'none',
-                        background: '#071e14',
-                        color: '#fde68a',
-                        fontWeight: 800,
-                        fontSize: 12.5,
+                        color: '#64748b',
+                        padding: 3,
                         display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 6,
                       }}
                     >
-                      <Settings size={14} />
-                      <span>تفعيل بريد Gmail الآن في نفس الشاشة (للمسؤول)</span>
+                      {showRegPass ? <EyeOff size={14} /> : <Eye size={14} />}
                     </button>
-                  )}
+                  </div>
                 </div>
-              )}
 
-              <button
-                type="submit"
-                className="btn btn-primary"
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  fontSize: 14.5,
-                  background: 'linear-gradient(135deg, #15803d 0%, #0c3120 100%)',
-                }}
-                disabled={regLoading}
-              >
-                <Mail size={17} />
-                {regLoading ? 'جاري إرسال الكود لبريدك...' : 'إرسال كود التأكيد إلى البريد'}
-              </button>
-
-              {oauthInfo.googleConfigured && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    window.location.href = '/api/auth/oauth/google/start';
-                  }}
-                  style={{
-                    marginTop: 10,
-                    width: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 8,
-                    padding: '10px 12px',
-                    borderRadius: 10,
-                    background: '#ffffff',
-                    border: '1.5px solid #cbd5e1',
-                    color: '#0f172a',
-                    fontWeight: 800,
-                    fontSize: 13.5,
-                  }}
-                >
-                  <GoogleMark />
-                  <span>التسجيل المباشر بحساب Google</span>
-                </button>
-              )}
-            </form>
-          ) : (
-            <form onSubmit={handleVerifyCodeSubmit}>
-              {regNotice && (
-                <div
-                  style={{
-                    background: '#f0fdf4',
-                    border: '1px solid #86efac',
-                    borderRadius: 10,
-                    padding: '10px 12px',
-                    fontSize: 12.5,
-                    color: '#166534',
-                    fontWeight: 700,
-                    marginBottom: 14,
-                    lineHeight: 1.6,
-                  }}
-                >
-                  {regNotice}
+                <div>
+                  <label className="form-label">تأكيد كلمة المرور *</label>
+                  <input
+                    type={showRegPass ? 'text' : 'password'}
+                    className="form-input"
+                    dir="ltr"
+                    style={{ textAlign: 'left', fontWeight: 700 }}
+                    placeholder="إعادة الكتابة"
+                    value={regConfirmPassword}
+                    onChange={(e) => setRegConfirmPassword(e.target.value)}
+                    autoComplete="new-password"
+                    required
+                  />
                 </div>
-              )}
+              </div>
 
-              <div className="form-group">
-                <label className="form-label">أدخل كود التأكيد المكون من 6 أرقام *</label>
+              <div className="form-group" style={{ marginBottom: 14 }}>
+                <label className="form-label">البريد الإلكتروني (اختياري)</label>
                 <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={6}
+                  type="email"
                   className="form-input"
                   dir="ltr"
-                  placeholder="000000"
-                  value={otpCode}
-                  onChange={(e) => setOtpCode(e.target.value.replace(/\D+/g, '').slice(0, 6))}
-                  style={{
-                    textAlign: 'center',
-                    fontSize: 24,
-                    fontWeight: 900,
-                    letterSpacing: 10,
-                    padding: '10px 12px',
-                  }}
-                  required
+                  style={{ textAlign: 'left' }}
+                  placeholder="name@gmail.com"
+                  value={regEmail}
+                  onChange={(e) => setRegEmail(e.target.value)}
                 />
               </div>
 
@@ -570,42 +423,13 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
                   fontSize: 14.5,
                   background: 'linear-gradient(135deg, #15803d 0%, #0c3120 100%)',
                 }}
-                disabled={regLoading || otpCode.length !== 6}
+                disabled={regLoading}
               >
-                <CheckCircle2 size={17} />
-                {regLoading ? 'جاري التحقق من الكود...' : 'تأكيد البريد والمتابعة'}
+                <span>
+                  {regLoading ? 'جاري إنشاء الحساب...' : 'إنشاء الحساب والانتقال لاختيار القسم'}
+                </span>
+                <ArrowLeft size={16} />
               </button>
-
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginTop: 12,
-                  gap: 8,
-                }}
-              >
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => {
-                    setRegStep(1);
-                    setRegError('');
-                  }}
-                >
-                  <ArrowRight size={14} />
-                  تعديل البريد
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  disabled={regLoading}
-                  onClick={handleSendVerificationCode}
-                >
-                  <RefreshCw size={13} />
-                  إعادة إرسال الكود
-                </button>
-              </div>
             </form>
           )}
         </div>
@@ -786,151 +610,6 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
           </div>
         </div>
       </div>
-
-      {/* Inline 1-Step Admin Gmail Activation Modal (Pre-filled with mb9836504@gmail.com) */}
-      {gmailModalOpen && (
-        <div className="modal-backdrop" onClick={() => setGmailModalOpen(false)}>
-          <div
-            className="modal-panel"
-            style={{ maxWidth: 480 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="modal-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 900, fontSize: 16 }}>
-                <Mail size={19} color="#15803d" />
-                <span>تفعيل بريد الشركة (Gmail) في خطوة واحدة</span>
-              </div>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => setGmailModalOpen(false)}
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <form onSubmit={handleQuickSetupGmailSubmit}>
-              <div className="modal-body">
-                <div
-                  style={{
-                    background: '#f0fdf4',
-                    border: '1px solid #86efac',
-                    borderRadius: 12,
-                    padding: '12px 14px',
-                    marginBottom: 14,
-                    fontSize: 12.5,
-                    color: '#14532d',
-                    lineHeight: 1.7,
-                  }}
-                >
-                  <div style={{ fontWeight: 900, marginBottom: 6 }}>
-                    تم تجهيز بريدك ({setupGmailUser}) تلقائياً — يتبقى فقط لصق كود Google:
-                  </div>
-                  <a
-                    href="https://myaccount.google.com/apppasswords"
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      background: '#15803d',
-                      color: '#ffffff',
-                      padding: '7px 12px',
-                      borderRadius: 8,
-                      fontWeight: 800,
-                      textDecoration: 'none',
-                      fontSize: 12.5,
-                    }}
-                  >
-                    <ExternalLink size={14} />
-                    <span>اضغط هنا لفتح صفحة استخراج كود Google (16 حرفاً)</span>
-                  </a>
-                  <div style={{ marginTop: 6, fontSize: 11.5, color: '#166534' }}>
-                    اكتب اسم التطبيق <strong>ELHELB</strong> واضغط Create ثم انسخ الـ 16 حرفاً والصقها بالأسفل.
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">بريد الإرسال الرسمي (Gmail) *</label>
-                  <input
-                    type="email"
-                    className="form-input"
-                    dir="ltr"
-                    style={{ textAlign: 'left', fontWeight: 700 }}
-                    value={setupGmailUser}
-                    onChange={(e) => setSetupGmailUser(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">كود تطبيقات Google المكون من 16 حرفاً (App Password) *</label>
-                  <input
-                    type="password"
-                    className="form-input"
-                    dir="ltr"
-                    style={{ textAlign: 'left', fontWeight: 800, letterSpacing: 2 }}
-                    placeholder="xxxx xxxx xxxx xxxx"
-                    value={setupGmailAppPass}
-                    onChange={(e) => setSetupGmailAppPass(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="form-group" style={{ marginBottom: setupError ? 12 : 4 }}>
-                  <label className="form-label">كلمة مرور المسؤول (admin) لتأكيد الصلاحية *</label>
-                  <input
-                    type="password"
-                    className="form-input"
-                    dir="ltr"
-                    style={{ textAlign: 'left', fontWeight: 700 }}
-                    placeholder="كلمة مرور حساب admin"
-                    value={setupAdminPass}
-                    onChange={(e) => setSetupAdminPass(e.target.value)}
-                    required
-                  />
-                </div>
-
-                {setupError && (
-                  <div
-                    style={{
-                      background: '#fee2e2',
-                      color: '#b91c1c',
-                      padding: '10px 12px',
-                      borderRadius: 8,
-                      fontSize: 12.5,
-                      fontWeight: 700,
-                      border: '1px solid #fecaca',
-                    }}
-                  >
-                    {setupError}
-                  </div>
-                )}
-              </div>
-
-              <div className="modal-footer">
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => setGmailModalOpen(false)}
-                >
-                  إغلاق
-                </button>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  style={{ background: '#15803d', borderColor: '#15803d' }}
-                  disabled={setupSaving}
-                >
-                  <CheckCircle2 size={16} />
-                  {setupSaving ? 'جاري التحقق والإرسال...' : 'تفعيل البريد وإرسال الكود فوراً'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

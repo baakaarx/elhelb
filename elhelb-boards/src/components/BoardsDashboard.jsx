@@ -157,7 +157,7 @@ export default function BoardsDashboard({
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <UserPlus size={20} color="#059669" />
             <div style={{ fontSize: 13.5, color: '#065f46', fontWeight: 800 }}>
-              يوجد ({user.pendingOnboardingCount}) موظف جديد أكد بريده الإلكتروني وينتظر ضمه إلى قسمه!
+              يوجد ({user.pendingOnboardingCount}) موظف جديد ينتظر ضمه إلى قسمه!
             </div>
           </div>
           <button

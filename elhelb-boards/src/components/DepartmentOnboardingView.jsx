@@ -120,7 +120,7 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                 : `ضم الموظفين الجدد إلى (${user.departmentName})`}
             </div>
             <div style={{ fontSize: 13, color: '#475569', marginTop: 2 }}>
-              كل موظف يؤكد بريده الإلكتروني وينشئ بيانات دخوله يظهر هنا باسمه الحقيقي ليقوم رئيس القسم بإضافته إلى قسمه وتحديد صلاحيته بضغطة واحدة.
+              كل موظف جديد ينشئ حسابه ويحدد قسمه يظهر هنا باسمه الحقيقي ليقوم رئيس القسم بإضافته إلى قسمه وتحديد صلاحيته بضغطة واحدة.
             </div>
           </div>
         </div>
@@ -145,7 +145,7 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
         >
           <h3 style={{ margin: 0, fontSize: 16.5, fontWeight: 900, color: '#071e14', display: 'flex', alignItems: 'center', gap: 8 }}>
             <Clock size={18} color="#d97706" />
-            موظفون مؤكد بريدهم الإلكتروني بانتظار الضم للأقسام ({data.pendingUsers.length})
+            موظفون جدد بانتظار الضم للأقسام ({data.pendingUsers.length})
           </h3>
         </div>
 
@@ -169,7 +169,7 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
               لا يوجد موظفون في قائمة الانتظار حالياً
             </div>
             <div style={{ fontSize: 13 }}>
-              بمجرد تسجيل أي موظف جديد وتأكيد بريده الإلكتروني من شاشة الدخول، سيظهر اسمه هنا فوراً لتضمه إلى قسمك.
+              بمجرد تسجيل أي موظف جديد واختيار قسمه، سيظهر اسمه هنا فوراً لتضمه إلى قسمك.
             </div>
           </div>
         ) : (
@@ -183,7 +183,7 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
               const providerBadgeBg =
                 pu.auth_provider === 'google' ? '#ea4335' : '#15803d';
               const providerLabel =
-                pu.auth_provider === 'google' ? 'Google' : 'بريد مؤكد ✓';
+                pu.auth_provider === 'google' ? 'Google' : 'تسجيل جديد';
 
               return (
                 <div
