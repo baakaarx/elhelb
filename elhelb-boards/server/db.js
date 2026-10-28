@@ -1,13 +1,25 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 
-const defaultDataDir = path.join(__dirname, '..', 'data');
-if (!fs.existsSync(defaultDataDir)) {
-  fs.mkdirSync(defaultDataDir, { recursive: true });
+function resolveDbPath() {
+  if (process.env.DB_PATH) return process.env.DB_PATH;
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    return path.join(os.tmpdir(), 'elhelb-boards.db');
+  }
+  const defaultDataDir = path.join(__dirname, '..', 'data');
+  try {
+    if (!fs.existsSync(defaultDataDir)) {
+      fs.mkdirSync(defaultDataDir, { recursive: true });
+    }
+    return path.join(defaultDataDir, 'elhelb-boards.db');
+  } catch (_) {
+    return path.join(os.tmpdir(), 'elhelb-boards.db');
+  }
 }
 
-const DB_PATH = process.env.DB_PATH || path.join(defaultDataDir, 'elhelb-boards.db');
+const DB_PATH = resolveDbPath();
 const db = new DatabaseSync(DB_PATH);
 
 db.exec(`
