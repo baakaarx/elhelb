@@ -23,7 +23,6 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
     assignableRoles: [],
     teamMembers: [],
     canManageAll: false,
-    storageStatus: null,
   });
   const [loading, setLoading] = useState(true);
   const [drafts, setDrafts] = useState({});
@@ -256,56 +255,6 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
           </button>
         </div>
       </div>
-
-      {data.storageStatus && data.storageStatus.ephemeralWarning && (
-        <div
-          style={{
-            background: '#fffbeb',
-            border: '1.5px solid #f59e0b',
-            borderRadius: 14,
-            padding: '14px 18px',
-            marginBottom: 20,
-            color: '#78350f',
-            lineHeight: 1.7,
-          }}
-        >
-          <div style={{ fontWeight: 900, fontSize: 14.5, display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <AlertTriangle size={18} color="#d97706" />
-            خطوة واحدة مجانية لتثبيت حسابات الموظفين ولوحات العمل للأبد على Vercel (بدون بطاقة بنكية)
-          </div>
-          <div style={{ fontSize: 13 }}>
-            لتعمل الحسابات الجديدة (مثل <b>@mo.ai</b>) على جميع المتصفحات والهواتف دون مسح مؤقت: افتح مشروعك في{' '}
-            <b>Vercel</b> ⬅️ تبويب <b>Storage</b> بالأعلى ⬅️ اضغط <b>Create Database</b> ⬅️ اختر{' '}
-            <b>Upstash (Serverless Redis)</b> أو <b>Blob</b> (الخطة المجانية <b>Free</b> بدون فيزا) ⬅️ اضغط{' '}
-            <b>Connect to Project</b> ثم اعمل <b>Redeploy</b> لآخر نسخة.
-          </div>
-        </div>
-      )}
-
-      {data.storageStatus &&
-        data.storageStatus.persistent &&
-        data.storageStatus.provider !== 'local_disk' && (
-          <div
-            style={{
-              background: '#ecfdf5',
-              border: '1px solid #6ee7b7',
-              borderRadius: 12,
-              padding: '10px 16px',
-              marginBottom: 18,
-              color: '#065f46',
-              fontSize: 13,
-              fontWeight: 700,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-            }}
-          >
-            <CheckCircle2 size={17} color="#059669" />
-            <span>
-              الحفظ السحابي الدائم متصل ومفعل ({data.storageStatus.label}) — جميع حسابات الموظفين ولوحات العمل محفوظة دائماً عبر كل الأجهزة والدومينات.
-            </span>
-          </div>
-        )}
 
       {/* Pending Signups Section */}
       <div className="card-box" style={{ marginBottom: 24 }}>

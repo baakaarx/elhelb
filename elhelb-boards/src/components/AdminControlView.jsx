@@ -39,13 +39,6 @@ export default function AdminControlView({ user, onRefreshMe, showToast }) {
     : 'audit';
 
   const [subTab, setSubTab] = useState(defaultSubTab);
-  const [storageStatus, setStorageStatus] = useState(null);
-
-  useEffect(() => {
-    apiFetch('/api/admin/storage-status', { suppressPermissionModal: true })
-      .then((res) => setStorageStatus(res))
-      .catch(() => {});
-  }, []);
 
   return (
     <div className="page-container">
@@ -132,56 +125,6 @@ export default function AdminControlView({ user, onRefreshMe, showToast }) {
           )}
         </div>
       </div>
-
-      {storageStatus && storageStatus.ephemeralWarning && (
-        <div
-          style={{
-            background: '#fffbeb',
-            border: '1.5px solid #f59e0b',
-            borderRadius: 14,
-            padding: '14px 18px',
-            marginBottom: 20,
-            color: '#78350f',
-            lineHeight: 1.7,
-          }}
-        >
-          <div style={{ fontWeight: 900, fontSize: 14.5, display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <AlertTriangle size={18} color="#d97706" />
-            تفعيل الحفظ السحابي الدائم المجاني على Vercel (بدون بطاقة بنكية)
-          </div>
-          <div style={{ fontSize: 13 }}>
-            المنصة تعمل الآن على ذاكرة الحاوية المؤقتة؛ لحفظ حسابات الموظفين والأدوار واللوحات للأبد عبر كافة الهواتف والدومينات: افتح مشروعك في{' '}
-            <b>Vercel</b> ⬅️ تبويب <b>Storage</b> ⬅️ اضغط <b>Create Database</b> ⬅️ اختر{' '}
-            <b>Upstash (Redis)</b> أو <b>Blob</b> (الخطة المجانية <b>Free</b>) ⬅️ اضغط{' '}
-            <b>Connect to Project</b> ثم <b>Redeploy</b>.
-          </div>
-        </div>
-      )}
-
-      {storageStatus &&
-        storageStatus.persistent &&
-        storageStatus.provider !== 'local_disk' && (
-          <div
-            style={{
-              background: '#ecfdf5',
-              border: '1px solid #6ee7b7',
-              borderRadius: 12,
-              padding: '10px 16px',
-              marginBottom: 18,
-              color: '#065f46',
-              fontSize: 13,
-              fontWeight: 700,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-            }}
-          >
-            <CheckCircle2 size={17} color="#059669" />
-            <span>
-              الحفظ السحابي الدائم متصل ومفعل ({storageStatus.label}) — جميع البيانات محفوظة دائماً عبر كل الحاويات والدومينات.
-            </span>
-          </div>
-        )}
 
       {subTab === 'roles' && canRoles && (
         <RolesMatrixPanel onRefreshMe={onRefreshMe} showToast={showToast} />
