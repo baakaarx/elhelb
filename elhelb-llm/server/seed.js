@@ -2,7 +2,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { get, run } = require('./db');
-const { ingestDocument, ingestDataset } = require('./vaultService');
+const { ingestDocument, ingestDataset, getDecryptedDatasets } = require('./vaultService');
+const { parseTabularData } = require('./dataAnalytics');
 
 const COMPANY_DATA_DIR = path.join(__dirname, '..', 'company-data');
 
@@ -35,8 +36,14 @@ function syncCompanyDataFolder() {
     const category = inferCategoryFromFilename(filename);
 
     if (ext === '.csv' || ext === '.tsv' || ext === '.json') {
-      const exists = get('SELECT id FROM datasets WHERE filename = ?', [filename]);
-      if (!exists) {
+      const existingDataset = getDecryptedDatasets().find((dataset) => dataset.filename === filename);
+      const latestRows = parseTabularData(rawContent);
+      const isUnchanged = existingDataset && JSON.stringify(existingDataset.rows) === JSON.stringify(latestRows);
+      if (!isUnchanged) {
+        if (existingDataset) {
+          run('DELETE FROM datasets WHERE filename = ?', [filename]);
+          run("DELETE FROM documents WHERE filename = ? AND source_type = 'dataset_index'", [filename]);
+        }
         const cleanTitle = filename
           .replace(/^\d+[-_]?/, '')
           .replace(/\.(csv|tsv|json)$/i, '')
@@ -54,8 +61,11 @@ function syncCompanyDataFolder() {
         });
       }
     } else {
-      const exists = get('SELECT id FROM documents WHERE filename = ?', [filename]);
-      if (!exists) {
+      const contentHash = crypto.createHash('sha256').update(rawContent, 'utf8').digest('hex');
+      const existingDocument = get('SELECT id, sha256_hash FROM documents WHERE filename = ? AND source_type = ?', [filename, 'company_data_folder']);
+      const isUnchanged = existingDocument && existingDocument.sha256_hash === contentHash;
+      if (!isUnchanged) {
+        if (existingDocument) run('DELETE FROM documents WHERE id = ?', [existingDocument.id]);
         const firstHeading = rawContent
           .split('\n')
           .find((l) => l.trim().startsWith('#'))

@@ -21,6 +21,7 @@ import {
   speakArabic,
   stopSpeaking,
   startArabicRecognition,
+  startVoiceRecorder,
 } from '../voiceEngine';
 
 const SUGGESTED_QUESTIONS = [
@@ -116,8 +117,13 @@ export default function ChatView({
 
   // حالات الصوت في شريط الكتابة وقراءة الردود
   const [isMicListening, setIsMicListening] = useState(false);
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [voiceSeconds, setVoiceSeconds] = useState(0);
+  const [voiceNoteUrl, setVoiceNoteUrl] = useState('');
   const [speakingMsgId, setSpeakingMsgId] = useState(null);
   const micHandleRef = useRef(null);
+  const recorderRef = useRef(null);
+  const voiceCallStartedRef = useRef(false);
 
   // حالات وضع المكالمة / المحادثة الصوتية المباشرة
   const [callStage, setCallStage] = useState('idle'); // 'listening' | 'thinking' | 'speaking' | 'ready'
@@ -140,6 +146,12 @@ export default function ChatView({
   }, [input]);
 
   useEffect(() => {
+    if (!isMicListening && !isRecordingVoice) { setVoiceSeconds(0); return undefined; }
+    const timer = window.setInterval(() => setVoiceSeconds((value) => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [isMicListening, isRecordingVoice]);
+
+  useEffect(() => {
     apiRequest(`/api/chat/history?sessionId=${encodeURIComponent(sessionId)}`)
       .then((d) => {
         const list = d.messages || [];
@@ -160,9 +172,11 @@ export default function ChatView({
       callActiveRef.current = true;
       setCallError('');
       setLastBotSubtitle('أهلاً بيك! اتفضل اتكلم بكلامك العادي واحكيلي مشكلة زرعك أو سؤالك وأنا سامعك...');
-      startCallListeningCycle();
+      // يبدأ التعرف مباشرة من نقرة المستخدم عبر openVoiceCall، لتفادي رفض الإذن على Safari/iOS.
+      if (!voiceCallStartedRef.current) setCallStage('ready');
     } else {
       callActiveRef.current = false;
+      voiceCallStartedRef.current = false;
       callRecRef.current?.abort();
       callRecRef.current = null;
       stopSpeaking();
@@ -176,9 +190,16 @@ export default function ChatView({
     };
   }, [voiceCallOpen]);
 
+  function openVoiceCall() {
+    voiceCallStartedRef.current = true;
+    callActiveRef.current = true;
+    setCallError('');
+    onOpenVoiceCall?.();
+    startCallListeningCycle();
+  }
+
   function startCallListeningCycle() {
     if (!callActiveRef.current) return;
-    stopSpeaking();
     setCallError('');
     setLiveTranscript('');
     setCallStage('listening');
@@ -199,6 +220,7 @@ export default function ChatView({
           setLastBotSubtitle(replyData.assistantMessage.content);
           setCallStage('speaking');
           speakArabic(toSpeak, {
+            onError: (err) => setCallError(err?.message || 'تعذر تشغيل الرد الصوتي؛ يمكنك قراءة الرد على الشاشة.'),
             onEnd: () => {
               if (callActiveRef.current) {
                 startCallListeningCycle();
@@ -226,6 +248,27 @@ export default function ChatView({
   }
 
   function toggleInlineMic() {
+    if (!isVoiceInputSupported() || (!window.SpeechRecognition && !window.webkitSpeechRecognition)) {
+      if (isRecordingVoice) {
+        recorderRef.current?.stop();
+        recorderRef.current = null;
+        setIsRecordingVoice(false);
+        return;
+      }
+      setError('جاري تسجيل الملاحظة الصوتية. بعد الإيقاف استمع للتسجيل واكتب ملخص الشكوى لإرسالها للتحليل.');
+      startVoiceRecorder({
+        onReady: (blob) => {
+          setVoiceNoteUrl((previous) => { if (previous) URL.revokeObjectURL(previous); return URL.createObjectURL(blob); });
+          setError('تم تسجيل الملاحظة الصوتية. يمكنك الاستماع إليها، ثم اكتب ملخصها في مربع الرسالة لإرسالها للمساعد.');
+        },
+        onError: (message) => { setError(message); setIsRecordingVoice(false); },
+        onStop: () => setIsRecordingVoice(false),
+      }).then((handle) => {
+        recorderRef.current = handle;
+        if (handle) setIsRecordingVoice(true);
+      });
+      return;
+    }
     if (isMicListening) {
       micHandleRef.current?.stop();
       setIsMicListening(false);
@@ -268,6 +311,7 @@ export default function ChatView({
     const textToRead = msg.speechText || msg.content;
     setSpeakingMsgId(msg.id);
     speakArabic(textToRead, {
+      onError: (err) => setError(err?.message || 'تعذر تشغيل الصوت؛ يمكنك قراءة الرد على الشاشة.'),
       onEnd: () => setSpeakingMsgId(null),
     });
   }
@@ -358,6 +402,7 @@ export default function ChatView({
       if (autoSpeakReply && !fromVoiceCall && res.assistantMessage) {
         setSpeakingMsgId(res.assistantMessage.id);
         speakArabic(res.speechText || res.assistantMessage.content, {
+          onError: (err) => setError(err?.message || 'تعذر تشغيل الصوت؛ يمكنك قراءة الرد على الشاشة.'),
           onEnd: () => setSpeakingMsgId(null),
         });
       }
@@ -401,7 +446,7 @@ export default function ChatView({
                 اتكلم بصوتك أو اكتب بكلامك العادي عن <strong>مشكلة محصولك، علاج الآفات، أو المبيدات المتوفرة</strong>، وهنساعدك خطوة بخطوة.
               </p>
 
-              <button type="button" className="hero-voice-cta" onClick={onOpenVoiceCall}>
+              <button type="button" className="hero-voice-cta" onClick={openVoiceCall}>
                 <AudioLines size={20} />
                 <span>ابدأ محادثة صوتية مباشرة الآن</span>
               </button>
@@ -519,15 +564,16 @@ export default function ChatView({
         <div className="composer-inner">
           {error && <div className="error-toast">{error}</div>}
 
-          {isMicListening && (
+          {(isMicListening || isRecordingVoice) && (
             <div className="listening-banner">
-              <div className="voice-wave-bars">
-                <span />
-                <span />
-                <span />
-                <span />
-              </div>
-              <span>جاري الاستماع لصوتك... اتكلم براحتك وسيتم الإرسال تلقائياً</span>
+              <div className="voice-wave-bars"><span /><span /><span /><span /></div>
+              <span>{`${isRecordingVoice ? 'جاري تسجيل الملاحظة' : 'جاري الاستماع'} · ${String(Math.floor(voiceSeconds / 60)).padStart(2, '0')}:${String(voiceSeconds % 60).padStart(2, '0')} — ${isRecordingVoice ? 'اضغط لإيقاف التسجيل' : 'سيُرسل النص تلقائياً بعد التوقف'}`}</span>
+            </div>
+          )}
+          {voiceNoteUrl && (
+            <div className="image-preview-strip voice-note-strip">
+              <div><div style={{fontWeight:700, marginBottom:6}}>ملاحظة صوتية مسجلة</div><audio controls src={voiceNoteUrl} /></div>
+              <button type="button" className="remove-img-btn" onClick={() => { URL.revokeObjectURL(voiceNoteUrl); setVoiceNoteUrl(''); }} aria-label="حذف التسجيل"><X size={16} /></button>
             </div>
           )}
 
@@ -573,13 +619,13 @@ export default function ChatView({
 
             <button
               type="button"
-              className={`mic-btn ${isMicListening ? 'recording' : ''}`}
+              className={`mic-btn ${(isMicListening || isRecordingVoice) ? 'recording' : ''}`}
               onClick={toggleInlineMic}
-              title={isMicListening ? 'إيقاف التسجيل' : 'تكلم بصوتك بالعامية'}
-              aria-label={isMicListening ? 'إيقاف التسجيل' : 'التحدث بالصوت'}
+              title={(isMicListening || isRecordingVoice) ? 'إيقاف التسجيل' : 'تكلم بصوتك بالعامية'}
+              aria-label={(isMicListening || isRecordingVoice) ? 'إيقاف التسجيل' : 'التحدث بالصوت'}
               disabled={loading}
             >
-              {isMicListening ? <MicOff size={20} /> : <Mic size={20} />}
+              {(isMicListening || isRecordingVoice) ? <MicOff size={20} /> : <Mic size={20} />}
             </button>
 
             <textarea

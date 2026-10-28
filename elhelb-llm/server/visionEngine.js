@@ -74,6 +74,7 @@ async function analyzePlantPathologyPixels(rawBuffer) {
   let darkNecroticPixels = 0;
   let yellowChloroticPixels = 0;
   let whitePowderyCandidatePixels = 0;
+  let orangeRustPixels = 0;
   let neutralWhitePaperPixels = 0;
 
   // مصفوفة مبسطة لتحديد هل البقع الداكنة أو البيضاء تجاور نسيجاً نباتياً أخضر
@@ -109,8 +110,15 @@ async function analyzePlantPathologyPixels(rawBuffer) {
       continue;
     }
 
-    // 3) بقع نخرية بنية داكنة أو سوداء (ندوة متأخرة / مبكرة / لفحة / عفن)
-    if (lum >= 14 && lum <= 105 && r >= b * 1.05 && g <= r * 1.08 && !(r < 35 && g < 35 && b < 35 && sat < 0.06)) {
+    // إشارة صدأ برتقالية داخل النسيج؛ تُقبل فقط إذا جاورت ورقة خضراء لاحقاً.
+    if (r >= 125 && g >= 55 && g <= r * 0.82 && b <= g * 0.78 && sat >= 0.35) {
+      orangeRustPixels++;
+      pixelClass[p] = 5;
+      continue;
+    }
+
+    // النسيج البني/الداكن يُحتسب كآفة فقط إذا كان ملاصقاً لورقة، لا كخلفية تربة.
+    if (lum >= 24 && lum <= 105 && r >= b * 1.08 && g <= r * 0.88 && !(r < 35 && g < 35 && b < 35 && sat < 0.08)) {
       darkNecroticPixels++;
       pixelClass[p] = 2;
       continue;
@@ -131,65 +139,60 @@ async function analyzePlantPathologyPixels(rawBuffer) {
   // حساب البقع النخرية والبيضاء الواقعة فعلياً بجوار النسيج النباتي الأخضر (وليس خلفية بعيدة)
   let lesionNearGreen = 0;
   let powderyNearGreen = 0;
+  let rustNearGreen = 0;
   const w = info.width;
   const h = info.height;
-  const radius = 6;
+  const radius = 2;
 
   for (let y = radius; y < h - radius; y++) {
     for (let x = radius; x < w - radius; x++) {
       const idx = y * w + x;
       const cls = pixelClass[idx];
-      if (cls !== 2 && cls !== 4) continue;
+      if (cls !== 2 && cls !== 4 && cls !== 5) continue;
 
-      const hasGreenNeighbor =
-        pixelClass[(y - radius) * w + x] === 1 ||
-        pixelClass[(y + radius) * w + x] === 1 ||
-        pixelClass[y * w + (x - radius)] === 1 ||
-        pixelClass[y * w + (x + radius)] === 1;
-
-      if (hasGreenNeighbor) {
+      const greenSides = [
+        pixelClass[(y - radius) * w + x], pixelClass[(y + radius) * w + x],
+        pixelClass[y * w + (x - radius)], pixelClass[y * w + (x + radius)],
+      ].filter((value) => value === 1).length;
+      // عزل حد الورقة عن التربة: البقعة يجب أن تكون محاطة بالنسيج الأخضر من عدة جهات.
+      if (greenSides >= 3) {
         if (cls === 2) lesionNearGreen++;
         if (cls === 4) powderyNearGreen++;
+        if (cls === 5) rustNearGreen++;
       }
     }
   }
 
   const leafLesionPct = Number(((lesionNearGreen / totalPixels) * 100).toFixed(1));
   const leafPowderyPct = Number(((powderyNearGreen / totalPixels) * 100).toFixed(1));
-
-  const isPlantPhoto = greenPct >= 16 && paperPct < 55;
+  const rustPct = Number(((rustNearGreen / totalPixels) * 100).toFixed(1));
+  const isPlantPhoto = greenPct >= 12 && paperPct < 65;
+  const scores = {
+    leafLesions: Math.min(1, leafLesionPct / 3),
+    powdery: Math.min(1, leafPowderyPct / 6),
+    chlorosis: Math.min(1, yellowPct / 18),
+    rustLike: Math.min(1, rustPct / 2.5),
+  };
 
   let plantCondition = 'healthy_or_general_plant';
-  let symptomLabel = 'نبات / أوراق خضراء';
+  let symptomLabel = 'نبات / أوراق خضراء؛ لا تكفي الإشارات اللونية وحدها لتأكيد المرض';
   let suspectedIssue = null;
-
-  if (isPlantPhoto) {
-    if (leafLesionPct >= 1.2 || (rawNecroticPct >= 5 && greenPct >= 22)) {
-      plantCondition = 'blight_or_leaf_spot';
-      symptomLabel = 'أوراق نباتية يظهر عليها بقع نخرية داكنة / لفحة (اشتباه ندوة مبكرة أو متأخرة)';
-      suspectedIssue = 'blight';
-    } else if (yellowPct >= 7) {
-      plantCondition = 'chlorosis_or_mites';
-      symptomLabel = 'أوراق نباتية يظهر عليها اصفرار وشحوب (اشتباه أكاروس / عنكبوت أحمر أو إجهاد ونقص عناصر)';
-      suspectedIssue = 'chlorosis_mites';
-    } else if (leafPowderyPct >= 3.5 && paperPct < 20) {
-      plantCondition = 'powdery_mildew';
-      symptomLabel = 'أوراق نباتية يظهر عليها مظهر بقع بيضاء سطحية (اشتباه بياض دقيقي أو ذبابة بيضاء)';
-      suspectedIssue = 'powdery';
+  const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  if (isPlantPhoto && ranked[0][1] >= 0.22) {
+    const lead = ranked[0][0];
+    if (lead === 'leafLesions' && leafLesionPct >= 1.2) {
+      plantCondition = 'blight_or_leaf_spot'; suspectedIssue = 'leaf_lesions';
+      symptomLabel = 'اشتباه بقع نخرية داخل نسيج الورقة؛ لا يمكن التمييز بين الندوة والتبقع من اللون فقط';
+    } else if (lead === 'powdery' && leafPowderyPct >= 1.8) {
+      plantCondition = 'powdery_mildew'; suspectedIssue = 'powdery'; symptomLabel = 'إشارة لبقع فاتحة قرب نسيج أخضر؛ يلزم فحص طبقة الورقة';
+    } else if (lead === 'chlorosis' && yellowPct >= 5) {
+      plantCondition = 'chlorosis_or_mites'; suspectedIssue = 'chlorosis_mites'; symptomLabel = 'اصفرار/شحوب ورقي؛ قد يرتبط بأكاروس أو تغذية أو إجهاد';
+    } else if (lead === 'rustLike' && rustPct >= 0.7) {
+      plantCondition = 'rust_like'; suspectedIssue = 'rust'; symptomLabel = 'إشارة لونية برتقالية/صدئية؛ يلزم التحقق من بثرات الصدأ';
     }
   }
 
-  return {
-    isPlantPhoto,
-    greenPct,
-    leafLesionPct,
-    rawNecroticPct,
-    yellowPct,
-    leafPowderyPct,
-    plantCondition,
-    symptomLabel,
-    suspectedIssue,
-  };
+  return { isPlantPhoto, greenPct, leafLesionPct, rawNecroticPct, yellowPct, leafPowderyPct, rustPct, scores, plantCondition, symptomLabel, suspectedIssue };
 }
 
 /**
@@ -372,4 +375,5 @@ async function analyzeImageBuffer(input) {
 
 module.exports = {
   analyzeImageBuffer,
+  analyzePlantPathologyPixels,
 };

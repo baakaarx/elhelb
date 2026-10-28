@@ -1,4 +1,5 @@
 const { tokenize, computeLocalEmbedding } = require('./arabicRag');
+const agriKnowledge = require('../shared/agriKnowledgeBase.json');
 
 function validateAirGapUrl(rawUrl, airgapLock = true) {
   let parsed;
@@ -123,7 +124,8 @@ function buildSystemPrompt({ modelProfile, contexts, dataAnalysis, visionReport 
 ${visionReport.ocr.text || '(صورة بصرية بدون نصوص مطبوعة واضحة)'}`;
   }
 
-  return `${base}\n\n=== وثائق ومعرفة الشركة ===\n${docsBlock}${analyticsBlock}${visionBlock}`;
+  const clinicBlock = `\n\n=== قاعدة المعرفة الزراعية المعتمدة (21 محصولاً + مبيدات الحشائش والتوصيات) ===\nالمحاصيل: ${agriKnowledge.crops.join('، ')}\nمبيدات الحشائش: ${agriKnowledge.herbicides.map((h) => `${h.name} — ${h.active} — ${h.target} — ${h.rate}`).join('\n')}\nتوصيات الآفات: ${agriKnowledge.protocols.map((p) => `${p.issue}: ${p.products}; ${p.rate}`).join('\n')}`;
+  return `${base}\n\n=== وثائق ومعرفة الشركة ===\n${docsBlock}${clinicBlock}${analyticsBlock}${visionBlock}`;
 }
 
 /**
@@ -166,6 +168,7 @@ function buildVisionCrossCheck(visionReport, contexts, dataAnalysis) {
 
 function runBuiltInCompanyBrain({
   query,
+  originalUserText = '',
   colloquialRule = null,
   contexts = [],
   dataAnalysis = null,
@@ -188,12 +191,30 @@ function runBuiltInCompanyBrain({
 
     // أ) إذا كانت صورة ميدانية لنبات / ورقة محصول (بدون نص عبوة مطبوع)
     if (plantAnalysis?.isPlantPhoto && !ocr.hasReadableText) {
+      const userCue = String(originalUserText || '').toLowerCase();
+      const cueMap = [
+        { pattern: /(?:صدأ|rust)/i, term: 'الصدأ الأصفر' },
+        { pattern: /(?:البياض الزغبي|بياض زغبي|downy)/i, term: 'البياض الزغبي' },
+        { pattern: /(?:التوتا|صانعات الأنفاق|leafminer)/i, term: 'التوتا أبسلوتا' },
+        { pattern: /(?:البياض الدقيقي|powdery)/i, term: 'البياض الدقيقي' },
+        { pattern: /(?:عنكبوت أحمر|أكاروس|spider mite)/i, term: 'العنكبوت الأحمر' },
+      ].find((cue) => cue.pattern.test(userCue));
+      if (cueMap) {
+        const protocol = agriKnowledge.protocols.find((item) => item.issue.includes(cueMap.term));
+        return {
+          answer: `🌿 **دمجت الصورة مع وصفك المكتوب:** ذكرتَ احتمال «${cueMap.term}». الصورة وحدها لا تؤكد المسبب، لذا اعتبر التالي خيارات أولية للتحقق لا تشخيصاً نهائياً.\\n- **خيارات مجموعة الهلب:** ${protocol?.products || 'أرسل صورة أقرب للعلامات واسم المحصول لأحدد الخيارات المسجلة.'}\\n- **الإرشاد:** ${protocol?.rate || 'الجرعة تتحدد من ملصق المنتج المسجل للمحصول.'}\\nاذكر المحصول ومرحلة نموه، وتحقق من العلامات المميزة قبل الرش.`,
+          engineUsed: 'elhelb-plant-pathology-text-vision-fusion',
+          confidence: 0.7,
+        };
+      }
       if (plantAnalysis.plantCondition === 'blight_or_leaf_spot') {
         return {
           answer:
             `🌿 **فحص الصورة في عيادة الهلب الزراعية (ELHELB Agri-Clinic):**\n\n` +
-            `- **الملاحظة البصرية في الصورة:** يظهر على الأوراق الخضراء **بقعة نخرية داكنة (بنية مائلة للسواد / لفحة واضحة على نصل الورقة والساق)**.\n` +
-            `- **التشخيص المرجّح:** هذه الأعراض تتطابق بقوة مع إصابة فطرية بـ **الندوة المتأخرة أو الندوة المبكرة (اللفحة — Blight)** التي تنتشر في محاصيل **البطاطس والطماطم** خاصة مع الرطوبة العالية والندى.\n\n` +
+            `- **الملاحظة البصرية:** ${plantAnalysis.symptomLabel || 'مناطق داكنة قريبة من نسيج أخضر'}؛ لا يُحسم المرض من الصورة وحدها.\n` +
+            `- **قراءة الصورة:** رُصدت مناطق داكنة قريبة من نسيج أخضر؛ اللون وحده لا يؤكد الندوة وقد يشير إلى تبقع أو تلف أو ظل. لا أفترض نوع المحصول دون تأكيد.\n` +
+            (originalUserText ? `- **السياق الذي ذكرته:** ${originalUserText}\n` : '') +
+            `- **احتمالات تحتاج فحصاً ميدانياً:** تبقع ورقي أو ندوة مبكرة/متأخرة؛ صوّر وجهي الورقة وأخبرني بالمحصول والرطوبة وسرعة انتشار البقع.\n\n` +
             `💊 **برنامج العلاج السريع المعتمد من مجموعة الهلب:**\n` +
             `1. **رش علاجي فوري لوقف انتشار البقع:**\n` +
             `   • مبيد **تازولين 72% WP** بمعدل **250 جرام / 100 لتر ماء**\n` +
@@ -202,7 +223,7 @@ function runBuiltInCompanyBrain({
             `150 جم / 100 لتر ماء) أو **مولر 69% WP** (250 جم / 100 لتر ماء).\n` +
             `2. **رش وقائي لحماية الأوراق السليمة الجديدة:** مبيد **أنادول 80% WP** (` +
             `250 جم / 100 لتر ماء) أو **رولكس 50% WP** (150 جم / 100 لتر ماء).\n\n` +
-            `💬 **تأكيد سريع معاك:** هل المحصول في الصورة **بطاطس** فعلاً؟ وهل البقع بقت طرية وبتنتشر بسرعة مع ندى الصبح؟`,
+            `💬 **سؤال للتأكيد:** ما اسم المحصول؟ وهل البقع جافة أم طرية، وهل تنتشر بسرعة بعد الندى؟`,
           engineUsed: 'elhelb-plant-pathology-vision',
           confidence: 0.94,
         };
@@ -571,6 +592,7 @@ async function generateCompanyResponse({
 
   const localRes = runBuiltInCompanyBrain({
     query,
+    originalUserText,
     colloquialRule,
     contexts,
     dataAnalysis,
