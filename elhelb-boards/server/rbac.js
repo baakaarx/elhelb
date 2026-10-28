@@ -1,8 +1,10 @@
 const jwt = require('jsonwebtoken');
 const { get, all, run } = require('./db');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'elhelb-enterprise-rbac-secret-2026-v1';
-const COOKIE_NAME = 'elhelb_session';
+const JWT_SECRET =
+  process.env.JWT_SECRET || 'elhelb-sovereign-v10-isolated-2026-secret';
+const COOKIE_NAME = 'elhelb_session_v10';
+const LEGACY_COOKIE_NAMES = ['elhelb_session'];
 
 const GLOBAL_PERMISSIONS = new Set([
   'boards.view_all',
@@ -15,7 +17,11 @@ const GLOBAL_PERMISSIONS = new Set([
 
 function signUserToken(user) {
   return jwt.sign(
-    { uid: user.id, tv: user.token_version },
+    {
+      uid: Number(user.id),
+      uname: String(user.username || '').trim().toLowerCase(),
+      tv: Number(user.token_version || 1),
+    },
     JWT_SECRET,
     { expiresIn: '12h' }
   );
@@ -128,7 +134,9 @@ function authenticate(req, res, next) {
     }
   }
 
-  if (!payload) {
+  if (!payload || !payload.uid || typeof payload.uname !== 'string' || !payload.uname) {
+    for (const oldName of LEGACY_COOKIE_NAMES) res.clearCookie(oldName);
+    res.clearCookie(COOKIE_NAME);
     return res.status(401).json({
       error: 'انتهت صلاحية الجلسة، يرجى تسجيل الدخول مرة أخرى',
       code: 'INVALID_TOKEN',
@@ -136,7 +144,13 @@ function authenticate(req, res, next) {
   }
 
   const user = loadUserById(payload.uid);
-  if (!user || user.token_version !== payload.tv) {
+  if (
+    !user ||
+    Number(user.token_version) !== Number(payload.tv) ||
+    String(user.username || '').trim().toLowerCase() !== payload.uname.trim().toLowerCase()
+  ) {
+    for (const oldName of LEGACY_COOKIE_NAMES) res.clearCookie(oldName);
+    res.clearCookie(COOKIE_NAME);
     return res.status(401).json({
       error: 'تم تحديث بيانات الحساب أو إيقافه، يرجى تسجيل الدخول مجدداً',
       code: 'SESSION_REVOKED',
@@ -408,6 +422,7 @@ function userHasPermission(user, permissionKey) {
 module.exports = {
   JWT_SECRET,
   COOKIE_NAME,
+  LEGACY_COOKIE_NAMES,
   GLOBAL_PERMISSIONS,
   signUserToken,
   loadUserById,

@@ -572,7 +572,49 @@ async function main() {
       'Cards created by a deleted employee must remain intact on company boards'
     );
 
-    console.log('\n✅ ALL 9 PRODUCTION v8 TESTS (SINGLE ADMIN, HR ONBOARDING & REGISTRATION, EMPLOYEE DELETION & RBAC) PASSED 100%!');
+    console.log('🔟 Testing Domain Session Isolation, Anti-CDN Cache Headers & Legacy Token Revocation...');
+    const jwt = require('jsonwebtoken');
+    const { JWT_SECRET } = require('../server/rbac');
+
+    // Fresh visitor opening shared domain link must get 401 + strict anti-CDN headers + zero ETag
+    const freshMeRaw = await fetch(`${base}/api/auth/me`);
+    assert.equal(freshMeRaw.status, 401);
+    assert.match(freshMeRaw.headers.get('cache-control') || '', /private.*no-store/i);
+    assert.equal(freshMeRaw.headers.get('cdn-cache-control'), 'no-store');
+    assert.equal(freshMeRaw.headers.get('vercel-cdn-cache-control'), 'no-store');
+    assert.equal(freshMeRaw.headers.get('cloudflare-cdn-cache-control'), 'no-store');
+    assert.equal(freshMeRaw.headers.get('etag'), null, 'API responses must never emit ETag');
+
+    // Authenticated /api/auth/me must also carry strict anti-CDN headers so no proxy ever caches admin!
+    const authMeRaw = await fetch(`${base}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${chairmanTok}` },
+    });
+    assert.equal(authMeRaw.status, 200);
+    assert.match(authMeRaw.headers.get('cache-control') || '', /private.*no-store/i);
+    assert.equal(authMeRaw.headers.get('cloudflare-cdn-cache-control'), 'no-store');
+    assert.equal(authMeRaw.headers.get('etag'), null);
+
+    // Legacy v1-v9 token signed with old secret must be 100% rejected
+    const legacyAdminToken = jwt.sign(
+      { uid: 1, tv: 1 },
+      'elhelb-enterprise-rbac-secret-2026-v1',
+      { expiresIn: '12h' }
+    );
+    const legacyAttempt = await api('GET', '/api/auth/me', legacyAdminToken);
+    assert.equal(legacyAttempt.status, 401, 'Legacy secret tokens must be rejected');
+
+    // Token missing uname or with mismatched uname (anti-ID-collision) must be 100% rejected
+    const missingUnameTok = jwt.sign({ uid: 1, tv: 1 }, JWT_SECRET, { expiresIn: '12h' });
+    assert.equal((await api('GET', '/api/auth/me', missingUnameTok)).status, 401);
+
+    const mismatchedUnameTok = jwt.sign(
+      { uid: 1, uname: 'not_admin', tv: 1 },
+      JWT_SECRET,
+      { expiresIn: '12h' }
+    );
+    assert.equal((await api('GET', '/api/auth/me', mismatchedUnameTok)).status, 401);
+
+    console.log('\n✅ ALL 10 PRODUCTION v10 TESTS (SESSION ISOLATION, ANTI-CACHE, HR ONBOARDING, DELETION & RBAC) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}

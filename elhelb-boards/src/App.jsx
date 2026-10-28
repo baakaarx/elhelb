@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   apiFetch,
+  getStoredToken,
   setApiHandlers,
   setStoredToken,
 } from './api';
@@ -62,20 +63,29 @@ export default function App() {
   }, [refreshMe]);
 
   useEffect(() => {
-    // Handle OAuth 2.0 callback token or error in URL query
+    // Handle OAuth 2.0 callback token or error in URL query, and strip any stray auth params
     if (typeof window !== 'undefined' && window.location.search) {
       const params = new URLSearchParams(window.location.search);
       const oauthToken = params.get('oauth_token');
       const oauthErr = params.get('oauth_error');
+      const hasStrayToken = params.has('_t');
       if (oauthToken) {
         setStoredToken(oauthToken);
       }
       if (oauthErr) {
         setOauthError('لم يكتمل تسجيل الدخول عبر المزود الخارجي، يمكنك المحاولة مرة أخرى.');
       }
-      if (oauthToken || oauthErr) {
+      if (oauthToken || oauthErr || hasStrayToken) {
         window.history.replaceState({}, '', window.location.pathname);
       }
+    }
+
+    // Strict session isolation: never auto-probe /api/auth/me unless this exact browser
+    // holds an explicit login token in storage (prevents ambient cookie / CDN cache leaks)
+    if (!getStoredToken()) {
+      setUser(null);
+      setBooting(false);
+      return;
     }
 
     refreshMe().finally(() => setBooting(false));

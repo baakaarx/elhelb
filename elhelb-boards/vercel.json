@@ -4,15 +4,33 @@
   "outputDirectory": "public",
   "headers": [
     {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "private, no-store, no-cache, max-age=0, must-revalidate, proxy-revalidate"
+        },
+        { "key": "CDN-Cache-Control", "value": "no-store" },
+        { "key": "Vercel-CDN-Cache-Control", "value": "no-store" },
+        { "key": "Cloudflare-CDN-Cache-Control", "value": "no-store" },
+        { "key": "Pragma", "value": "no-cache" },
+        { "key": "Vary", "value": "Authorization, X-Elhelb-Token, Cookie" }
+      ]
+    },
+    {
       "source": "/",
       "headers": [
-        { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate" }
+        { "key": "Cache-Control", "value": "private, no-store, no-cache, max-age=0, must-revalidate" },
+        { "key": "CDN-Cache-Control", "value": "no-store" },
+        { "key": "Cloudflare-CDN-Cache-Control", "value": "no-store" }
       ]
     },
     {
       "source": "/index.html",
       "headers": [
-        { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate" }
+        { "key": "Cache-Control", "value": "private, no-store, no-cache, max-age=0, must-revalidate" },
+        { "key": "CDN-Cache-Control", "value": "no-store" },
+        { "key": "Cloudflare-CDN-Cache-Control", "value": "no-store" }
       ]
     }
   ],

@@ -1,4 +1,18 @@
-const TOKEN_KEY = 'elhelb_jwt_token';
+const TOKEN_KEY = 'elhelb_auth_token_v10';
+const LEGACY_TOKEN_KEYS = ['elhelb_jwt_token', 'elhelb_token'];
+
+// Immediately purge any legacy session keys from earlier builds on module load
+(function purgeLegacyTokens() {
+  if (typeof window === 'undefined') return;
+  for (const oldKey of LEGACY_TOKEN_KEYS) {
+    try {
+      sessionStorage.removeItem(oldKey);
+    } catch (_) {}
+    try {
+      localStorage.removeItem(oldKey);
+    } catch (_) {}
+  }
+})();
 
 // Primary in-memory token guarantees authentication works 100% even inside
 // strict cross-origin sandboxed iframes where localStorage / 3rd-party cookies are blocked!
@@ -14,8 +28,8 @@ export function setApiHandlers({ onPermissionDenied, onSessionExpired }) {
 
 export function getStoredToken() {
   if (memoryToken) return memoryToken;
-  if (typeof window !== 'undefined' && window.__ELHELB_TOKEN__) {
-    memoryToken = window.__ELHELB_TOKEN__;
+  if (typeof window !== 'undefined' && window.__ELHELB_TOKEN_V10__) {
+    memoryToken = window.__ELHELB_TOKEN_V10__;
     return memoryToken;
   }
   try {
@@ -38,7 +52,7 @@ export function getStoredToken() {
 export function setStoredToken(token) {
   memoryToken = token || '';
   if (typeof window !== 'undefined') {
-    window.__ELHELB_TOKEN__ = memoryToken;
+    window.__ELHELB_TOKEN_V10__ = memoryToken;
   }
   try {
     if (token) sessionStorage.setItem(TOKEN_KEY, token);
@@ -46,7 +60,7 @@ export function setStoredToken(token) {
   } catch (_) {}
   try {
     if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.setItem && localStorage.removeItem(TOKEN_KEY);
+    else localStorage.removeItem(TOKEN_KEY);
   } catch (_) {}
 }
 
@@ -71,6 +85,8 @@ export async function apiFetch(path, options = {}) {
 
   const headers = {
     Accept: 'application/json',
+    'Cache-Control': 'no-cache, no-store',
+    Pragma: 'no-cache',
   };
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
@@ -87,6 +103,7 @@ export async function apiFetch(path, options = {}) {
     method,
     headers,
     credentials: 'include',
+    cache: 'no-store',
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 

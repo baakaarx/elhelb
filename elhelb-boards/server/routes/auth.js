@@ -4,6 +4,7 @@ const rateLimit = require('express-rate-limit');
 const { get, all, run } = require('../db');
 const {
   COOKIE_NAME,
+  LEGACY_COOKIE_NAMES,
   signUserToken,
   loadUserById,
   authenticate,
@@ -169,11 +170,11 @@ router.post('/login', loginLimiter, async (req, res) => {
     const token = signUserToken(row);
     const isHttps =
       req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    for (const oldName of LEGACY_COOKIE_NAMES || []) res.clearCookie(oldName);
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
-      sameSite: isHttps ? 'none' : 'lax',
+      sameSite: 'lax',
       secure: isHttps,
-      partitioned: isHttps,
       maxAge: 12 * 3600 * 1000,
     });
 
@@ -204,6 +205,7 @@ router.post('/logout', authenticate, (req, res) => {
     status: 'ALLOWED',
     req,
   });
+  for (const oldName of LEGACY_COOKIE_NAMES || []) res.clearCookie(oldName);
   res.clearCookie(COOKIE_NAME);
   res.json({ ok: true });
 });
