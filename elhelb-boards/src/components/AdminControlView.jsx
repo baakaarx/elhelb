@@ -12,6 +12,10 @@ import {
   Edit3,
   X,
   Database,
+  Crown,
+  Lock,
+  Globe,
+  Copy,
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { COLOR_SWATCHES, formatSqliteDate, getInitials } from '../constants';
@@ -51,7 +55,7 @@ export default function AdminControlView({ user, onRefreshMe, showToast }) {
             مركز الإدارة والتحكم الديناميكي بالصلاحيات
           </h2>
           <p style={{ margin: '4px 0 0', fontSize: 13.5, color: '#64748b' }}>
-            كافة الأدوار والصلاحيات والأقسام مخزنة في قاعدة البيانات وتُطبّق لحظياً على السيرفر دون تعديل سطر كود واحد
+            كافة الأدوار والصلاحيات والأقسام مخزنة في قاعدة البيانات وتُطبّق لحظياً على السيرفر مع حماية الرتب السيادية
           </p>
         </div>
 
@@ -86,6 +90,16 @@ export default function AdminControlView({ user, onRefreshMe, showToast }) {
               أقسام الشركة
             </button>
           )}
+          {canRoles && (
+            <button
+              type="button"
+              className={`btn btn-sm ${subTab === 'oauth' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setSubTab('oauth')}
+            >
+              <Globe size={15} />
+              ربط Google و Facebook
+            </button>
+          )}
           {canAudit && (
             <button
               type="button"
@@ -108,6 +122,7 @@ export default function AdminControlView({ user, onRefreshMe, showToast }) {
       {subTab === 'departments' && canDepts && (
         <DepartmentsManagementPanel showToast={showToast} />
       )}
+      {subTab === 'oauth' && canRoles && <OAuthSettingsPanel showToast={showToast} />}
       {subTab === 'audit' && canAudit && <AuditLogsPanel showToast={showToast} />}
     </div>
   );
@@ -158,8 +173,10 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
   }, []);
 
   const currentRole = roles.find((r) => r.id === selectedRoleId);
+  const canEditSelectedRole = Boolean(currentRole && currentRole.can_caller_edit);
 
   function togglePerm(key) {
+    if (!canEditSelectedRole) return;
     setDraftPerms((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -169,6 +186,7 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
   }
 
   function toggleCategoryAll(catPerms) {
+    if (!canEditSelectedRole) return;
     const allEnabled = catPerms.every((p) => draftPerms.has(p.key));
     setDraftPerms((prev) => {
       const next = new Set(prev);
@@ -181,7 +199,7 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
   }
 
   async function handleSaveRole() {
-    if (!currentRole) return;
+    if (!currentRole || !canEditSelectedRole) return;
     setSaving(true);
     try {
       await apiFetch(`/api/admin/roles/${currentRole.id}`, {
@@ -282,21 +300,28 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
             className={`role-list-item ${r.id === selectedRoleId ? 'selected' : ''}`}
             onClick={() => selectRole(r)}
           >
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span
-                  style={{
-                    width: 10,
-                    height: 10,
-                    borderRadius: '50%',
-                    background: r.color,
-                    display: 'inline-block',
-                  }}
-                />
-                <span style={{ fontWeight: 800, fontSize: 13.5 }}>{r.name}</span>
+            <div style={{ width: '100%' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: '50%',
+                      background: r.color,
+                      display: 'inline-block',
+                    }}
+                  />
+                  <span style={{ fontWeight: 800, fontSize: 13.5 }}>{r.name}</span>
+                </div>
+                {r.slug === 'chairman' ? (
+                  <Crown size={14} color="#d97706" />
+                ) : !r.can_caller_edit ? (
+                  <Lock size={13} color="#94a3b8" />
+                ) : null}
               </div>
               <div style={{ fontSize: 11.5, color: '#64748b', marginTop: 3 }}>
-                {r.permissions.length} صلاحية • {r.users_count} موظف
+                رتبة {r.rank_level} • {r.permissions.length} صلاحية • {r.users_count} موظف
               </div>
             </div>
           </button>
@@ -306,6 +331,33 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
       {/* Permission Matrix Editor */}
       {currentRole && (
         <div className="card-box">
+          {!canEditSelectedRole && (
+            <div
+              style={{
+                background: currentRole.slug === 'chairman' ? '#fffbeb' : '#f8fafc',
+                border: `1px solid ${currentRole.slug === 'chairman' ? '#fde68a' : '#cbd5e1'}`,
+                color: currentRole.slug === 'chairman' ? '#92400e' : '#475569',
+                borderRadius: 10,
+                padding: '10px 14px',
+                marginBottom: 16,
+                fontSize: 13,
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              {currentRole.slug === 'chairman' ? <Crown size={17} /> : <Lock size={16} />}
+              <span>
+                {currentRole.slug === 'pending_onboarding'
+                  ? 'هذا الدور مخصص أمنياً للموظفين الجدد المسجلين عبر Google/Facebook بدون أي صلاحيات حتى يضمهم رئيس القسم.'
+                  : currentRole.slug === 'chairman'
+                  ? 'حماية سيادية: دور (رئيس مجلس الإدارة) هو الأعلى في النظام ومغلق ضد التعديل من أي رتبة أدنى.'
+                  : `هذا الدور (${currentRole.name}) يماثل أو يعلو رتبتك الإدارية الحالية — يمكنك استعراض صلاحياته فقط.`}
+              </span>
+            </div>
+          )}
+
           <div
             style={{
               display: 'flex',
@@ -325,6 +377,7 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
                   <input
                     type="text"
                     className="form-input"
+                    disabled={!canEditSelectedRole}
                     value={draftName}
                     onChange={(e) => setDraftName(e.target.value)}
                   />
@@ -336,6 +389,7 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
                       <button
                         key={c}
                         type="button"
+                        disabled={!canEditSelectedRole}
                         onClick={() => setDraftColor(c)}
                         style={{
                           width: 24,
@@ -343,6 +397,7 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
                           borderRadius: 6,
                           background: c,
                           border: draftColor === c ? '2.5px solid #0f172a' : 'none',
+                          opacity: canEditSelectedRole ? 1 : 0.6,
                         }}
                       />
                     ))}
@@ -354,34 +409,37 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
                 <input
                   type="text"
                   className="form-input"
+                  disabled={!canEditSelectedRole}
                   value={draftDesc}
                   onChange={(e) => setDraftDesc(e.target.value)}
                 />
               </div>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={saving}
-                onClick={handleSaveRole}
-              >
-                <Save size={16} />
-                {saving ? 'جاري الحفظ...' : `حفظ الصلاحيات في قاعدة البيانات (${draftPerms.size})`}
-              </button>
-
-              {!currentRole.is_protected && (
+            {canEditSelectedRole && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
                 <button
                   type="button"
-                  className="btn btn-danger-soft btn-sm"
-                  onClick={handleDeleteRole}
+                  className="btn btn-primary"
+                  disabled={saving}
+                  onClick={handleSaveRole}
                 >
-                  <Trash2 size={14} />
-                  حذف هذا الدور
+                  <Save size={16} />
+                  {saving ? 'جاري الحفظ...' : `حفظ الصلاحيات في قاعدة البيانات (${draftPerms.size})`}
                 </button>
-              )}
-            </div>
+
+                {!currentRole.is_protected && (
+                  <button
+                    type="button"
+                    className="btn btn-danger-soft btn-sm"
+                    onClick={handleDeleteRole}
+                  >
+                    <Trash2 size={14} />
+                    حذف هذا الدور
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Categories & Permission Toggles */}
@@ -396,13 +454,15 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
                       ({enabledInCat}/{group.items.length})
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => toggleCategoryAll(group.items)}
-                  >
-                    {enabledInCat === group.items.length ? 'إلغاء تحديد القسم' : 'تحديد كل القسم'}
-                  </button>
+                  {canEditSelectedRole && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => toggleCategoryAll(group.items)}
+                    >
+                      {enabledInCat === group.items.length ? 'إلغاء تحديد القسم' : 'تحديد كل القسم'}
+                    </button>
+                  )}
                 </div>
 
                 <div className="perm-items-grid">
@@ -412,9 +472,11 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
                       <label
                         key={perm.key}
                         className={`perm-toggle-card ${checked ? 'checked' : ''}`}
+                        style={!canEditSelectedRole ? { cursor: 'default', opacity: 0.85 } : undefined}
                       >
                         <input
                           type="checkbox"
+                          disabled={!canEditSelectedRole}
                           checked={checked}
                           onChange={() => togglePerm(perm.key)}
                           style={{ marginTop: 4, width: 16, height: 16 }}
@@ -467,7 +529,7 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
             <form onSubmit={handleCreateRole}>
               <div className="modal-body">
                 <div className="form-group">
-                  <label className="form-label">اسم الدور (مثلاً: مراجع عقود / محاسب مشتريات)</label>
+                  <label className="form-label">اسم الدور (مثلاً: مراجع شحنات تصدير / أخصائي تسجيل)</label>
                   <input
                     type="text"
                     className="form-input"
@@ -535,7 +597,6 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
 
-  // Create employee state
   const [uForm, setUForm] = useState({
     username: '',
     password: '',
@@ -557,7 +618,10 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
       setRoles(rData.roles);
       setDepartments(dList);
       if (!uForm.roleId && rData.roles.length > 0) {
-        const staff = rData.roles.find((r) => r.slug === 'staff') || rData.roles[0];
+        const staff =
+          rData.roles.find((r) => r.slug === 'staff') ||
+          rData.roles.find((r) => r.can_caller_edit) ||
+          rData.roles[0];
         setUForm((p) => ({
           ...p,
           roleId: staff.id,
@@ -572,6 +636,10 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
   useEffect(() => {
     loadAll();
   }, []);
+
+  const assignableRoles = roles.filter(
+    (r) => r.slug !== 'pending_onboarding' && r.can_caller_edit
+  );
 
   async function handleCreateUser(e) {
     e.preventDefault();
@@ -624,6 +692,8 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
           alignItems: 'center',
           justifyContent: 'space-between',
           marginBottom: 16,
+          flexWrap: 'wrap',
+          gap: 10,
         }}
       >
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>
@@ -635,7 +705,7 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
           onClick={() => setCreateOpen(true)}
         >
           <Plus size={15} />
-          إضافة موظف جديد
+          إضافة موظف جديد (اسم مستخدم وباسورد)
         </button>
       </div>
 
@@ -644,8 +714,8 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
           <thead>
             <tr>
               <th>الموظف</th>
-              <th>اسم الدخول</th>
-              <th>المسمى الوظيفي</th>
+              <th>حساب الدخول</th>
+              <th>طريقة التسجيل</th>
               <th>الدور الوظيفي</th>
               <th>القسم التابع له</th>
               <th>الحالة</th>
@@ -663,49 +733,91 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                     >
                       {getInitials(u.full_name)}
                     </span>
-                    <span style={{ fontWeight: 800 }}>{u.full_name}</span>
+                    <div>
+                      <div style={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 5 }}>
+                        {u.role_slug === 'chairman' && <Crown size={14} color="#d97706" />}
+                        {u.full_name}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: '#64748b' }}>{u.job_title}</div>
+                    </div>
                   </div>
                 </td>
-                <td dir="ltr" style={{ textAlign: 'right', fontFamily: 'monospace' }}>
-                  @{u.username}
+                <td dir="ltr" style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: 12 }}>
+                  <div>@{u.username}</div>
+                  {u.email && <div style={{ color: '#64748b', fontSize: 11 }}>{u.email}</div>}
                 </td>
-                <td>{u.job_title}</td>
+                <td>
+                  {u.auth_provider === 'google' ? (
+                    <span className="badge" style={{ background: '#fee2e2', color: '#b91c1c' }}>
+                      Google
+                    </span>
+                  ) : u.auth_provider === 'facebook' ? (
+                    <span className="badge" style={{ background: '#dbeafe', color: '#1d4ed8' }}>
+                      Facebook
+                    </span>
+                  ) : (
+                    <span className="badge" style={{ background: '#f1f5f9', color: '#334155' }}>
+                      باسورد داخلي
+                    </span>
+                  )}
+                </td>
                 <td>
                   <span className="badge" style={{ background: u.role_color, color: '#fff' }}>
                     {u.role_name}
                   </span>
                 </td>
                 <td>
-                  <span className="badge" style={{ background: '#f1f5f9', color: '#0f172a' }}>
-                    {u.department_name || 'الإدارة العليا (عام)'}
-                  </span>
-                </td>
-                <td>
-                  {u.is_active ? (
-                    <span className="badge" style={{ background: '#dcfce7', color: '#166534' }}>
-                      نشط
+                  {u.onboarding_status === 'pending' ? (
+                    <span className="badge" style={{ background: '#fef3c7', color: '#92400e' }}>
+                      بانتظار ضم رئيس القسم
+                      {u.preferred_department_name ? ` (${u.preferred_department_name})` : ''}
                     </span>
                   ) : (
-                    <span className="badge" style={{ background: '#fee2e2', color: '#991b1b' }}>
-                      موقوف
+                    <span className="badge" style={{ background: '#f1f5f9', color: '#0f172a' }}>
+                      {u.department_name || 'الإدارة العليا (عام)'}
                     </span>
                   )}
                 </td>
                 <td>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() =>
-                      setEditingUser({
-                        ...u,
-                        department_id: u.department_id || '',
-                        newPassword: '',
-                      })
-                    }
-                  >
-                    <Edit3 size={13} />
-                    تعديل الدور/القسم
-                  </button>
+                  {!u.is_active ? (
+                    <span className="badge" style={{ background: '#fee2e2', color: '#991b1b' }}>
+                      موقوف
+                    </span>
+                  ) : u.onboarding_status === 'pending' ? (
+                    <span className="badge" style={{ background: '#ffedd5', color: '#c2410c' }}>
+                      قيد التسكين
+                    </span>
+                  ) : (
+                    <span className="badge" style={{ background: '#dcfce7', color: '#166534' }}>
+                      نشط
+                    </span>
+                  )}
+                </td>
+                <td>
+                  {u.can_caller_edit ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() =>
+                        setEditingUser({
+                          ...u,
+                          department_id: u.department_id || '',
+                          newPassword: '',
+                        })
+                      }
+                    >
+                      <Edit3 size={13} />
+                      تعديل الدور/القسم
+                    </button>
+                  ) : (
+                    <span
+                      className="badge"
+                      style={{ background: '#fef3c7', color: '#92400e', fontSize: 11 }}
+                    >
+                      <Lock size={11} />
+                      محمي سيادياً
+                    </span>
+                  )}
                 </td>
               </tr>
             ))}
@@ -780,7 +892,7 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                       value={uForm.roleId}
                       onChange={(e) => setUForm({ ...uForm, roleId: e.target.value })}
                     >
-                      {roles.map((r) => (
+                      {assignableRoles.map((r) => (
                         <option key={r.id} value={r.id}>
                           {r.name}
                         </option>
@@ -867,16 +979,23 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                     <label className="form-label">الدور الوظيفي</label>
                     <select
                       className="form-select"
+                      disabled={editingUser.id === currentUser.id && editingUser.role_slug !== 'chairman'}
                       value={editingUser.role_id}
                       onChange={(e) =>
                         setEditingUser({ ...editingUser, role_id: Number(e.target.value) })
                       }
                     >
-                      {roles.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name}
-                        </option>
-                      ))}
+                      {roles
+                        .filter(
+                          (r) =>
+                            r.id === editingUser.role_id ||
+                            (r.slug !== 'pending_onboarding' && r.can_caller_edit)
+                        )
+                        .map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name}
+                          </option>
+                        ))}
                     </select>
                   </div>
                   <div className="form-group">
@@ -910,7 +1029,7 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                     }
                   />
                 </div>
-                {editingUser.id !== currentUser.id && (
+                {editingUser.id !== currentUser.id && editingUser.role_slug !== 'chairman' && (
                   <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13.5 }}>
                     <input
                       type="checkbox"
@@ -993,16 +1112,16 @@ function DepartmentsManagementPanel({ showToast }) {
   }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 20 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))', gap: 20 }}>
       <div className="card-box">
-        <h3 style={{ margin: '0 0 14px', fontSize: 16, fontWeight: 800 }}>إضافة قسم جديد</h3>
+        <h3 style={{ margin: '0 0 14px', fontSize: 16, fontWeight: 800 }}>إضافة قسم جديد بالشركة</h3>
         <form onSubmit={handleCreate}>
           <div className="form-group">
             <label className="form-label">اسم القسم</label>
             <input
               type="text"
               className="form-input"
-              placeholder="مثال: قسم الحسابات والمالية"
+              placeholder="مثال: قسم الرقابة والجودة"
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
@@ -1045,7 +1164,7 @@ function DepartmentsManagementPanel({ showToast }) {
 
       <div className="card-box">
         <h3 style={{ margin: '0 0 14px', fontSize: 16, fontWeight: 800 }}>
-          أقسام الشركة المسجلة ({departments.length})
+          أقسام مجموعة الهلب المسجلة ({departments.length})
         </h3>
         <div className="data-table-wrap">
           <table className="data-table">
@@ -1095,7 +1214,238 @@ function DepartmentsManagementPanel({ showToast }) {
 }
 
 /* ==========================================
-   4. SECURITY AUDIT LOGS
+   4. GOOGLE & FACEBOOK OAUTH SETTINGS (للـ IT والإدارة)
+   ========================================== */
+function OAuthSettingsPanel({ showToast }) {
+  const [settings, setSettings] = useState(null);
+  const [googleClientId, setGoogleClientId] = useState('');
+  const [googleClientSecret, setGoogleClientSecret] = useState('');
+  const [facebookAppId, setFacebookAppId] = useState('');
+  const [facebookAppSecret, setFacebookAppSecret] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  async function loadSettings() {
+    try {
+      const res = await apiFetch('/api/admin/oauth-settings');
+      setSettings(res);
+      setGoogleClientId(res.googleClientId || '');
+      setFacebookAppId(res.facebookAppId || '');
+    } catch (err) {
+      showToast(err.message || 'تعذر تحميل إعدادات الربط', 'error');
+    }
+  }
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await apiFetch('/api/admin/oauth-settings', {
+        method: 'PUT',
+        body: {
+          googleClientId,
+          googleClientSecret,
+          facebookAppId,
+          facebookAppSecret,
+        },
+      });
+      setGoogleClientSecret('');
+      setFacebookAppSecret('');
+      await loadSettings();
+      showToast('تم حفظ مفاتيح الربط مع Google و Facebook بنجاح', 'success');
+    } catch (err) {
+      showToast(err.message || 'تعذر الحفظ', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function copyText(txt) {
+    if (!txt) return;
+    navigator.clipboard?.writeText(txt);
+    showToast('تم نسخ رابط Callback بنجاح', 'info');
+  }
+
+  if (!settings) {
+    return (
+      <div className="card-box" style={{ padding: 30, textAlign: 'center', color: '#64748b' }}>
+        جاري تحميل إعدادات OAuth...
+      </div>
+    );
+  }
+
+  return (
+    <div className="card-box">
+      <h3 style={{ margin: '0 0 8px', fontSize: 17, fontWeight: 900, color: '#0b2545' }}>
+        إعدادات تسجيل الدخول الرسمي عبر Google و Facebook (لقسم الـ IT)
+      </h3>
+      <p style={{ margin: '0 0 18px', fontSize: 13, color: '#475569', lineHeight: 1.7 }}>
+        تعمل بوابة التسجيل السريع بالاسم والبريد في شاشة الدخول تلقائياً دون أي إعدادات إضافية. وعند رغبة قسم الـ IT بربط التحويل المباشر لحسابات Google Cloud أو Meta for Developers، ضع المفاتيح هنا:
+      </p>
+
+      <form onSubmit={handleSave}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))',
+            gap: 18,
+          }}
+        >
+          {/* Google Config */}
+          <div
+            style={{
+              padding: 16,
+              borderRadius: 12,
+              border: '1px solid #e2e8f0',
+              background: '#f8fafc',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+              <span style={{ fontWeight: 900, fontSize: 15 }}>Google OAuth 2.0</span>
+              <span
+                className="badge"
+                style={{
+                  background: settings.googleConfigured ? '#dcfce7' : '#fef3c7',
+                  color: settings.googleConfigured ? '#166534' : '#92400e',
+                }}
+              >
+                {settings.googleConfigured ? 'مربوط بـ Google Cloud' : 'وضع التسجيل السريع مفعل'}
+              </span>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">رابط Authorized Redirect URI</label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  type="text"
+                  className="form-input"
+                  dir="ltr"
+                  readOnly
+                  value={settings.googleCallbackUrl}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => copyText(settings.googleCallbackUrl)}
+                >
+                  <Copy size={14} />
+                </button>
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Google Client ID</label>
+              <input
+                type="text"
+                className="form-input"
+                dir="ltr"
+                placeholder="xxxx.apps.googleusercontent.com"
+                value={googleClientId}
+                onChange={(e) => setGoogleClientId(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">
+                Google Client Secret {settings.googleSecretSaved ? '(محفوظ مسبقاً ✅)' : ''}
+              </label>
+              <input
+                type="password"
+                className="form-input"
+                dir="ltr"
+                placeholder={settings.googleSecretSaved ? '••••••••••••' : 'GOCSPX-...'}
+                value={googleClientSecret}
+                onChange={(e) => setGoogleClientSecret(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Facebook Config */}
+          <div
+            style={{
+              padding: 16,
+              borderRadius: 12,
+              border: '1px solid #e2e8f0',
+              background: '#f8fafc',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+              <span style={{ fontWeight: 900, fontSize: 15 }}>Facebook Login (Meta)</span>
+              <span
+                className="badge"
+                style={{
+                  background: settings.facebookConfigured ? '#dcfce7' : '#fef3c7',
+                  color: settings.facebookConfigured ? '#166534' : '#92400e',
+                }}
+              >
+                {settings.facebookConfigured ? 'مربوط بـ Meta App' : 'وضع التسجيل السريع مفعل'}
+              </span>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">رابط Valid OAuth Redirect URI</label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  type="text"
+                  className="form-input"
+                  dir="ltr"
+                  readOnly
+                  value={settings.facebookCallbackUrl}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => copyText(settings.facebookCallbackUrl)}
+                >
+                  <Copy size={14} />
+                </button>
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Facebook App ID</label>
+              <input
+                type="text"
+                className="form-input"
+                dir="ltr"
+                placeholder="123456789012345"
+                value={facebookAppId}
+                onChange={(e) => setFacebookAppId(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">
+                Facebook App Secret {settings.facebookSecretSaved ? '(محفوظ مسبقاً ✅)' : ''}
+              </label>
+              <input
+                type="password"
+                className="form-input"
+                dir="ltr"
+                placeholder={settings.facebookSecretSaved ? '••••••••••••' : 'App Secret'}
+                value={facebookAppSecret}
+                onChange={(e) => setFacebookAppSecret(e.target.value)}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
+          <button type="submit" className="btn btn-primary" disabled={saving}>
+            <Save size={16} />
+            {saving ? 'جاري الحفظ...' : 'حفظ إعدادات Google و Facebook'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* ==========================================
+   5. SECURITY AUDIT LOGS
    ========================================== */
 function AuditLogsPanel({ showToast }) {
   const [logs, setLogs] = useState([]);

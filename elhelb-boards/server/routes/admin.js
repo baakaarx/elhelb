@@ -1,12 +1,13 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { get, all, run, transaction } = require('../db');
+const { get, all, run, transaction, getSetting, setSetting } = require('../db');
 const {
   authenticate,
   evaluatePermission,
   writeAudit,
   denyPermission,
 } = require('../rbac');
+const { getOAuthCredentials, getBaseOrigin } = require('./oauth');
 
 const router = express.Router();
 router.use(authenticate);
@@ -19,8 +20,14 @@ function makeSlug(text, prefix = 'item') {
   return clean || `${prefix}-${Date.now().toString(36)}`;
 }
 
+function canCallerModifyRank(caller, targetRank) {
+  if (caller.role_slug === 'chairman') return true;
+  const callerRank = Number(caller.roleRank || 0);
+  return Number(targetRank || 0) < callerRank;
+}
+
 // ==========================================
-// ROLES & PERMISSIONS MATRIX (DB-Driven)
+// ROLES & PERMISSIONS MATRIX (DB-Driven + Ranked Hierarchy)
 // ==========================================
 
 router.get('/roles', (req, res) => {
@@ -40,7 +47,7 @@ router.get('/roles', (req, res) => {
     `SELECT r.*,
             (SELECT COUNT(*) FROM users u WHERE u.role_id = r.id) AS users_count
      FROM roles r
-     ORDER BY r.id ASC`
+     ORDER BY r.rank_level DESC, r.id ASC`
   );
   const rpRows = all(`SELECT role_id, permission_key FROM role_permissions`);
   const mapByRole = new Map();
@@ -54,6 +61,8 @@ router.get('/roles', (req, res) => {
     roles: roles.map((r) => ({
       ...r,
       is_protected: Boolean(r.is_protected),
+      can_caller_edit:
+        r.slug !== 'pending_onboarding' && canCallerModifyRank(req.user, r.rank_level),
       permissions: mapByRole.get(r.id) || [],
     })),
   });
@@ -74,6 +83,11 @@ router.post('/roles', (req, res) => {
   const color = /^#[0-9a-fA-F]{6}$/.test(body.color || '') ? body.color : '#0a6fa8';
   const permKeys = Array.isArray(body.permissions) ? body.permissions.map(String) : [];
 
+  const maxAllowedRank =
+    req.user.role_slug === 'chairman' ? 95 : Math.max(10, Number(req.user.roleRank || 60) - 10);
+  const requestedRank = body.rankLevel !== undefined ? Number(body.rankLevel) : 30;
+  const rankLevel = Math.max(5, Math.min(maxAllowedRank, Number.isFinite(requestedRank) ? requestedRank : 30));
+
   if (name.length < 2 || name.length > 60) {
     return res.status(400).json({ error: 'اسم الدور يجب أن يكون بين حرفين و60 حرفاً' });
   }
@@ -90,8 +104,9 @@ router.post('/roles', (req, res) => {
   let roleId;
   transaction(() => {
     roleId = run(
-      `INSERT INTO roles (slug, name, description, color, is_protected) VALUES (?, ?, ?, ?, 0)`,
-      [slug, name, description, color]
+      `INSERT INTO roles (slug, name, description, color, rank_level, is_protected)
+       VALUES (?, ?, ?, ?, ?, 0)`,
+      [slug, name, description, color, rankLevel]
     ).lastInsertRowid;
 
     for (const k of filteredKeys) {
@@ -114,7 +129,9 @@ router.post('/roles', (req, res) => {
     name,
     description,
     color,
+    rank_level: rankLevel,
     is_protected: false,
+    can_caller_edit: true,
     users_count: 0,
     permissions: filteredKeys,
   });
@@ -132,6 +149,29 @@ router.put('/roles/:id(\\d+)', (req, res) => {
   const roleId = Number(req.params.id);
   const role = get(`SELECT * FROM roles WHERE id = ?`, [roleId]);
   if (!role) return res.status(404).json({ error: 'الدور غير موجود' });
+
+  if (role.slug === 'pending_onboarding') {
+    return res.status(400).json({
+      error: 'دور (بانتظار التسكين في قسم) مخصص أمنياً للمسجلين الجدد بدون أي صلاحيات حتى يضمهم رئيس القسم.',
+    });
+  }
+
+  // Enforce Sovereign Role Hierarchy!
+  if (!canCallerModifyRank(req.user, role.rank_level)) {
+    writeAudit({
+      user: req.user,
+      action: `محاولة تعديل دور أعلى أو مساوٍ في الرتبة السيادية (${role.name})`,
+      permissionKey: 'roles.manage',
+      status: 'DENIED',
+      req,
+    });
+    return res.status(403).json({
+      error:
+        role.slug === 'chairman'
+          ? 'حماية سيادية: دور (رئيس مجلس الإدارة) هو الأعلى في النظام ولا يمكن تعديله إلا من حساب رئيس مجلس الإدارة شخصياً.'
+          : `لا يمكنك تعديل صلاحيات دور (${role.name}) لأنه يماثل أو يعلو رتبتك الإدارية.`,
+    });
+  }
 
   const body = req.body || {};
   const name = body.name !== undefined ? String(body.name).trim() : role.name;
@@ -155,6 +195,13 @@ router.put('/roles/:id(\\d+)', (req, res) => {
         (r) => r.permission_key
       );
 
+  // Sovereign protection: Chairman role can NEVER lose core sovereign permissions
+  if (role.slug === 'chairman') {
+    for (const mustHave of ['roles.manage', 'users.manage', 'departments.manage', 'boards.view_all']) {
+      if (!nextKeys.includes(mustHave)) nextKeys.push(mustHave);
+    }
+  }
+
   // Anti-lockout safety: ensure at least 1 active user retains roles.manage
   if (!nextKeys.includes('roles.manage')) {
     const otherAdmins = get(
@@ -162,6 +209,7 @@ router.put('/roles/:id(\\d+)', (req, res) => {
        FROM users u
        JOIN role_permissions rp ON rp.role_id = u.role_id
        WHERE u.is_active = 1
+         AND u.onboarding_status = 'approved'
          AND u.role_id != ?
          AND rp.permission_key = 'roles.manage'`,
       [role.id]
@@ -186,7 +234,6 @@ router.put('/roles/:id(\\d+)', (req, res) => {
       run(`INSERT INTO role_permissions (role_id, permission_key) VALUES (?, ?)`, [role.id, k]);
     }
 
-    // Notify employees in this role that their permissions were updated live
     const members = all(`SELECT id FROM users WHERE role_id = ? AND is_active = 1 AND id != ?`, [
       role.id,
       req.user.id,
@@ -218,7 +265,9 @@ router.put('/roles/:id(\\d+)', (req, res) => {
     name,
     description,
     color,
+    rank_level: role.rank_level,
     is_protected: Boolean(role.is_protected),
+    can_caller_edit: true,
     permissions: nextKeys,
   });
 });
@@ -238,6 +287,10 @@ router.delete('/roles/:id(\\d+)', (req, res) => {
 
   if (role.is_protected) {
     return res.status(400).json({ error: 'هذا الدور أساسي في النظام ولا يمكن حذفه (يمكنك تعديل صلاحياته)' });
+  }
+
+  if (!canCallerModifyRank(req.user, role.rank_level)) {
+    return res.status(403).json({ error: 'لا يمكنك حذف دور يماثل أو يعلو رتبتك الإدارية' });
   }
 
   const assignedCount = get(`SELECT COUNT(*) AS cnt FROM users WHERE role_id = ?`, [role.id]).cnt;
@@ -275,17 +328,22 @@ router.get('/users', (req, res) => {
   }
 
   const users = all(
-    `SELECT u.id, u.username, u.full_name, u.job_title, u.avatar_color,
+    `SELECT u.id, u.username, u.email, u.full_name, u.job_title, u.avatar_color, u.avatar_url,
+            u.auth_provider, u.onboarding_status, u.preferred_department_id,
             u.role_id, u.department_id, u.is_active, u.created_at,
-            r.name AS role_name, r.color AS role_color,
-            d.name AS department_name, d.color AS department_color
+            r.slug AS role_slug, r.name AS role_name, r.color AS role_color, r.rank_level,
+            d.name AS department_name, d.color AS department_color,
+            pd.name AS preferred_department_name
      FROM users u
      JOIN roles r ON r.id = u.role_id
      LEFT JOIN departments d ON d.id = u.department_id
-     ORDER BY u.id ASC`
+     LEFT JOIN departments pd ON pd.id = u.preferred_department_id
+     ORDER BY r.rank_level DESC, u.id ASC`
   ).map((u) => ({
     ...u,
     is_active: Boolean(u.is_active),
+    can_caller_edit:
+      u.id === req.user.id || canCallerModifyRank(req.user, u.rank_level),
   }));
 
   res.json(users);
@@ -302,6 +360,7 @@ router.post('/users', async (req, res) => {
 
   const body = req.body || {};
   const username = String(body.username || '').trim().toLowerCase();
+  const email = body.email ? String(body.email).trim().toLowerCase() : null;
   const password = String(body.password || '');
   const fullName = String(body.fullName || '').trim();
   const jobTitle = String(body.jobTitle || '').trim().slice(0, 100);
@@ -331,6 +390,12 @@ router.post('/users', async (req, res) => {
   const role = get(`SELECT * FROM roles WHERE id = ?`, [roleId]);
   if (!role) return res.status(400).json({ error: 'الدور الوظيفي المحدد غير صالح' });
 
+  if (!canCallerModifyRank(req.user, role.rank_level)) {
+    return res.status(403).json({
+      error: `لا يمكنك إنشاء حساب بدور (${role.name}) لأنه يماثل أو يعلو رتبتك الإدارية`,
+    });
+  }
+
   let dept = null;
   if (departmentId !== null) {
     dept = get(`SELECT * FROM departments WHERE id = ?`, [departmentId]);
@@ -338,10 +403,24 @@ router.post('/users', async (req, res) => {
   }
 
   const hash = await bcrypt.hash(password, 10);
+  const onboardingStatus = role.slug === 'pending_onboarding' ? 'pending' : 'approved';
   const newUserId = run(
-    `INSERT INTO users (username, password_hash, full_name, job_title, avatar_color, role_id, department_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [username, hash, fullName, jobTitle, avatarColor, role.id, dept ? dept.id : null]
+    `INSERT INTO users (
+      username, email, password_hash, full_name, job_title, avatar_color,
+      auth_provider, onboarding_status, role_id, department_id, approved_by, approved_at
+     ) VALUES (?, ?, ?, ?, ?, ?, 'local', ?, ?, ?, ?, datetime('now'))`,
+    [
+      username,
+      email,
+      hash,
+      fullName,
+      jobTitle,
+      avatarColor,
+      onboardingStatus,
+      role.id,
+      dept ? dept.id : null,
+      req.user.id,
+    ]
   ).lastInsertRowid;
 
   writeAudit({
@@ -366,8 +445,31 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
   }
 
   const targetId = Number(req.params.id);
-  const existing = get(`SELECT * FROM users WHERE id = ?`, [targetId]);
+  const existing = get(
+    `SELECT u.*, r.rank_level AS current_rank, r.slug AS current_role_slug, r.name AS current_role_name
+     FROM users u
+     JOIN roles r ON r.id = u.role_id
+     WHERE u.id = ?`,
+    [targetId]
+  );
   if (!existing) return res.status(404).json({ error: 'الموظف غير موجود' });
+
+  // Sovereign Rank Protection on Target User
+  if (targetId !== req.user.id && !canCallerModifyRank(req.user, existing.current_rank)) {
+    writeAudit({
+      user: req.user,
+      action: `محاولة تعديل حساب أعلى في الرتبة السيادية (${existing.full_name})`,
+      permissionKey: 'users.manage',
+      status: 'DENIED',
+      req,
+    });
+    return res.status(403).json({
+      error:
+        existing.current_role_slug === 'chairman'
+          ? 'حماية سيادية: حساب رئيس مجلس الإدارة محمي ولا يمكن تعديله أو إيقافه من أي حساب آخر.'
+          : `لا يمكنك تعديل حساب (${existing.full_name}) لأن دوره (${existing.current_role_name}) يماثل أو يعلو رتبتك الإدارية.`,
+    });
+  }
 
   const body = req.body || {};
   const fullName =
@@ -388,8 +490,22 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
     return res.status(400).json({ error: 'لا يمكنك إيقاف حسابك الشخصي أثناء تسجيل دخولك' });
   }
 
+  if (existing.current_role_slug === 'chairman' && !isActive) {
+    return res.status(400).json({ error: 'حماية سيادية: لا يمكن إيقاف حساب رئيس مجلس الإدارة' });
+  }
+
   const role = get(`SELECT * FROM roles WHERE id = ?`, [roleId]);
   if (!role) return res.status(400).json({ error: 'الدور المحدد غير موجود' });
+
+  // Sovereign Rank Protection on New Role Assignment
+  if (
+    role.id !== existing.role_id &&
+    !canCallerModifyRank(req.user, role.rank_level)
+  ) {
+    return res.status(403).json({
+      error: `لا يمكنك منح دور (${role.name}) لأنه يماثل أو يعلو رتبتك الإدارية`,
+    });
+  }
 
   if (departmentId !== null) {
     const dept = get(`SELECT * FROM departments WHERE id = ?`, [departmentId]);
@@ -409,6 +525,7 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
        FROM users u
        JOIN role_permissions rp ON rp.role_id = u.role_id
        WHERE u.is_active = 1
+         AND u.onboarding_status = 'approved'
          AND u.id != ?
          AND rp.permission_key = 'roles.manage'`,
       [existing.id]
@@ -431,12 +548,29 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
     bumpToken = 1;
   }
 
+  const nextOnboardingStatus =
+    role.slug === 'pending_onboarding' ? 'pending' : 'approved';
+
   run(
     `UPDATE users
      SET full_name = ?, job_title = ?, role_id = ?, department_id = ?,
+         onboarding_status = ?,
+         approved_by = COALESCE(approved_by, ?),
+         approved_at = COALESCE(approved_at, datetime('now')),
          is_active = ?, password_hash = ?, token_version = token_version + ?
      WHERE id = ?`,
-    [fullName, jobTitle, role.id, departmentId, isActive, passwordHash, bumpToken, existing.id]
+    [
+      fullName,
+      jobTitle,
+      role.id,
+      departmentId,
+      nextOnboardingStatus,
+      req.user.id,
+      isActive,
+      passwordHash,
+      bumpToken,
+      existing.id,
+    ]
   );
 
   writeAudit({
@@ -468,7 +602,7 @@ router.get('/departments', (req, res) => {
 
   const depts = all(
     `SELECT d.*,
-            (SELECT COUNT(*) FROM users u WHERE u.department_id = d.id) AS users_count,
+            (SELECT COUNT(*) FROM users u WHERE u.department_id = d.id AND u.onboarding_status = 'approved') AS users_count,
             (SELECT COUNT(*) FROM boards b WHERE b.department_id = d.id) AS boards_count
      FROM departments d
      ORDER BY d.id ASC`
@@ -594,6 +728,84 @@ router.delete('/departments/:id(\\d+)', (req, res) => {
   });
 
   res.json({ ok: true });
+});
+
+// ==========================================
+// GOOGLE & FACEBOOK OAUTH CONFIGURATION (لـ IT والإدارة العليا)
+// ==========================================
+
+router.get('/oauth-settings', (req, res) => {
+  if (
+    !evaluatePermission(req.user, 'roles.manage').allowed &&
+    !evaluatePermission(req.user, 'users.manage').allowed
+  ) {
+    return denyPermission(req, res, {
+      permissionKey: 'roles.manage',
+      actionLabel: 'عرض إعدادات ربط تسجيل الدخول عبر Google وFacebook',
+      canRequestElevation: false,
+    });
+  }
+
+  const creds = getOAuthCredentials();
+  const origin = getBaseOrigin(req);
+
+  res.json({
+    googleClientId: getSetting('google_client_id', process.env.GOOGLE_CLIENT_ID || ''),
+    googleSecretSaved: Boolean(creds.googleClientSecret),
+    googleConfigured: Boolean(creds.googleClientId && creds.googleClientSecret),
+    googleCallbackUrl: `${origin}/api/auth/oauth/google/callback`,
+
+    facebookAppId: getSetting('facebook_app_id', process.env.FACEBOOK_APP_ID || ''),
+    facebookSecretSaved: Boolean(creds.facebookAppSecret),
+    facebookConfigured: Boolean(creds.facebookAppId && creds.facebookAppSecret),
+    facebookCallbackUrl: `${origin}/api/auth/oauth/facebook/callback`,
+  });
+});
+
+router.put('/oauth-settings', (req, res) => {
+  if (!evaluatePermission(req.user, 'roles.manage').allowed) {
+    return denyPermission(req, res, {
+      permissionKey: 'roles.manage',
+      actionLabel: 'تحديث مفاتيح الربط مع Google وFacebook',
+      canRequestElevation: false,
+    });
+  }
+
+  const body = req.body || {};
+  if (body.googleClientId !== undefined) {
+    setSetting('google_client_id', String(body.googleClientId || '').trim(), req.user.id);
+  }
+  if (body.googleClientSecret !== undefined && String(body.googleClientSecret).trim() !== '') {
+    setSetting('google_client_secret', String(body.googleClientSecret).trim(), req.user.id);
+  }
+  if (body.clearGoogleSecret) {
+    setSetting('google_client_secret', '', req.user.id);
+  }
+
+  if (body.facebookAppId !== undefined) {
+    setSetting('facebook_app_id', String(body.facebookAppId || '').trim(), req.user.id);
+  }
+  if (body.facebookAppSecret !== undefined && String(body.facebookAppSecret).trim() !== '') {
+    setSetting('facebook_app_secret', String(body.facebookAppSecret).trim(), req.user.id);
+  }
+  if (body.clearFacebookSecret) {
+    setSetting('facebook_app_secret', '', req.user.id);
+  }
+
+  writeAudit({
+    user: req.user,
+    action: 'تحديث إعدادات تسجيل الدخول عبر Google / Facebook',
+    permissionKey: 'roles.manage',
+    status: 'ALLOWED',
+    req,
+  });
+
+  const creds = getOAuthCredentials();
+  res.json({
+    ok: true,
+    googleConfigured: Boolean(creds.googleClientId && creds.googleClientSecret),
+    facebookConfigured: Boolean(creds.facebookAppId && creds.facebookAppSecret),
+  });
 });
 
 // ==========================================

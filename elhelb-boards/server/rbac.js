@@ -66,17 +66,31 @@ function getActiveGrantsForUser(userId) {
 
 function loadUserById(userId) {
   const user = get(
-    `SELECT u.id, u.username, u.full_name, u.job_title, u.avatar_color,
+    `SELECT u.id, u.username, u.email, u.full_name, u.job_title, u.avatar_color, u.avatar_url,
+            u.auth_provider, u.onboarding_status, u.preferred_department_id,
             u.role_id, u.department_id, u.is_active, u.token_version,
-            r.slug AS role_slug, r.name AS role_name, r.color AS role_color,
-            d.slug AS department_slug, d.name AS department_name, d.color AS department_color
+            r.slug AS role_slug, r.name AS role_name, r.color AS role_color, r.rank_level AS role_rank,
+            d.slug AS department_slug, d.name AS department_name, d.color AS department_color,
+            pd.name AS preferred_department_name
      FROM users u
      JOIN roles r ON r.id = u.role_id
      LEFT JOIN departments d ON d.id = u.department_id
+     LEFT JOIN departments pd ON pd.id = u.preferred_department_id
      WHERE u.id = ?`,
     [userId]
   );
   if (!user || !user.is_active) return null;
+
+  // Users waiting in onboarding room have ZERO permissions until assigned by a Department Head / Admin
+  if (user.onboarding_status === 'pending') {
+    return {
+      ...user,
+      roleRank: 0,
+      permissions: [],
+      permissionSet: new Set(),
+      activeGrants: [],
+    };
+  }
 
   const permRows = all(
     `SELECT permission_key FROM role_permissions WHERE role_id = ?`,
@@ -87,6 +101,7 @@ function loadUserById(userId) {
 
   return {
     ...user,
+    roleRank: Number(user.role_rank || 0),
     permissions,
     permissionSet: new Set(permissions),
     activeGrants,
@@ -385,6 +400,10 @@ function resolveCardHierarchy(cardId) {
   );
 }
 
+function userHasPermission(user, permissionKey) {
+  return Boolean(user && user.permissionSet && user.permissionSet.has(permissionKey));
+}
+
 module.exports = {
   JWT_SECRET,
   COOKIE_NAME,
@@ -393,6 +412,7 @@ module.exports = {
   loadUserById,
   getActiveGrantsForUser,
   authenticate,
+  userHasPermission,
   canAccessBoard,
   evaluatePermission,
   consumeGrantIfOneTime,

@@ -69,6 +69,38 @@ router.get('/departments/directory', (req, res) => {
   );
 });
 
+// Executive Company Summary for Chairman, General Manager & IT Admin
+router.get('/boards/executive-summary', (req, res) => {
+  if (!req.user.permissionSet.has('boards.view_all')) {
+    return denyPermission(req, res, {
+      permissionKey: 'boards.view_all',
+      actionLabel: 'عرض الملخص التنفيذي لجميع أقسام الشركة',
+      canRequestElevation: false,
+    });
+  }
+
+  const departmentStats = all(
+    `SELECT
+       d.id, d.slug, d.name, d.color, d.icon,
+       (SELECT COUNT(*) FROM users u WHERE u.department_id = d.id AND u.is_active = 1 AND u.onboarding_status = 'approved') AS members_count,
+       (SELECT COUNT(*) FROM boards b WHERE b.department_id = d.id AND b.is_archived = 0) AS boards_count,
+       (SELECT COUNT(*) FROM cards c JOIN boards b ON b.id = c.board_id WHERE b.department_id = d.id AND b.is_archived = 0) AS cards_count,
+       (SELECT COUNT(*) FROM cards c JOIN boards b ON b.id = c.board_id WHERE b.department_id = d.id AND b.is_archived = 0 AND c.is_completed = 1) AS completed_cards_count,
+       (SELECT COUNT(*) FROM cards c JOIN boards b ON b.id = c.board_id WHERE b.department_id = d.id AND b.is_archived = 0 AND c.priority = 'urgent' AND c.is_completed = 0) AS urgent_cards_count
+     FROM departments d
+     ORDER BY d.id ASC`
+  );
+
+  const pendingOnboarding = get(
+    `SELECT COUNT(*) AS cnt FROM users WHERE onboarding_status = 'pending' AND is_active = 1`
+  );
+
+  res.json({
+    departments: departmentStats,
+    pendingOnboardingCount: pendingOnboarding ? pendingOnboarding.cnt : 0,
+  });
+});
+
 // List ONLY boards the user is genuinely allowed to access
 router.get('/boards', (req, res) => {
   const allBoards = all(
@@ -369,6 +401,7 @@ router.get('/boards/:id(\\d+)', (req, res) => {
      FROM users u
      JOIN roles r ON r.id = u.role_id
      WHERE u.is_active = 1
+       AND u.onboarding_status = 'approved'
        AND (u.department_id = ? OR EXISTS (
          SELECT 1 FROM role_permissions rp
          WHERE rp.role_id = u.role_id AND rp.permission_key = 'boards.view_all'

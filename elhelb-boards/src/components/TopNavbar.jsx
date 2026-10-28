@@ -8,9 +8,10 @@ import {
   Search,
   LogOut,
   Users,
+  UserPlus,
   ChevronDown,
-  ShieldAlert,
   CheckCheck,
+  Crown,
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { formatSqliteDate, getInitials } from '../constants';
@@ -37,6 +38,8 @@ export default function TopNavbar({
   const accRef = useRef(null);
 
   const permSet = new Set(user.permissions || []);
+  const canOnboardMembers =
+    permSet.has('department.onboard_members') || permSet.has('users.manage');
   const canReviewRequests =
     permSet.has('requests.review_department') || permSet.has('requests.review_all');
   const canAccessAdmin =
@@ -44,6 +47,8 @@ export default function TopNavbar({
     permSet.has('users.manage') ||
     permSet.has('departments.manage') ||
     permSet.has('audit.view');
+
+  const isChairman = user.roleSlug === 'chairman';
 
   useEffect(() => {
     function onDocClick(e) {
@@ -80,7 +85,7 @@ export default function TopNavbar({
     setNotifOpen(next);
     if (next) {
       try {
-        const list = await apiFetch('/api/notifications');
+        const list = await apiFetch('/api/auth/notifications');
         setNotifications(list);
       } catch (_) {}
     }
@@ -88,7 +93,7 @@ export default function TopNavbar({
 
   async function markAllNotificationsRead() {
     try {
-      await apiFetch('/api/notifications/read-all', { method: 'POST' });
+      await apiFetch('/api/auth/notifications/read-all', { method: 'POST' });
       setNotifications((prev) => prev.map((n) => ({ ...n, is_read: 1 })));
       onRefreshMe();
     } catch (_) {}
@@ -130,6 +135,22 @@ export default function TopNavbar({
             لوحات العمل
           </button>
 
+          {canOnboardMembers && (
+            <button
+              type="button"
+              className={`nav-tab ${activeTab === 'onboarding' ? 'active' : ''}`}
+              onClick={() => onSelectTab('onboarding')}
+            >
+              <UserPlus size={15} />
+              ضم الموظفين للقسم
+              {user.pendingOnboardingCount > 0 && (
+                <span className="nav-badge" title="موظفون مسجلون بانتظار الضم">
+                  {user.pendingOnboardingCount}
+                </span>
+              )}
+            </button>
+          )}
+
           <button
             type="button"
             className={`nav-tab ${activeTab === 'my-requests' ? 'active' : ''}`}
@@ -151,7 +172,7 @@ export default function TopNavbar({
               onClick={() => onSelectTab('requests')}
             >
               <Inbox size={15} />
-              طلبات الموظفين
+              طلبات الصلاحيات
               {user.reviewableRequestsCount > 0 && (
                 <span className="nav-badge">{user.reviewableRequestsCount}</span>
               )}
@@ -168,15 +189,6 @@ export default function TopNavbar({
               إدارة الصلاحيات والنظام
             </button>
           )}
-
-          <button
-            type="button"
-            className={`nav-tab ${activeTab === 'security-lab' ? 'active' : ''}`}
-            onClick={() => onSelectTab('security-lab')}
-          >
-            <ShieldAlert size={15} />
-            فحص أمان السيرفر
-          </button>
         </nav>
       </div>
 
@@ -252,16 +264,18 @@ export default function TopNavbar({
           )}
         </div>
 
-        {/* Request Elevation Button */}
-        <button
-          type="button"
-          className="icon-btn-dark gold-cta"
-          onClick={() => onOpenRequestModal({})}
-          title="طلب صلاحية إضافية أو وصول مؤقت من المدير"
-        >
-          <KeyRound size={14} />
-          <span>طلب صلاحية</span>
-        </button>
+        {/* Request Elevation Button (hidden for top global executives who already hold all permissions) */}
+        {!permSet.has('boards.view_all') && (
+          <button
+            type="button"
+            className="icon-btn-dark gold-cta"
+            onClick={() => onOpenRequestModal({})}
+            title="طلب صلاحية إضافية أو وصول مؤقت من المدير"
+          >
+            <KeyRound size={14} />
+            <span>طلب صلاحية</span>
+          </button>
+        )}
 
         {/* Notifications Bell */}
         <div style={{ position: 'relative' }} ref={notifRef}>
@@ -341,12 +355,23 @@ export default function TopNavbar({
 
         {/* User Profile & Fast Account Switcher */}
         <div style={{ position: 'relative' }} ref={accRef}>
-          <div className="user-pill" onClick={openAccountMenu}>
+          <div
+            className="user-pill"
+            onClick={openAccountMenu}
+            style={
+              isChairman
+                ? { border: '1px solid rgba(251, 191, 36, 0.65)', background: 'rgba(180, 83, 9, 0.28)' }
+                : undefined
+            }
+          >
             <div className="avatar-circle" style={{ background: user.avatarColor }}>
               {getInitials(user.fullName)}
             </div>
             <div style={{ lineHeight: 1.25 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 800 }}>{user.fullName}</div>
+              <div style={{ fontSize: 12.5, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 4 }}>
+                {isChairman && <Crown size={13} color="#fbbf24" />}
+                {user.fullName}
+              </div>
               <div style={{ fontSize: 10.5, color: '#fde68a', fontWeight: 700 }}>
                 {user.roleName} • {user.departmentName}
               </div>
@@ -355,7 +380,7 @@ export default function TopNavbar({
           </div>
 
           {accountMenuOpen && (
-            <div className="popover-menu" style={{ width: 340 }}>
+            <div className="popover-menu" style={{ width: 350 }}>
               <div
                 style={{
                   padding: '10px 12px',
@@ -365,7 +390,10 @@ export default function TopNavbar({
                   marginBottom: 10,
                 }}
               >
-                <div style={{ fontWeight: 800, fontSize: 14 }}>{user.fullName}</div>
+                <div style={{ fontWeight: 800, fontSize: 14, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  {isChairman && <Crown size={15} color="#d97706" />}
+                  {user.fullName}
+                </div>
                 <div style={{ fontSize: 12, color: '#64748b' }}>
                   @{user.username} — {user.jobTitle}
                 </div>
@@ -402,9 +430,9 @@ export default function TopNavbar({
                     }}
                   >
                     <Users size={13} />
-                    تبديل سريع للحساب (لتجربة الأدوار والأقسام):
+                    تبديل سريع للحساب (مجلس الإدارة، IT، الأقسام):
                   </div>
-                  <div style={{ maxHeight: 215, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <div style={{ maxHeight: 235, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5 }}>
                     {demoAccounts.map((acc) => {
                       const isCurrent = acc.username === user.username;
                       return (
@@ -436,7 +464,8 @@ export default function TopNavbar({
                               {getInitials(acc.fullName)}
                             </div>
                             <div style={{ minWidth: 0 }}>
-                              <div style={{ fontSize: 12.5, fontWeight: 800, color: '#0f172a' }}>
+                              <div style={{ fontSize: 12.5, fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                {acc.roleSlug === 'chairman' && <Crown size={12} color="#d97706" />}
                                 {acc.fullName} {isCurrent ? '(الحالي)' : ''}
                               </div>
                               <div style={{ fontSize: 11, color: '#64748b' }}>
