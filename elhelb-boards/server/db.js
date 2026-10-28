@@ -6,7 +6,7 @@ const { DatabaseSync } = require('node:sqlite');
 function resolveDbPath() {
   if (process.env.DB_PATH) return process.env.DB_PATH;
   if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
-    return path.join(os.tmpdir(), 'elhelb-boards-prod-v6.db');
+    return path.join(os.tmpdir(), 'elhelb-boards-prod-v7.db');
   }
   const defaultDataDir = path.join(__dirname, '..', 'data');
   try {
@@ -15,7 +15,7 @@ function resolveDbPath() {
     }
     return path.join(defaultDataDir, 'elhelb-boards.db');
   } catch (_) {
-    return path.join(os.tmpdir(), 'elhelb-boards-prod-v6.db');
+    return path.join(os.tmpdir(), 'elhelb-boards-prod-v7.db');
   }
 }
 

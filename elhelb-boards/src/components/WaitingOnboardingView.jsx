@@ -156,8 +156,8 @@ export default function WaitingOnboardingView({
 
   const providerLabel =
     user.authProvider === 'google'
-      ? 'حساب Google الموثق'
-      : 'البريد الإلكتروني المؤكد';
+      ? 'حساب Google'
+      : 'موظف جديد بانتظار الضم';
 
   return (
     <div className="app-shell">
@@ -289,7 +289,7 @@ export default function WaitingOnboardingView({
                       color: '#fff',
                     }}
                   >
-                    تم تأكيد البريد الإلكتروني بنجاح ✓
+                    تسجيل موظف جديد
                   </span>
                   {user.email && (
                     <span className="badge" style={{ background: '#f1f5f9', color: '#334155' }} dir="ltr">
@@ -656,8 +656,8 @@ export default function WaitingOnboardingView({
                 gap: 6,
               }}
             >
-              <ShieldCheck size={15} color="#0a6fa8" />
-              يمكنك الآن تسجيل الدخول مستقبلاً سواء عبر {providerLabel} أو مباشرة باسم المستخدم{' '}
+              <ShieldCheck size={15} color="#15803d" />
+              يمكنك الدخول في أي وقت باستخدام اسم المستخدم{' '}
               <strong dir="ltr">@{user.username}</strong> وكلمة المرور التي اخترتها.
             </div>
           </div>

@@ -5,10 +5,8 @@ const fs = require('node:fs');
 
 const tmpDb = path.join(os.tmpdir(), `elhelb-test-${Date.now()}.db`);
 process.env.DB_PATH = tmpDb;
-process.env.ELHELB_TEST_MODE = '1';
 
 const app = require('../server/index');
-const oauthRoutes = require('../server/routes/oauth');
 
 async function main() {
   const server = app.listen(0, '127.0.0.1');
@@ -248,80 +246,50 @@ async function main() {
     });
     assert.equal(moveAllowedAgain.status, 200, 'Restoring permission in DB must immediately allow request');
 
-    console.log('6️⃣ Testing Email Verification OTP -> Zero Facebook -> Create Username/Password -> Pick Department -> Claim...');
+    console.log('6️⃣ Testing Direct Employee Registration (No Email OTP) -> Pick Department -> Department Head Claim...');
     const exportDept = deptBySlug('export');
 
-    // Facebook & unverified social-entry endpoints must be completely removed (404)!
+    // Facebook & email OTP endpoints must NOT exist (404)!
     const fbGone = await api('GET', '/api/auth/oauth/facebook/start', chairmanTok);
     assert.equal(fbGone.status, 404, 'Facebook OAuth route must be completely removed');
-    const unverifiedSocialGone = await api('POST', '/api/auth/social-entry', chairmanTok, {
-      fullName: 'Bypass',
-      email: 'bypass@gmail.com',
+    const otpGone = await api('POST', '/api/auth/email/send-code', chairmanTok, {
+      fullName: 'Test',
+      email: 'test@gmail.com',
     });
-    assert.equal(unverifiedSocialGone.status, 404, 'Unverified social-entry route must be completely removed');
+    assert.equal(otpGone.status, 404, 'Email OTP route must be removed');
 
-    // Inline 1-Step Gmail Activator: wrong admin password MUST be blocked (401)
-    const badQuickGmail = await api('POST', '/api/auth/quick-setup-gmail', null, {
-      adminPassword: 'wrong-password',
-      gmailUser: 'mb9836504@gmail.com',
-      gmailAppPassword: 'abcd efgh ijkl mnop',
-    });
-    assert.equal(badQuickGmail.status, 401, 'Quick Gmail setup must verify admin password');
-
-    // Valid admin password activates Gmail AND sends OTP to pending employee in one step!
-    const okQuickGmail = await api('POST', '/api/auth/quick-setup-gmail', null, {
-      adminPassword: '010228513849',
-      gmailUser: 'mb9836504@gmail.com',
-      gmailAppPassword: 'abcd efgh ijkl mnop',
-      pendingEmail: 'mahmoud.shennawy@gmail.com',
-      pendingFullName: 'محمود سامي الشناوي',
-    });
-    assert.equal(okQuickGmail.status, 200);
-    assert.equal(okQuickGmail.data.codeSent, true);
-
-    const realOtp = oauthRoutes._lastTestOtpByEmail.get('mahmoud.shennawy@gmail.com');
-    assert.match(realOtp, /^\d{6}$/);
-
-    // Wrong 6-digit code MUST be rejected!
-    const wrongOtp = realOtp === '000000' ? '999999' : '000000';
-    const badVerify = await api('POST', '/api/auth/email/verify-code', null, {
-      email: 'mahmoud.shennawy@gmail.com',
-      code: wrongOtp,
-    });
-    assert.equal(badVerify.status, 400, 'Wrong OTP code must be rejected');
-
-    // Valid 6-digit OTP verifies email and creates pending onboarding employee!
-    const verifyRes = await api('POST', '/api/auth/email/verify-code', null, {
-      email: 'mahmoud.shennawy@gmail.com',
-      code: realOtp,
+    // New employee registers directly with fullName + username + password (zero email OTP needed!)
+    const regRes = await api('POST', '/api/auth/register', null, {
       fullName: 'محمود سامي الشناوي',
+      username: 'mahmoud.export',
+      password: 'myPassword99',
+      email: 'mahmoud.shennawy@gmail.com',
     });
-    assert.equal(verifyRes.status, 200);
-    assert.equal(verifyRes.data.isNewUser, true);
-    const newGoogleTok = verifyRes.data.token;
+    assert.equal(regRes.status, 201);
+    assert.equal(regRes.data.isNewUser, true);
+    const newGoogleTok = regRes.data.token;
 
-    // Check /me shows emailVerified: true & Step 1 required (hasCustomCredentials: false)
+    // Duplicate username must be blocked (409)
+    const dupReg = await api('POST', '/api/auth/register', null, {
+      fullName: 'مستخدم مكرر',
+      username: 'mahmoud.export',
+      password: 'myPassword99',
+    });
+    assert.equal(dupReg.status, 409);
+
+    // Check /me shows hasCustomCredentials: true & departmentConfirmed: false (lands directly on Department Selection!)
     const mePending = await api('GET', '/api/auth/me', newGoogleTok);
     assert.equal(mePending.status, 200);
-    assert.equal(mePending.data.user.emailVerified, true);
     assert.equal(mePending.data.user.onboardingStatus, 'pending');
-    assert.equal(mePending.data.user.hasCustomCredentials, false);
+    assert.equal(mePending.data.user.hasCustomCredentials, true);
     assert.equal(mePending.data.user.departmentConfirmed, false);
     assert.equal(mePending.data.user.permissions.length, 0);
 
-    // Step 1: Employee creates their own username & password!
-    const setupCreds = await api('POST', '/api/onboarding/setup-credentials', newGoogleTok, {
-      username: 'mahmoud.export',
-      password: 'myPassword99',
-      fullName: 'محمود سامي الشناوي',
-    });
-    assert.equal(setupCreds.status, 200);
-
-    // Verify Mahmoud can ALSO log in directly using his newly created username & password!
+    // Verify Mahmoud can ALSO log in directly using his username & password!
     const directLoginTok = await login('mahmoud.export', 'myPassword99');
     assert.ok(directLoginTok);
 
-    // Step 2: Employee chooses their department (Export) -> triggers notification + email log!
+    // Step 2: Employee chooses their department (Export) -> notifies Department Head!
     const pickDept = await api('PATCH', '/api/onboarding/my-preference', newGoogleTok, {
       preferredDepartmentId: exportDept.id,
       jobTitle: 'منسق شحن بحري',

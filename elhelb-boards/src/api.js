@@ -52,10 +52,8 @@ export function setStoredToken(token) {
 
 const PUBLIC_NO_TOKEN_PATHS = new Set([
   '/api/auth/login',
+  '/api/auth/register',
   '/api/auth/oauth/providers',
-  '/api/auth/email/send-code',
-  '/api/auth/email/verify-code',
-  '/api/auth/quick-setup-gmail',
 ]);
 
 function attachTokenToUrl(path, token) {
