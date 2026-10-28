@@ -2,315 +2,299 @@ const bcrypt = require('bcryptjs');
 const { get, run, transaction } = require('./db');
 
 const PERMISSIONS_CATALOG = [
-  // لوحات العمل (Boards)
+  // 1. اللوحات والأقسام
   {
     key: 'boards.view_department',
-    name: 'عرض لوحات القسم',
-    description: 'الاطلاع على جميع لوحات العمل التابعة لقسم الموظف فقط',
+    name: 'عرض لوحات القسم التابع له',
+    description: 'يسمح للموظف برؤية وفتح لوحات العمل المرتبطة بقسمه فقط',
     category: 'boards',
-    category_label: 'لوحات العمل والأقسام',
-    sort_order: 1,
-  },
-  {
-    key: 'boards.view_all',
-    name: 'عرض لوحات جميع الأقسام',
-    description: 'صلاحية عابرة للأقسام تتيح رؤية لوحات الشركة بالكامل دون قيود القسم',
-    category: 'boards',
-    category_label: 'لوحات العمل والأقسام',
-    sort_order: 2,
-  },
-  {
-    key: 'boards.create',
-    name: 'إنشاء لوحة عمل جديدة',
-    description: 'إنشاء لوحات مشاريع جديدة وربطها بالقسم المختص',
-    category: 'boards',
-    category_label: 'لوحات العمل والأقسام',
-    sort_order: 3,
-  },
-  {
-    key: 'boards.edit',
-    name: 'تعديل إعدادات اللوحة والتصنيفات',
-    description: 'تعديل اسم اللوحة، وصفها، الخلفية، وإدارة التصنيفات الملونة',
-    category: 'boards',
-    category_label: 'لوحات العمل والأقسام',
-    sort_order: 4,
-  },
-  {
-    key: 'boards.delete',
-    name: 'حذف لوحة عمل نهائياً',
-    description: 'حذف لوحة العمل بكافة القوائم والكروت التابعة لها',
-    category: 'boards',
-    category_label: 'لوحات العمل والأقسام',
-    sort_order: 5,
-  },
-
-  // القوائم والأعمدة (Lists)
-  {
-    key: 'lists.create',
-    name: 'إضافة قائمة مراحل جديدة',
-    description: 'إضافة عمود (قائمة مراحل) جديد داخل لوحة العمل',
-    category: 'lists',
-    category_label: 'القوائم ومراحل العمل',
+    category_label: 'صلاحيات اللوحات والأقسام',
     sort_order: 10,
   },
   {
-    key: 'lists.edit',
-    name: 'تعديل وترتيب القوائم',
-    description: 'تغيير اسم القائمة أو إعادة ترتيب أعمدة المراحل داخل اللوحة',
-    category: 'lists',
-    category_label: 'القوائم ومراحل العمل',
-    sort_order: 11,
-  },
-  {
-    key: 'lists.delete',
-    name: 'حذف قائمة من اللوحة',
-    description: 'حذف عمود مراحل وما بداخله من كروت مهام',
-    category: 'lists',
-    category_label: 'القوائم ومراحل العمل',
-    sort_order: 12,
-  },
-
-  // كروت المهام (Cards)
-  {
-    key: 'cards.create',
-    name: 'إضافة كارت مهمة جديد',
-    description: 'إنشاء كروت مهام جديدة داخل قوائم اللوحة',
-    category: 'cards',
-    category_label: 'كروت المهام والتنفيذ',
+    key: 'boards.view_all',
+    name: 'عرض لوحات جميع أقسام الشركة',
+    description: 'صلاحية عليا تتيح الاطلاع على لوحات كافة الأقسام بلا قيود عزل',
+    category: 'boards',
+    category_label: 'صلاحيات اللوحات والأقسام',
     sort_order: 20,
   },
   {
-    key: 'cards.edit',
-    name: 'تعديل بيانات الكارت وقوائم التحقق',
-    description: 'تعديل عنوان الكارت، الوصف، الأولوية، تاريخ التسليم، والتصنيفات والمهام الفرعية',
-    category: 'cards',
-    category_label: 'كروت المهام والتنفيذ',
-    sort_order: 21,
-  },
-  {
-    key: 'cards.move',
-    name: 'سحب ونقل الكروت بين المراحل',
-    description: 'تحريك الكروت (Drag & Drop) بين القوائم وتحديث حالة إنجازها',
-    category: 'cards',
-    category_label: 'كروت المهام والتنفيذ',
-    sort_order: 22,
-  },
-  {
-    key: 'cards.assign',
-    name: 'تعيين وتوزيع المهام على الموظفين',
-    description: 'إسناد الكارت لموظف أو أكثر من أعضاء القسم أو إلغاء الإسناد',
-    category: 'cards',
-    category_label: 'كروت المهام والتنفيذ',
-    sort_order: 23,
-  },
-  {
-    key: 'cards.delete',
-    name: 'حذف كارت مهمة نهائياً',
-    description: 'مسح كارت المهمة وسجله نهائياً من قاعدة البيانات',
-    category: 'cards',
-    category_label: 'كروت المهام والتنفيذ',
-    sort_order: 24,
-  },
-
-  // التعاون والتعليقات (Collaboration)
-  {
-    key: 'comments.create',
-    name: 'إضافة تعليقات على المهام',
-    description: 'كتابة ملاحظات وتعليقات متابعة داخل الكروت وحذف تعليقاته الشخصية',
-    category: 'collaboration',
-    category_label: 'التعليقات والتعاون',
+    key: 'boards.create',
+    name: 'إنشاء لوحات عمل جديدة',
+    description: 'إنشاء لوحة مهام جديدة وربطها بالقسم المختص',
+    category: 'boards',
+    category_label: 'صلاحيات اللوحات والأقسام',
     sort_order: 30,
   },
   {
-    key: 'comments.delete_any',
-    name: 'إشراف وحذف تعليقات الآخرين',
-    description: 'حذف أي تعليق مكتوب من أي عضو داخل الكروت',
-    category: 'collaboration',
-    category_label: 'التعليقات والتعاون',
-    sort_order: 31,
-  },
-
-  // طلبات الصلاحيات وتسكين القسم (Onboarding & Requests)
-  {
-    key: 'department.onboard_members',
-    name: 'ضم الموظفين الجدد وتسكينهم في القسم',
-    description: 'قبول الموظفين المسجلين عبر Google / Facebook وإضافتهم إلى فريق القسم وتحديد دورهم',
-    category: 'requests',
-    category_label: 'تسكين الموظفين وطلبات الصلاحيات',
-    sort_order: 39,
-  },
-  {
-    key: 'requests.review_department',
-    name: 'اعتماد طلبات الصلاحيات داخل القسم',
-    description: 'مراجعة وقبول أو رفض طلبات الاستثناء من موظفي نفس القسم في حدود صلاحيات رئيس القسم',
-    category: 'requests',
-    category_label: 'تسكين الموظفين وطلبات الصلاحيات',
+    key: 'boards.edit',
+    name: 'تعديل إعدادات اللوحة وتصنيفاتها',
+    description: 'تعديل اسم اللوحة، الوصف، الخلفية، وإدارة التصنيفات الملونة',
+    category: 'boards',
+    category_label: 'صلاحيات اللوحات والأقسام',
     sort_order: 40,
   },
   {
-    key: 'requests.review_all',
-    name: 'اعتماد كافة طلبات الصلاحيات بالشركة',
-    description: 'مراجعة واعتماد أو رفض جميع طلبات الصلاحيات بما فيها العابرة للأقسام',
-    category: 'requests',
-    category_label: 'تسكين الموظفين وطلبات الصلاحيات',
-    sort_order: 41,
+    key: 'boards.delete',
+    name: 'حذف أو أرشفة لوحات العمل',
+    description: 'حذف لوحة عمل بالكامل مع قوائمها وكروتها',
+    category: 'boards',
+    category_label: 'صلاحيات اللوحات والأقسام',
+    sort_order: 50,
   },
 
-  // الإدارة والأمان (Administration & Security)
+  // 2. القوائم (Lists)
+  {
+    key: 'lists.create',
+    name: 'إضافة قوائم مراحل عمل (Lists)',
+    description: 'إضافة أعمدة/قوائم جديدة داخل اللوحة (مثل: قيد التنفيذ، مكتمل)',
+    category: 'lists',
+    category_label: 'صلاحيات القوائم والمراحل',
+    sort_order: 60,
+  },
+  {
+    key: 'lists.edit',
+    name: 'تعديل أسماء وترتيب القوائم',
+    description: 'إعادة تسمية قوائم اللوحة أو تغيير ترتيبها',
+    category: 'lists',
+    category_label: 'صلاحيات القوائم والمراحل',
+    sort_order: 70,
+  },
+  {
+    key: 'lists.delete',
+    name: 'حذف القوائم من اللوحة',
+    description: 'إزالة قائمة ومحتوياتها من لوحة العمل',
+    category: 'lists',
+    category_label: 'صلاحيات القوائم والمراحل',
+    sort_order: 80,
+  },
+
+  // 3. الكروت والمهام (Cards)
+  {
+    key: 'cards.create',
+    name: 'إضافة كروت ومهام جديدة',
+    description: 'إنشاء بطاقات مهام جديدة داخل قوائم اللوحة',
+    category: 'cards',
+    category_label: 'صلاحيات الكروت والمهام',
+    sort_order: 90,
+  },
+  {
+    key: 'cards.edit',
+    name: 'تعديل تفاصيل الكروت وقوائم التحقق',
+    description: 'تحديث عنوان الكارت، الوصف، الأولوية، تاريخ التسليم، والمهام الفرعية',
+    category: 'cards',
+    category_label: 'صلاحيات الكروت والمهام',
+    sort_order: 100,
+  },
+  {
+    key: 'cards.move',
+    name: 'تحريك ونقل الكروت بين القوائم',
+    description: 'سحب وإفلات الكروت لتغيير مرحلة تنفيذ المهمة',
+    category: 'cards',
+    category_label: 'صلاحيات الكروت والمهام',
+    sort_order: 110,
+  },
+  {
+    key: 'cards.assign',
+    name: 'تعيين الموظفين المسؤولين عن الكارت',
+    description: 'إسناد المهمة لموظف أو أكثر داخل القسم',
+    category: 'cards',
+    category_label: 'صلاحيات الكروت والمهام',
+    sort_order: 120,
+  },
+  {
+    key: 'cards.delete',
+    name: 'حذف الكروت والمهام نهائياً',
+    description: 'مسح بطاقة مهمة من اللوحة بشكل نهائي',
+    category: 'cards',
+    category_label: 'صلاحيات الكروت والمهام',
+    sort_order: 130,
+  },
+
+  // 4. التعليقات والتعاون
+  {
+    key: 'comments.create',
+    name: 'كتابة التعليقات والملاحظات',
+    description: 'إضافة تعليقات وتحديثات العمل على الكروت',
+    category: 'collaboration',
+    category_label: 'التعليقات والتواصل',
+    sort_order: 140,
+  },
+  {
+    key: 'comments.delete_any',
+    name: 'حذف تعليقات الآخرين (إشراف)',
+    description: 'إزالة أي تعليق مخالف أو خاطئ داخل لوحات القسم',
+    category: 'collaboration',
+    category_label: 'التعليقات والتواصل',
+    sort_order: 150,
+  },
+
+  // 5. إدارة موظفي القسم وطلبات الصلاحيات
+  {
+    key: 'department.onboard_members',
+    name: 'ضم وتسكين الموظفين الجدد في القسم (لرئيس القسم)',
+    description: 'يسمح لرئيس القسم بإضافة الموظفين الجدد المؤكد بريدهم الإلكتروني إلى قسمه وتعيين دورهم بالقسم',
+    category: 'governance',
+    category_label: 'إدارة القسم والطلبات والنظام',
+    sort_order: 155,
+  },
+  {
+    key: 'requests.review_department',
+    name: 'اعتماد طلبات الصلاحيات لموظفي القسم',
+    description: 'مراجعة وقبول أو رفض طلبات الاستثناء المؤقتة داخل نفس القسم',
+    category: 'governance',
+    category_label: 'إدارة القسم والطلبات والنظام',
+    sort_order: 160,
+  },
+  {
+    key: 'requests.review_all',
+    name: 'اعتماد طلبات الصلاحيات لجميع الأقسام',
+    description: 'مراجعة ومنح تصاريح العمل المؤقتة أو العابرة للأقسام على مستوى الشركة',
+    category: 'governance',
+    category_label: 'إدارة القسم والطلبات والنظام',
+    sort_order: 170,
+  },
   {
     key: 'users.manage',
-    name: 'إدارة حسابات جميع الموظفين وتسكينهم',
-    description: 'إضافة موظفين جدد، تعديل أدوارهم وأقسامهم، وتفعيل أو إيقاف الحسابات على مستوى الشركة',
-    category: 'admin',
-    category_label: 'إدارة النظام والأمان والـ IT',
-    sort_order: 50,
+    name: 'إدارة حسابات الموظفين وتعيين أدوارهم على مستوى الشركة',
+    description: 'إضافة موظفين جدد، تعديل أقسامهم أو أدوارهم، أو إيقاف الحسابات',
+    category: 'governance',
+    category_label: 'إدارة القسم والطلبات والنظام',
+    sort_order: 180,
   },
   {
     key: 'roles.manage',
-    name: 'إدارة الأدوار ومصفوفة الصلاحيات',
-    description: 'إنشاء وتعديل الأدوار وتغيير الصلاحيات في قاعدة البيانات مباشرة بدون تعديل الكود',
-    category: 'admin',
-    category_label: 'إدارة النظام والأمان والـ IT',
-    sort_order: 51,
+    name: 'إدارة الأدوار ومصفوفة الصلاحيات (DB)',
+    description: 'إنشاء وتعديل الأدوار وتفعيل/إلغاء الصلاحيات مباشرة في قاعدة البيانات',
+    category: 'governance',
+    category_label: 'إدارة القسم والطلبات والنظام',
+    sort_order: 190,
   },
   {
     key: 'departments.manage',
-    name: 'إدارة هيكل وأقسام الشركة',
-    description: 'إنشاء أقسام جديدة وتعديل بيانات وهوية الأقسام الحالية',
-    category: 'admin',
-    category_label: 'إدارة النظام والأمان والـ IT',
-    sort_order: 52,
+    name: 'إدارة هيكل أقسام الشركة',
+    description: 'إضافة أو تعديل أو حذف الأقسام الإدارية والتشغيلية بالشركة',
+    category: 'governance',
+    category_label: 'إدارة القسم والطلبات والنظام',
+    sort_order: 200,
   },
   {
     key: 'audit.view',
-    name: 'الاطلاع على سجل المراقبة الأمنية',
-    description: 'استعراض سجل العمليات الكامل ومحاولات الوصول المرفوضة على السيرفر',
-    category: 'admin',
-    category_label: 'إدارة النظام والأمان والـ IT',
-    sort_order: 53,
+    name: 'الاطلاع على سجل المراقبة الأمنية (Audit Log)',
+    description: 'مراجعة كافة العمليات المسموحة والمرفوضة أمنياً على السيرفر',
+    category: 'governance',
+    category_label: 'إدارة القسم والطلبات والنظام',
+    sort_order: 210,
   },
 ];
 
 function seedIfNeeded() {
-  transaction(() => {
-    for (const p of PERMISSIONS_CATALOG) {
-      run(
-        `INSERT INTO permissions (key, name, description, category, category_label, sort_order)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET
-           name = excluded.name,
-           description = excluded.description,
-           category = excluded.category,
-           category_label = excluded.category_label,
-           sort_order = excluded.sort_order`,
-        [p.key, p.name, p.description, p.category, p.category_label, p.sort_order]
-      );
-    }
-
-    // Ensure pending_onboarding role always exists even on upgraded DBs
-    const hasPendingRole = get(`SELECT id FROM roles WHERE slug = 'pending_onboarding'`);
-    if (!hasPendingRole && get(`SELECT COUNT(*) AS cnt FROM roles`).cnt > 0) {
-      run(
-        `INSERT INTO roles (slug, name, description, color, rank_level, is_protected)
-         VALUES ('pending_onboarding', 'بانتظار التسكين في قسم', 'حساب جديد سجل عبر جوجل أو فيسبوك وينتظر قيام رئيس القسم بإضافته لقسمه', '#94a3b8', 0, 1)`
-      );
-    }
-  });
+  for (const p of PERMISSIONS_CATALOG) {
+    run(
+      `INSERT INTO permissions (key, name, description, category, category_label, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET
+         name = excluded.name,
+         description = excluded.description,
+         category = excluded.category,
+         category_label = excluded.category_label,
+         sort_order = excluded.sort_order`,
+      [p.key, p.name, p.description, p.category, p.category_label, p.sort_order]
+    );
+  }
 
   const existingUsers = get(`SELECT COUNT(*) AS cnt FROM users`);
   if (existingUsers && existingUsers.cnt > 0) {
     return;
   }
 
+  const adminPasswordHash = bcrypt.hashSync('010228513849', 10);
+
   transaction(() => {
-    // 1. Company Departments (8 Core Departments including Export, Product Registration, IT!)
-    const exportDept = run(
-      `INSERT INTO departments (slug, name, description, color, icon) VALUES (?, ?, ?, ?, ?)`,
-      [
-        'export',
-        'قسم التصدير والشحن الدولي',
-        'عقود التصدير الخارجية، الاعتمادات المستندية، بوالص الشحن البحري والجوي، والتخليص الجمركي',
-        '#0284c7',
-        'globe',
-      ]
-    ).lastInsertRowid;
+    // 1. Official ELHELB GROUP Departments
+    const departmentsToCreate = [
+      {
+        slug: 'export',
+        name: 'قسم التصدير والشحن الدولي',
+        description: 'إدارة عقود التصدير الخارجية، الشحن البحري والجوي، الاعتمادات المستندية، والأسواق الدولية',
+        color: '#0284c7',
+        icon: 'globe',
+        boardTitle: 'لوحة أعمال قسم التصدير والشحن الدولي',
+        boardBg: 'ocean',
+      },
+      {
+        slug: 'registration',
+        name: 'قسم تسجيل المنتجات والتراخيص',
+        description: 'إعداد الملفات الفنية، تسجيل المنتجات بالهيئات الرقابية، الشهادات الصحية، وتجديد التراخيص',
+        color: '#7c3aed',
+        icon: 'file-check',
+        boardTitle: 'لوحة أعمال قسم تسجيل المنتجات والتراخيص',
+        boardBg: 'purple',
+      },
+      {
+        slug: 'it',
+        name: 'قسم تكنولوجيا المعلومات (IT)',
+        description: 'إدارة الأنظمة والمنصات الرقمية، صلاحيات الحسابات، الشبكات، أمن المعلومات، والدعم الفني',
+        color: '#2563eb',
+        icon: 'cpu',
+        boardTitle: 'لوحة أعمال قسم تكنولوجيا المعلومات (IT)',
+        boardBg: 'royal',
+      },
+      {
+        slug: 'sales',
+        name: 'قسم المبيعات والتعاقدات',
+        description: 'إدارة عروض الأسعار، صفقات الشركات بالسوق المحلي، ومتابعة حسابات كبار العملاء',
+        color: '#0a6fa8',
+        icon: 'trending-up',
+        boardTitle: 'لوحة أعمال قسم المبيعات والتعاقدات',
+        boardBg: 'gold',
+      },
+      {
+        slug: 'procurement',
+        name: 'قسم المشتريات والتوريدات',
+        description: 'إدارة الموردين، أوامر الشراء المحلية والدولية، الخامات، والمخازن المركزية',
+        color: '#059669',
+        icon: 'package',
+        boardTitle: 'لوحة أعمال قسم المشتريات والتوريدات',
+        boardBg: 'emerald',
+      },
+      {
+        slug: 'media',
+        name: 'قسم الميديا والتسويق',
+        description: 'الهوية البصرية، الكتالوجات التصديرية، التصميم الجرافيكي، والحملات الرقمية',
+        color: '#db2777',
+        icon: 'megaphone',
+        boardTitle: 'لوحة أعمال قسم الميديا والتسويق',
+        boardBg: 'crimson',
+      },
+      {
+        slug: 'hr',
+        name: 'قسم الموارد البشرية',
+        description: 'استقطاب الكفاءات، مسوغات التعيين، الحضور والانصراف، وتقييم الأداء الإداري',
+        color: '#d97706',
+        icon: 'users',
+        boardTitle: 'لوحة أعمال قسم الموارد البشرية',
+        boardBg: 'slate',
+      },
+      {
+        slug: 'finance',
+        name: 'قسم الحسابات والمالية',
+        description: 'المراجعة المالية، الفواتير الضريبية، التحصيلات، وتسوية الاعتمادات البنكية',
+        color: '#0d9488',
+        icon: 'landmark',
+        boardTitle: 'لوحة أعمال قسم الحسابات والمالية',
+        boardBg: 'sunset',
+      },
+    ];
 
-    const regDept = run(
-      `INSERT INTO departments (slug, name, description, color, icon) VALUES (?, ?, ?, ?, ?)`,
-      [
-        'registration',
-        'قسم تسجيل المنتجات والتراخيص',
-        'إعداد ملفات تسجيل المنتجات، التراخيص الرقابية، الفحص المعملي، وتجديد شهادات المطابقة والجودة',
-        '#7c3aed',
-        'file-check',
-      ]
-    ).lastInsertRowid;
-
-    const itDept = run(
-      `INSERT INTO departments (slug, name, description, color, icon) VALUES (?, ?, ?, ?, ?)`,
-      [
-        'it',
-        'قسم تكنولوجيا المعلومات (IT)',
-        'إدارة الأنظمة والمنصات الرقمية، صلاحيات الحسابات، الشبكات، أمن المعلومات، والدعم الفني',
-        '#2563eb',
-        'cpu',
-      ]
-    ).lastInsertRowid;
-
-    const salesDept = run(
-      `INSERT INTO departments (slug, name, description, color, icon) VALUES (?, ?, ?, ?, ?)`,
-      [
-        'sales',
-        'قسم المبيعات والتعاقدات',
-        'إدارة عروض الأسعار، صفقات الشركات بالسوق المحلي، ومتابعة حسابات كبار العملاء',
-        '#0a6fa8',
-        'trending-up',
-      ]
-    ).lastInsertRowid;
-
-    const procDept = run(
-      `INSERT INTO departments (slug, name, description, color, icon) VALUES (?, ?, ?, ?, ?)`,
-      [
-        'procurement',
-        'قسم المشتريات والتوريدات',
-        'إدارة الموردين، أوامر الشراء المحلية والدولية، الخامات، والمخازن المركزية',
-        '#059669',
-        'package',
-      ]
-    ).lastInsertRowid;
-
-    const mediaDept = run(
-      `INSERT INTO departments (slug, name, description, color, icon) VALUES (?, ?, ?, ?, ?)`,
-      [
-        'media',
-        'قسم الميديا والتسويق',
-        'الهوية البصرية، الكتالوجات التصديرية، التصميم الجرافيكي، والحملات الرقمية',
-        '#db2777',
-        'megaphone',
-      ]
-    ).lastInsertRowid;
-
-    const hrDept = run(
-      `INSERT INTO departments (slug, name, description, color, icon) VALUES (?, ?, ?, ?, ?)`,
-      [
-        'hr',
-        'قسم الموارد البشرية',
-        'استقطاب الكفاءات، مسوغات التعيين، الحضور والانصراف، وتقييم الأداء الإداري',
-        '#d97706',
-        'users',
-      ]
-    ).lastInsertRowid;
-
-    const finDept = run(
-      `INSERT INTO departments (slug, name, description, color, icon) VALUES (?, ?, ?, ?, ?)`,
-      [
-        'finance',
-        'قسم الحسابات والمالية',
-        'المراجعة المالية، الفواتير الضريبية، التحصيلات، وتسوية الاعتمادات البنكية',
-        '#0d9488',
-        'landmark',
-      ]
-    ).lastInsertRowid;
+    const createdDepts = departmentsToCreate.map((d) => {
+      const id = run(
+        `INSERT INTO departments (slug, name, description, color, icon) VALUES (?, ?, ?, ?, ?)`,
+        [d.slug, d.name, d.description, d.color, d.icon]
+      ).lastInsertRowid;
+      return { ...d, id };
+    });
 
     // 2. Hierarchical Roles
     const chairmanRole = run(
@@ -383,15 +367,15 @@ function seedIfNeeded() {
       ]
     ).lastInsertRowid;
 
-    const pendingRole = run(
+    run(
       `INSERT INTO roles (slug, name, description, color, rank_level, is_protected) VALUES (?, ?, ?, ?, 0, 1)`,
       [
         'pending_onboarding',
         'بانتظار التسكين في قسم',
-        'موظف سجل دخوله عبر Google أو Facebook وينتظر قيام رئيس القسم بضمه إلى قسمه',
+        'موظف أكد بريده الإلكتروني وينتظر قيام رئيس القسم بضمه إلى قسمه',
         '#94a3b8',
       ]
-    ).lastInsertRowid;
+    );
 
     const assignPerms = (roleId, keys) => {
       for (const k of keys) {
@@ -401,17 +385,13 @@ function seedIfNeeded() {
 
     const allPermKeys = PERMISSIONS_CATALOG.map((p) => p.key);
 
-    // Chairman & General Manager -> All permissions (differentiated by sovereign rank_level 100 vs 90)
     assignPerms(chairmanRole, allPermKeys);
     assignPerms(superAdminRole, allPermKeys);
-
-    // IT Admin -> Shared Administrative & Technical permissions (everything except boards.delete by default, customizable from UI!)
     assignPerms(
       itAdminRole,
       allPermKeys.filter((k) => k !== 'boards.delete')
     );
 
-    // Department Head (رئيس قسم) -> Full department control + onboard members to own dept + approve dept requests
     assignPerms(deptMgrRole, [
       'boards.view_department',
       'boards.create',
@@ -431,11 +411,8 @@ function seedIfNeeded() {
       'requests.review_department',
     ]);
 
-    // Team Lead
     assignPerms(teamLeadRole, [
       'boards.view_department',
-      'boards.create',
-      'boards.edit',
       'lists.create',
       'lists.edit',
       'cards.create',
@@ -445,7 +422,6 @@ function seedIfNeeded() {
       'comments.create',
     ]);
 
-    // Staff
     assignPerms(staffRole, [
       'boards.view_department',
       'cards.create',
@@ -454,390 +430,61 @@ function seedIfNeeded() {
       'comments.create',
     ]);
 
-    // Viewer
-    assignPerms(viewerRole, ['boards.view_department']);
+    assignPerms(viewerRole, ['boards.view_department', 'comments.create']);
 
-    // 3. Users (Easy Demo Password: 123456)
-    const defaultHash = bcrypt.hashSync('123456', 10);
-
-    const uChairman = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'approved')`,
-      ['chairman', 'chairman@elhelb.com', defaultHash, 'رئيس مجلس الإدارة — مجموعة الهلب', 'رئيس مجلس الإدارة (السلطة السيادية الأعلى)', '#92400e', chairmanRole]
-    ).lastInsertRowid;
-
-    const uAdmin = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'approved')`,
-      ['admin', 'gm@elhelb.com', defaultHash, 'أحمد الهلب', 'المدير العام التنفيذي', '#b45309', superAdminRole]
-    ).lastInsertRowid;
-
-    const uItMgr = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['it_mgr', 'it@elhelb.com', defaultHash, 'م. عمرو سليم', 'مدير قسم تكنولوجيا المعلومات (IT)', '#2563eb', itAdminRole, itDept]
-    ).lastInsertRowid;
-
-    const uExportMgr = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['export_mgr', 'export@elhelb.com', defaultHash, 'أ. خالد عبد العزيز', 'رئيس قسم التصدير والشحن الدولي', '#0284c7', deptMgrRole, exportDept]
-    ).lastInsertRowid;
-
-    const uExportEmp = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['export_emp', 'm.adel@elhelb.com', defaultHash, 'مروان عادل', 'أخصائي تصدير واعتمادات مستندية', '#0369a1', staffRole, exportDept]
-    ).lastInsertRowid;
-
-    const uRegMgr = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['reg_mgr', 'reg@elhelb.com', defaultHash, 'د. منى عبد الحميد', 'رئيس قسم تسجيل المنتجات والتراخيص', '#7c3aed', deptMgrRole, regDept]
-    ).lastInsertRowid;
-
-    const uRegEmp = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['reg_emp', 'reem@elhelb.com', defaultHash, 'د. ريم نبيل', 'أخصائي تسجيل منتجات ورقابة دوائية/صناعية', '#9333ea', staffRole, regDept]
-    ).lastInsertRowid;
-
-    const uSalesMgr = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['sales_mgr', 'sales@elhelb.com', defaultHash, 'م. طارق منصور', 'رئيس قسم المبيعات والتعاقدات', '#0a6fa8', deptMgrRole, salesDept]
-    ).lastInsertRowid;
-
-    const uSalesLead = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['sales_lead', 'karim@elhelb.com', defaultHash, 'كريم محمود', 'مشرف مبيعات الشركات', '#2563eb', teamLeadRole, salesDept]
-    ).lastInsertRowid;
-
-    const uSalesEmp = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['sales_emp', 'sara@elhelb.com', defaultHash, 'سارة عبد الرحمن', 'أخصائي مبيعات وتعاقدات', '#0284c7', staffRole, salesDept]
-    ).lastInsertRowid;
-
-    const uSalesViewer = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['sales_viewer', 'youssef@elhelb.com', defaultHash, 'يوسف عادل', 'متدرب مبيعات جديد', '#64748b', viewerRole, salesDept]
-    ).lastInsertRowid;
-
-    const uMediaMgr = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['media_mgr', 'media@elhelb.com', defaultHash, 'ندى الشافعي', 'رئيس قسم الميديا والتسويق', '#db2777', deptMgrRole, mediaDept]
-    ).lastInsertRowid;
-
-    const uMediaEmp = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['media_emp', 'omar@elhelb.com', defaultHash, 'عمر خالد', 'مصمم جرافيك وصانع محتوى', '#9333ea', staffRole, mediaDept]
-    ).lastInsertRowid;
-
-    const uProcMgr = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['proc_mgr', 'proc@elhelb.com', defaultHash, 'محمود الجمل', 'رئيس قسم المشتريات والتوريدات', '#059669', deptMgrRole, procDept]
-    ).lastInsertRowid;
-
-    const uHrEmp = run(
-      `INSERT INTO users (username, email, password_hash, full_name, job_title, avatar_color, role_id, department_id, onboarding_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved')`,
-      ['hr_emp', 'hr@elhelb.com', defaultHash, 'هدى إبراهيم', 'أخصائي شؤون عاملين وتوظيف', '#d97706', staffRole, hrDept]
-    ).lastInsertRowid;
-
-    // 2 Pending Employees signed up via Google & Facebook waiting for Department Heads!
-    run(
+    // 3. ONLY ONE SOVEREIGN ACCOUNT: admin
+    const adminUserId = run(
       `INSERT INTO users (
         username, email, password_hash, full_name, job_title, avatar_color,
-        auth_provider, oauth_id, onboarding_status, preferred_department_id, role_id, department_id
-      ) VALUES (?, ?, '', ?, ?, '#ea4335', 'google', 'google-demo-101', 'pending', ?, ?, NULL)`,
+        auth_provider, has_custom_credentials, department_confirmed,
+        onboarding_status, role_id, department_id
+      ) VALUES (?, NULL, ?, ?, ?, '#92400e', 'local', 1, 1, 'approved', ?, NULL)`,
       [
-        'ahmed.hossam',
-        'ahmed.hossam@gmail.com',
-        'أحمد حسام الدين',
-        'مسؤول شحن وتصدير دولي',
-        exportDept,
-        pendingRole,
-      ]
-    );
-
-    run(
-      `INSERT INTO users (
-        username, email, password_hash, full_name, job_title, avatar_color,
-        auth_provider, oauth_id, onboarding_status, preferred_department_id, role_id, department_id
-      ) VALUES (?, ?, '', ?, ?, '#1877f2', 'facebook', 'fb-demo-202', 'pending', ?, ?, NULL)`,
-      [
-        'noha.fouad',
-        'noha.fouad@facebook.com',
-        'د. نهى فؤاد',
-        'أخصائي ملفات تسجيل منتجات',
-        regDept,
-        pendingRole,
-      ]
-    );
-
-    // 4. Departmental Boards
-    // --- EXPORT BOARD ---
-    const bExport = run(
-      `INSERT INTO boards (title, description, department_id, background, created_by)
-       VALUES (?, ?, ?, 'ocean', ?)`,
-      [
-        'شحنات وعقود التصدير الدولية — الربع الرابع',
-        'متابعة الطلبيات التصديرية، فتح الاعتمادات المستندية (LC)، حجز الحاويات، وشهادات المنشأ',
-        exportDept,
-        uExportMgr,
+        'admin',
+        adminPasswordHash,
+        'رئيس مجلس الإدارة',
+        'رئيس مجلس الإدارة — المسؤول الأعلى للنظام',
+        chairmanRole,
       ]
     ).lastInsertRowid;
-    run(`INSERT INTO board_stars (user_id, board_id) VALUES (?, ?)`, [uChairman, bExport]);
-    run(`INSERT INTO board_stars (user_id, board_id) VALUES (?, ?)`, [uExportMgr, bExport]);
-    const lblAfrica = run(`INSERT INTO board_labels (board_id, name, color) VALUES (?, ?, ?)`, [bExport, 'تصدير أفريقيا والخليج', '#0284c7']).lastInsertRowid;
-    const lblLC = run(`INSERT INTO board_labels (board_id, name, color) VALUES (?, ?, ?)`, [bExport, 'اعتماد مستندي LC', '#d97706']).lastInsertRowid;
-    const lExp1 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 1)`, [bExport, 'طلبيات تصدير جديدة']).lastInsertRowid;
-    const lExp2 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 2)`, [bExport, 'تجهيز المستندات وشهادة المنشأ']).lastInsertRowid;
-    const lExp3 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 3)`, [bExport, 'تم الشحن بالميناء 🚢']).lastInsertRowid;
-    const cExp1 = run(
-      `INSERT INTO cards (board_id, list_id, title, description, priority, due_date, position, cover_color, created_by)
-       VALUES (?, ?, ?, ?, 'urgent', '2026-11-06', 1, '#0284c7', ?)`,
-      [
-        bExport,
-        lExp2,
-        'شحنة تصدير 4 حاويات — ميناء جدة الإسلامي (السعودية)',
-        'مراجعة الفاتورة التجارية، بيان العبوة (Packing List)، وتصديق شهادة المنشأ من الغرفة التجارية.',
-        uExportMgr,
-      ]
-    ).lastInsertRowid;
-    run(`INSERT INTO card_assignees (card_id, user_id) VALUES (?, ?)`, [cExp1, uExportMgr]);
-    run(`INSERT INTO card_assignees (card_id, user_id) VALUES (?, ?)`, [cExp1, uExportEmp]);
-    run(`INSERT INTO card_label_links (card_id, label_id) VALUES (?, ?)`, [cExp1, lblAfrica]);
-    run(`INSERT INTO card_label_links (card_id, label_id) VALUES (?, ?)`, [cExp1, lblLC]);
-    run(`INSERT INTO checklist_items (card_id, title, is_checked, position) VALUES (?, ?, 1, 1)`, [cExp1, 'اعتماد الفاتورة المبدئية Proforma Invoice']);
-    run(`INSERT INTO checklist_items (card_id, title, is_checked, position) VALUES (?, ?, 0, 2)`, [cExp1, 'إصدار بوليصة الشحن البحري Bill of Lading']);
 
-    // --- PRODUCT REGISTRATION BOARD ---
-    const bReg = run(
-      `INSERT INTO boards (title, description, department_id, background, created_by)
-       VALUES (?, ?, ?, 'purple', ?)`,
-      [
-        'ملفات تسجيل المنتجات والتراخيص والشهادات',
-        'متابعة دورة تسجيل المنتجات الجديدة، الفحص المعملي، مطابقة المواصفات القياسية، وتجديد التراخيص',
-        regDept,
-        uRegMgr,
-      ]
-    ).lastInsertRowid;
-    run(`INSERT INTO board_stars (user_id, board_id) VALUES (?, ?)`, [uChairman, bReg]);
-    run(`INSERT INTO board_stars (user_id, board_id) VALUES (?, ?)`, [uRegMgr, bReg]);
-    const lblNewProd = run(`INSERT INTO board_labels (board_id, name, color) VALUES (?, ?, ?)`, [bReg, 'تسجيل منتج جديد', '#7c3aed']).lastInsertRowid;
-    const lblLab = run(`INSERT INTO board_labels (board_id, name, color) VALUES (?, ?, ?)`, [bReg, 'تحليل معملي ومواصفات', '#059669']).lastInsertRowid;
-    const lReg1 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 1)`, [bReg, 'تجهيز الملف الفني والعينات']).lastInsertRowid;
-    const lReg2 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 2)`, [bReg, 'قيد الفحص بالجهات الرقابية']).lastInsertRowid;
-    const lReg3 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 3)`, [bReg, 'صدر إخطار التسجيل النهائي ✅']).lastInsertRowid;
-    const cReg1 = run(
-      `INSERT INTO cards (board_id, list_id, title, description, priority, due_date, position, cover_color, created_by)
-       VALUES (?, ?, ?, ?, 'high', '2026-11-09', 1, '#7c3aed', ?)`,
-      [
-        bReg,
-        lReg2,
-        'استكمال ملف تسجيل خط منتجات الهلب الجديد (5 أصناف تصديرية)',
-        'متابعة نتائج مطابقة العينات بالمعامل المركزية واستلام شهادة التداول الحر للتصدير.',
-        uRegMgr,
-      ]
-    ).lastInsertRowid;
-    run(`INSERT INTO card_assignees (card_id, user_id) VALUES (?, ?)`, [cReg1, uRegMgr]);
-    run(`INSERT INTO card_assignees (card_id, user_id) VALUES (?, ?)`, [cReg1, uRegEmp]);
-    run(`INSERT INTO card_label_links (card_id, label_id) VALUES (?, ?)`, [cReg1, lblNewProd]);
-    run(`INSERT INTO card_label_links (card_id, label_id) VALUES (?, ?)`, [cReg1, lblLab]);
+    // 4. Clean Starter Board for each of the 8 company departments (zero fake users/cards)
+    const defaultLists = [
+      'المهام الجديدة',
+      'جاري العمل عليها',
+      'قيد المراجعة والاعتماد',
+      'مكتمل ✅',
+    ];
+    const defaultLabels = [
+      ['عاجل', '#dc2626'],
+      ['مهم', '#d97706'],
+      ['متابعة', '#0a6fa8'],
+      ['معتمد', '#059669'],
+    ];
 
-    // --- IT DEPARTMENT BOARD ---
-    const bIt = run(
-      `INSERT INTO boards (title, description, department_id, background, created_by)
-       VALUES (?, ?, ?, 'royal', ?)`,
-      [
-        'إدارة الأنظمة الرقمية والدعم الفني وأمن المعلومات (IT)',
-        'متابعة السيرفرات، صلاحيات الموظفين، البريد المؤسسي، وتحديثات البنية التحتية',
-        itDept,
-        uItMgr,
-      ]
-    ).lastInsertRowid;
-    const lIt1 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 1)`, [bIt, 'طلبات دعم وتجهيز أجهزة']).lastInsertRowid;
-    const lIt2 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 2)`, [bIt, 'قيد التنفيذ والتأمين']).lastInsertRowid;
-    const lIt3 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 3)`, [bIt, 'مكتمل ✅']).lastInsertRowid;
-    const cIt1 = run(
-      `INSERT INTO cards (board_id, list_id, title, description, priority, due_date, position, created_by)
-       VALUES (?, ?, ?, ?, 'high', '2026-11-04', 1, ?)`,
-      [bIt, lIt2, 'ربط بوابة الدخول الموحد (Google / Facebook SSO) لجميع أقسام الشركة', 'مراجعة صلاحيات رؤساء الأقسام وتفعيل التسكين التلقائي.', uItMgr]
-    ).lastInsertRowid;
-    run(`INSERT INTO card_assignees (card_id, user_id) VALUES (?, ?)`, [cIt1, uItMgr]);
+    for (const dept of createdDepts) {
+      const boardId = run(
+        `INSERT INTO boards (title, description, department_id, background, created_by)
+         VALUES (?, ?, ?, ?, ?)`,
+        [dept.boardTitle, dept.description, dept.id, dept.boardBg, adminUserId]
+      ).lastInsertRowid;
 
-    // --- SALES BOARD 1 ---
-    const bSales1 = run(
-      `INSERT INTO boards (title, description, department_id, background, created_by)
-       VALUES (?, ?, ?, 'gold', ?)`,
-      [
-        'خطة مبيعات وتعاقدات السوق المحلي',
-        'متابعة الصفقات الجارية، عروض الأسعار، والمناقصات الخاصة بعملاء مجموعة الهلب',
-        salesDept,
-        uSalesMgr,
-      ]
-    ).lastInsertRowid;
-    run(`INSERT INTO board_stars (user_id, board_id) VALUES (?, ?)`, [uSalesMgr, bSales1]);
-    run(`INSERT INTO board_stars (user_id, board_id) VALUES (?, ?)`, [uSalesEmp, bSales1]);
+      defaultLists.forEach((lTitle, idx) => {
+        run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, ?)`, [
+          boardId,
+          lTitle,
+          idx + 1,
+        ]);
+      });
 
-    const lblVip = run(`INSERT INTO board_labels (board_id, name, color) VALUES (?, ?, ?)`, [bSales1, 'عميل VIP', '#d97706']).lastInsertRowid;
-    const lblUrgent = run(`INSERT INTO board_labels (board_id, name, color) VALUES (?, ?, ?)`, [bSales1, 'أولوية قصوى', '#dc2626']).lastInsertRowid;
-
-    const lSales1_1 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 1)`, [bSales1, 'عملاء محتملون (Leads)']).lastInsertRowid;
-    const lSales1_2 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 2)`, [bSales1, 'عروض أسعار قيد الإعداد']).lastInsertRowid;
-    const lSales1_3 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 3)`, [bSales1, 'مفاوضات ومراجعة عقود']).lastInsertRowid;
-    const lSales1_4 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 4)`, [bSales1, 'صفقات مغلقة بنجاح ✅']).lastInsertRowid;
-
-    const cS1 = run(
-      `INSERT INTO cards (board_id, list_id, title, description, priority, due_date, position, cover_color, created_by)
-       VALUES (?, ?, ?, ?, 'urgent', '2026-11-05', 1, '#0a6fa8', ?)`,
-      [
-        bSales1,
-        lSales1_2,
-        'عرض سعر التوريدات السنوي — شركة الإسكندرية للملاحة',
-        'إعداد العرض المالي والفني الشامل لمدة 12 شهراً مع جدول التسليمات الربع سنوية.',
-        uSalesMgr,
-      ]
-    ).lastInsertRowid;
-    run(`INSERT INTO card_assignees (card_id, user_id) VALUES (?, ?)`, [cS1, uSalesEmp]);
-    run(`INSERT INTO card_assignees (card_id, user_id) VALUES (?, ?)`, [cS1, uSalesLead]);
-    run(`INSERT INTO card_label_links (card_id, label_id) VALUES (?, ?)`, [cS1, lblVip]);
-    run(`INSERT INTO card_label_links (card_id, label_id) VALUES (?, ?)`, [cS1, lblUrgent]);
-
-    const cS3 = run(
-      `INSERT INTO cards (board_id, list_id, title, description, priority, due_date, position, created_by)
-       VALUES (?, ?, ?, ?, 'low', '2026-11-02', 1, ?)`,
-      [
-        bSales1,
-        lSales1_1,
-        '[كارت مكرر بالخطأ] استفسار مبدئي — شركة الدلتا للخدمات اللوجستية',
-        'تم تسجيل هذا الكارت مرتين أثناء إدخال بيانات المعرض، ويحتاج إلى حذف من اللوحة.',
-        uSalesEmp,
-      ]
-    ).lastInsertRowid;
-    run(`INSERT INTO card_assignees (card_id, user_id) VALUES (?, ?)`, [cS3, uSalesEmp]);
-
-    // --- MEDIA BOARD ---
-    const bMedia1 = run(
-      `INSERT INTO boards (title, description, department_id, background, created_by)
-       VALUES (?, ?, ?, 'crimson', ?)`,
-      [
-        'تصميم الكتالوج التصديري والهوية الرقمية',
-        'تجهيز مطبوعات المعارض الدولية وتصميمات المنتجات المسجلة حديثاً',
-        mediaDept,
-        uMediaMgr,
-      ]
-    ).lastInsertRowid;
-    const lMedia1 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 1)`, [bMedia1, 'قيد التصميم والمونتاج']).lastInsertRowid;
-    const lMedia2 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 2)`, [bMedia1, 'تم الاعتماد والنشر 🚀']).lastInsertRowid;
-    const cM1 = run(
-      `INSERT INTO cards (board_id, list_id, title, description, priority, due_date, position, created_by)
-       VALUES (?, ?, ?, ?, 'high', '2026-11-07', 1, ?)`,
-      [bMedia1, lMedia1, 'تصميم عبوات وبروشور التصدير الجديد (عربي / إنجليزي / فرنسي)', 'مراجعة البيانات الإلزامية مع قسم تسجيل المنتجات.', uMediaMgr]
-    ).lastInsertRowid;
-    run(`INSERT INTO card_assignees (card_id, user_id) VALUES (?, ?)`, [cM1, uMediaEmp]);
-
-    // --- PROCUREMENT BOARD ---
-    const bProc1 = run(
-      `INSERT INTO boards (title, description, department_id, background, created_by)
-       VALUES (?, ?, ?, 'emerald', ?)`,
-      [
-        'أوامر الشراء وتوريد الخامات ومستلزمات الإنتاج',
-        'متابعة الموردين، فحص الخامات، واستلام المخازن',
-        procDept,
-        uProcMgr,
-      ]
-    ).lastInsertRowid;
-    const lProc1 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 1)`, [bProc1, 'عروض الموردين وأوامر التوريد']).lastInsertRowid;
-    const lProc2 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 2)`, [bProc1, 'تم الفحص والاستلام بالمخزن ✅']).lastInsertRowid;
-    run(
-      `INSERT INTO cards (board_id, list_id, title, description, priority, due_date, position, created_by)
-       VALUES (?, ?, ?, ?, 'urgent', '2026-11-06', 1, ?)`,
-      [bProc1, lProc1, 'توريد خامات التعبئة والتغليف المخصصة لطلبيات التصدير', 'التأكد من مطابقة المواصفات القياسية الدولية.', uProcMgr]
-    );
-
-    // --- HR & FINANCE BOARDS ---
-    const bHr1 = run(
-      `INSERT INTO boards (title, description, department_id, background, created_by)
-       VALUES (?, ?, ?, 'slate', ?)`,
-      ['شؤون العاملين والتعيينات الجديدة', 'متابعة ملفات التوظيف والتأهيل', hrDept, uAdmin]
-    ).lastInsertRowid;
-    const lHr1 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 1)`, [bHr1, 'مقابلات ومسوغات التعيين']).lastInsertRowid;
-    run(
-      `INSERT INTO cards (board_id, list_id, title, description, priority, position, created_by)
-       VALUES (?, ?, 'استكمال مسوغات التعيين للمنضمين الجدد', 'مراجعة الملفات الورقية والتأمينات.', 'medium', 1, ?)`,
-      [bHr1, lHr1, uHrEmp]
-    );
-
-    const bFin1 = run(
-      `INSERT INTO boards (title, description, department_id, background, created_by)
-       VALUES (?, ?, ?, 'sunset', ?)`,
-      ['المراجعة المالية وتسوية الاعتمادات البنكية', 'متابعة التحصيلات والفواتير الضريبية', finDept, uChairman]
-    ).lastInsertRowid;
-    const lFin1 = run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, 1)`, [bFin1, 'قيد المراجعة المالية']).lastInsertRowid;
-    run(
-      `INSERT INTO cards (board_id, list_id, title, description, priority, position, created_by)
-       VALUES (?, ?, 'مراجعة حصيلة تصدير شهر أكتوبر', 'مطابقة التحويلات البنكية مع بوالص الشحن.', 'high', 1, ?)`,
-      [bFin1, lFin1, uChairman]
-    );
-
-    // 5. Sample Permission Requests
-    run(
-      `INSERT INTO permission_requests (
-        requester_id, permission_key, scope_type, target_department_id, target_board_id, target_card_id,
-        requested_duration, reason, action_summary, status
-      ) VALUES (?, 'cards.delete', 'card', ?, ?, ?, 'once', ?, ?, 'pending')`,
-      [
-        uSalesEmp,
-        salesDept,
-        bSales1,
-        cS3,
-        'هذا الكارت تم تسجيله مرتين بالخطأ، وأستأذن في صلاحية حذفه لمرة واحدة.',
-        'حذف كارت "[كارت مكرر بالخطأ] استفسار مبدئي — شركة الدلتا للخدمات اللوجستية"',
-      ]
-    );
-
-    run(
-      `INSERT INTO permission_requests (
-        requester_id, permission_key, scope_type, target_department_id, target_board_id, target_card_id,
-        requested_duration, reason, action_summary, status
-      ) VALUES (?, 'boards.view_department', 'department', ?, NULL, NULL, '24h', ?, ?, 'pending')`,
-      [
-        uSalesEmp,
-        mediaDept,
-        'أحتاج الاطلاع مؤقتاً على لوحة قسم الميديا لمراجعة تصميم الكتالوج الجديد.',
-        'طلب وصول مؤقت للاطلاع على لوحات (قسم الميديا والتسويق)',
-      ]
-    );
-
-    // Notifications for Department Heads & Leadership about waiting Google/Facebook employees!
-    run(
-      `INSERT INTO notifications (user_id, type, title, message, link_tab)
-       VALUES (?, 'onboarding_new', 'موظف جديد سجل عبر Google ينتظر التسكين', 'قام (أحمد حسام الدين) بتسجيل الدخول عبر Google وينتظر ضمه إلى قسم التصدير.', 'onboarding')`,
-      [uExportMgr]
-    );
-    run(
-      `INSERT INTO notifications (user_id, type, title, message, link_tab)
-       VALUES (?, 'onboarding_new', 'موظفة جديدة سجلت عبر Facebook تنتظر التسكين', 'قامت (د. نهى فؤاد) بتسجيل الدخول عبر Facebook وتنتظر ضمها إلى قسم تسجيل المنتجات.', 'onboarding')`,
-      [uRegMgr]
-    );
-    run(
-      `INSERT INTO notifications (user_id, type, title, message, link_tab)
-       VALUES (?, 'onboarding_new', 'موظفون جدد بانتظار التسكين في الأقسام', 'يوجد موظفان جديدان سجلا عبر Google و Facebook في انتظار التسكين من رؤساء الأقسام أو الـ IT.', 'onboarding')`,
-      [uItMgr]
-    );
-    run(
-      `INSERT INTO notifications (user_id, type, title, message, link_tab)
-       VALUES (?, 'onboarding_new', 'ملخص النظام لرئيس مجلس الإدارة', 'جميع الأقسام (التصدير، تسجيل المنتجات، الـ IT، المبيعات، المشتريات، الميديا، الموارد البشرية، المالية) مفعلة وتعمل بكفاءة.', 'boards')`,
-      [uChairman]
-    );
+      defaultLabels.forEach(([lName, lColor]) => {
+        run(`INSERT INTO board_labels (board_id, name, color) VALUES (?, ?, ?)`, [
+          boardId,
+          lName,
+          lColor,
+        ]);
+      });
+    }
   });
 }
 

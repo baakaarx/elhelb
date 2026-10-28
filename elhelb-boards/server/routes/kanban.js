@@ -11,6 +11,7 @@ const {
   resolveListHierarchy,
   resolveCardHierarchy,
 } = require('../rbac');
+const { sendElhelbEmail } = require('../mailer');
 
 const router = express.Router();
 router.use(authenticate);
@@ -517,7 +518,7 @@ router.post('/cards/:id(\\d+)/move', (req, res) => {
 });
 
 // Toggle card assignee
-router.post('/cards/:id(\\d+)/assignees', (req, res) => {
+router.post('/cards/:id(\\d+)/assignees', async (req, res) => {
   const card = resolveCardHierarchy(Number(req.params.id));
   if (!card) return res.status(404).json({ error: 'الكارت غير موجود' });
 
@@ -564,6 +565,7 @@ router.post('/cards/:id(\\d+)/assignees', (req, res) => {
     return res.status(400).json({ error: 'لا يمكن تعيين موظف من خارج القسم المختص على هذه المهمة' });
   }
 
+  let newlyAssigned = false;
   transaction(() => {
     consumeGrantIfOneTime(permCheck.viaGrant);
     const exists = get(
@@ -576,6 +578,7 @@ router.post('/cards/:id(\\d+)/assignees', (req, res) => {
         targetUser.id,
       ]);
     } else {
+      newlyAssigned = true;
       run(`INSERT INTO card_assignees (card_id, user_id) VALUES (?, ?)`, [
         card.id,
         targetUser.id,
@@ -593,6 +596,27 @@ router.post('/cards/:id(\\d+)/assignees', (req, res) => {
       }
     }
   });
+
+  if (newlyAssigned && targetUser.id !== req.user.id && targetUser.email) {
+    await sendElhelbEmail({
+      to: [targetUser.email],
+      ccAdmin: false,
+      eventType: 'card_assigned',
+      subject: `📋 مهمة جديدة مسندة إليك: ${card.title}`,
+      badgeText: 'تكليف بمهمة عمل',
+      badgeColor: '#0a6fa8',
+      heading: `تم تعيينك على مهمة جديدة في (${board.department_name})`,
+      bodyLines: [
+        `قام (${req.user.full_name}) بتعيينك لمتابعة هذه المهمة على لوحة العمل.`,
+      ],
+      details: [
+        ['عنوان المهمة', card.title],
+        ['اللوحة', board.title],
+        ['القسم', board.department_name],
+        ['تاريخ الاستحقاق', card.due_date || 'غير محدد'],
+      ],
+    });
+  }
 
   res.json(loadFullCardDetails(card.id));
 });

@@ -67,7 +67,8 @@ function getActiveGrantsForUser(userId) {
 function loadUserById(userId) {
   const user = get(
     `SELECT u.id, u.username, u.email, u.full_name, u.job_title, u.avatar_color, u.avatar_url,
-            u.auth_provider, u.onboarding_status, u.preferred_department_id,
+            u.auth_provider, u.email_verified, u.has_custom_credentials, u.department_confirmed,
+            u.onboarding_status, u.preferred_department_id,
             u.role_id, u.department_id, u.is_active, u.token_version,
             r.slug AS role_slug, r.name AS role_name, r.color AS role_color, r.rank_level AS role_rank,
             d.slug AS department_slug, d.name AS department_name, d.color AS department_color,

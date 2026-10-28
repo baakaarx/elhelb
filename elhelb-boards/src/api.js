@@ -54,7 +54,6 @@ const PUBLIC_NO_TOKEN_PATHS = new Set([
   '/api/auth/login',
   '/api/auth/social-entry',
   '/api/auth/oauth/providers',
-  '/api/auth/demo-accounts',
 ]);
 
 function attachTokenToUrl(path, token) {

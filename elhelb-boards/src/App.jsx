@@ -104,7 +104,12 @@ export default function App() {
     setActiveBoardId(null);
     setInitialCardId(null);
     setActiveTab('boards');
-    if (loggedUser.onboardingStatus === 'pending') {
+    if (!loggedUser.hasCustomCredentials) {
+      showToast(
+        `أهلاً بك ${loggedUser.fullName} — أنشئ الآن اسم المستخدم وكلمة المرور ثم حدد قسمك`,
+        'info'
+      );
+    } else if (loggedUser.onboardingStatus === 'pending') {
       showToast(
         `أهلاً بك ${loggedUser.fullName} — حسابك جاهز وبانتظار ضم رئيس القسم`,
         'info'
@@ -114,26 +119,6 @@ export default function App() {
         `مرحباً ${loggedUser.fullName} — دورك الحالي: ${loggedUser.roleName}`,
         'success'
       );
-    }
-  }
-
-  async function handleQuickSwitchAccount(username, password) {
-    try {
-      const res = await apiFetch('/api/auth/login', {
-        method: 'POST',
-        body: { username, password },
-      });
-      setStoredToken(res.token);
-      setUser(res.user);
-      setActiveBoardId(null);
-      setInitialCardId(null);
-      setActiveTab('boards');
-      showToast(
-        `تم التبديل إلى حساب (${res.user.fullName}) — ${res.user.roleName}`,
-        'success'
-      );
-    } catch (err) {
-      showToast(err.message || 'تعذر تبديل الحساب', 'error');
     }
   }
 
@@ -170,11 +155,20 @@ export default function App() {
           justifyContent: 'center',
           flexDirection: 'column',
           gap: 12,
-          background: '#06182c',
+          background: '#071e14',
           color: '#fff',
         }}
       >
-        <img src="/logo.png" alt="ELHELB" style={{ width: 72 }} />
+        <img
+          src="/logo.gif"
+          alt="ELHELB"
+          style={{
+            width: 112,
+            height: 112,
+            borderRadius: 20,
+            border: '1px solid rgba(212,169,10,0.45)',
+          }}
+        />
         <div style={{ fontWeight: 800, fontSize: 16 }}>
           جاري تحميل منصة مجموعة الهلب والتحقق من الصلاحيات...
         </div>
@@ -194,14 +188,13 @@ export default function App() {
     );
   }
 
-  // Gate newly registered Google / Facebook employees in the Waiting Room until their Department Head claims them!
-  if (user.onboardingStatus === 'pending') {
+  // Gate newly registered employees in the Onboarding Wizard until credentials + department head approval!
+  if (user.onboardingStatus === 'pending' || !user.hasCustomCredentials) {
     return (
       <>
         <WaitingOnboardingView
           user={user}
           onRefreshMe={refreshMe}
-          onQuickSwitchAccount={handleQuickSwitchAccount}
           onLogout={handleLogout}
           showToast={showToast}
         />
@@ -218,7 +211,6 @@ export default function App() {
         onSelectTab={handleSelectTab}
         onOpenBoard={handleOpenBoard}
         onOpenRequestModal={(ctx) => setRequestModalContext(ctx || {})}
-        onQuickSwitchAccount={handleQuickSwitchAccount}
         onLogout={handleLogout}
         onRefreshMe={refreshMe}
       />

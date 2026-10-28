@@ -9,6 +9,7 @@ const {
   resolveBoardHierarchy,
   resolveCardHierarchy,
 } = require('../rbac');
+const { sendElhelbEmail } = require('../mailer');
 
 const router = express.Router();
 router.use(authenticate);
@@ -194,7 +195,7 @@ router.get('/requests/inbox', (req, res) => {
 });
 
 // Submit a new Permission Request to Manager
-router.post('/requests', (req, res) => {
+router.post('/requests', async (req, res) => {
   if (req.user.onboarding_status === 'pending') {
     return res.status(403).json({
       error: 'حسابك بانتظار ضم رئيس القسم أولاً قبل إرسال طلبات صلاحية إضافية',
@@ -311,6 +312,7 @@ router.post('/requests', (req, res) => {
     !req.user.department_id || Number(req.user.department_id) !== Number(targetDepartmentId);
 
   let createdRequestId;
+  const reviewerEmails = [];
   transaction(() => {
     createdRequestId = run(
       `INSERT INTO permission_requests (
@@ -333,9 +335,9 @@ router.post('/requests', (req, res) => {
 
     // Notify eligible managers
     const managers = all(
-      `SELECT u.id, u.department_id
+      `SELECT u.id, u.email, u.department_id
        FROM users u
-       WHERE u.is_active = 1 AND u.id != ?`,
+       WHERE u.is_active = 1 AND u.onboarding_status = 'approved' AND u.id != ?`,
       [req.user.id]
     );
 
@@ -362,6 +364,7 @@ router.post('/requests', (req, res) => {
             `يطلب ${req.user.full_name} صلاحية (${perm.name}) — ${actionSummary}.`,
           ]
         );
+        if (m.email) reviewerEmails.push(m.email);
       }
     }
   });
@@ -375,6 +378,26 @@ router.post('/requests', (req, res) => {
     details: `${actionSummary} (${DURATION_LABELS[requestedDuration]})`,
   });
 
+  await sendElhelbEmail({
+    to: reviewerEmails,
+    ccAdmin: true,
+    eventType: 'permission_request',
+    subject: `🔑 طلب صلاحية جديد من (${req.user.full_name}) — ${perm.name}`,
+    badgeText: 'طلب إذن صلاحية مؤقتة',
+    badgeColor: '#0a6fa8',
+    heading: `طلب صلاحية استثنائية من الموظف (${req.user.full_name})`,
+    bodyLines: [
+      `تقدم الموظف بطلب للحصول على صلاحية مؤقتة وينتظر مراجعتك واعتمادك من تبويب "طلبات الصلاحيات".`,
+    ],
+    details: [
+      ['الموظف مقدم الطلب', `${req.user.full_name} (@${req.user.username})`],
+      ['الصلاحية المطلوبة', perm.name],
+      ['العملية المحددة', actionSummary],
+      ['المدة المطلوبة', DURATION_LABELS[requestedDuration]],
+      ['سبب الطلب', reason],
+    ],
+  });
+
   res.status(201).json({
     ok: true,
     id: createdRequestId,
@@ -383,10 +406,11 @@ router.post('/requests', (req, res) => {
 });
 
 // Manager approves or rejects a pending request
-router.post('/requests/:id(\\d+)/review', (req, res) => {
+router.post('/requests/:id(\\d+)/review', async (req, res) => {
   const reqId = Number(req.params.id);
   const reqRow = get(
     `SELECT pr.*, u.department_id AS requester_department_id, u.full_name AS requester_name,
+            u.email AS requester_email,
             p.name AS permission_name
      FROM permission_requests pr
      JOIN users u ON u.id = pr.requester_id
@@ -516,6 +540,35 @@ router.post('/requests/:id(\\d+)/review', (req, res) => {
     details: `للموظف: ${reqRow.requester_name} — ${reqRow.action_summary}${
       decision === 'approved' ? ` (${DURATION_LABELS[approvedDuration]})` : ''
     }`,
+  });
+
+  await sendElhelbEmail({
+    to: reqRow.requester_email ? [reqRow.requester_email] : [],
+    ccAdmin: false,
+    eventType: decision === 'approved' ? 'request_approved' : 'request_rejected',
+    subject:
+      decision === 'approved'
+        ? `✅ تمت الموافقة على طلب صلاحية (${reqRow.permission_name})`
+        : `ℹ️ تحديث بشأن طلب صلاحية (${reqRow.permission_name})`,
+    badgeText: decision === 'approved' ? 'تمت الموافقة' : 'تم الاعتذار عن الطلب',
+    badgeColor: decision === 'approved' ? '#059669' : '#dc2626',
+    heading:
+      decision === 'approved'
+        ? `وافق (${req.user.full_name}) على منحك صلاحية (${reqRow.permission_name})`
+        : `قام (${req.user.full_name}) بمراجعة طلب الصلاحية الخاص بك`,
+    bodyLines: [
+      decision === 'approved'
+        ? `تم تفعيل التصريح على حسابك الآن ويمكنك تنفيذ العملية فوراً.`
+        : `لم تتم الموافقة على هذا الطلب حالياً.`,
+    ],
+    details: [
+      ['الصلاحية', reqRow.permission_name],
+      ['العملية', reqRow.action_summary || '—'],
+      ...(decision === 'approved'
+        ? [['مدة الصلاحية المعتمدة', DURATION_LABELS[approvedDuration]]]
+        : []),
+      ...(reviewNote ? [['ملاحظة المدير', reviewNote]] : []),
+    ],
   });
 
   res.json({ ok: true, status: decision });

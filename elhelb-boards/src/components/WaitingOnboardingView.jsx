@@ -8,6 +8,11 @@ import {
   Users,
   Send,
   ShieldCheck,
+  KeyRound,
+  Eye,
+  EyeOff,
+  ArrowLeft,
+  Edit3,
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { getInitials } from '../constants';
@@ -15,16 +20,37 @@ import { getInitials } from '../constants';
 export default function WaitingOnboardingView({
   user,
   onRefreshMe,
-  onQuickSwitchAccount,
   onLogout,
   showToast,
 }) {
   const [departments, setDepartments] = useState([]);
-  const [demoAccounts, setDemoAccounts] = useState([]);
+
+  // Step 1 state: Create Username & Password
+  const [fullName, setFullName] = useState(user.fullName || '');
+  const [username, setUsername] = useState(user.username || '');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPass, setShowPass] = useState(false);
+  const [savingCreds, setSavingCreds] = useState(false);
+  const [credsError, setCredsError] = useState('');
+  const [editingCreds, setEditingCreds] = useState(false);
+
+  // Step 2 state: Choose Department
   const [prefDeptId, setPrefDeptId] = useState(user.preferredDepartmentId || '');
   const [jobTitle, setJobTitle] = useState(user.jobTitle || '');
-  const [saving, setSaving] = useState(false);
+  const [savingDept, setSavingDept] = useState(false);
+  const [editingDept, setEditingDept] = useState(false);
+
+  // Step 3 state: Waiting room check
   const [checking, setChecking] = useState(false);
+
+  // Determine active step
+  const activeStep =
+    !user.hasCustomCredentials || editingCreds
+      ? 1
+      : !user.departmentConfirmed || editingDept
+      ? 2
+      : 3;
 
   useEffect(() => {
     apiFetch('/api/auth/oauth/providers', { suppressPermissionModal: true })
@@ -37,41 +63,80 @@ export default function WaitingOnboardingView({
         }
       })
       .catch(() => {});
-
-    apiFetch('/api/auth/demo-accounts', { suppressPermissionModal: true })
-      .then((list) => setDemoAccounts(Array.isArray(list) ? list : []))
-      .catch(() => {});
   }, []);
 
-  // Poll automatically every 6 seconds so as soon as the Department Head clicks "ضمه إلى قسمي",
-  // the employee immediately enters their department boards!
+  // Poll automatically when waiting in Step 3 so once Department Head approves, boards open immediately!
   useEffect(() => {
+    if (activeStep !== 3) return undefined;
     const timer = setInterval(() => {
       onRefreshMe();
     }, 6000);
     return () => clearInterval(timer);
-  }, [onRefreshMe]);
+  }, [activeStep, onRefreshMe]);
 
-  async function handleSavePreference(e) {
+  async function handleSaveCredentials(e) {
     e.preventDefault();
-    setSaving(true);
+    setCredsError('');
+
+    if (password !== confirmPassword) {
+      setCredsError('كلمتا المرور غير متطابقتين، يرجى التأكد من كتابتهما بشكل متطابق');
+      return;
+    }
+    if (password.length < 4) {
+      setCredsError('كلمة المرور يجب ألا تقل عن 4 أحرف أو أرقام');
+      return;
+    }
+
+    setSavingCreds(true);
+    try {
+      await apiFetch('/api/onboarding/setup-credentials', {
+        method: 'POST',
+        body: {
+          username: username.trim().toLowerCase(),
+          password,
+          fullName: fullName.trim(),
+        },
+      });
+      setEditingCreds(false);
+      setPassword('');
+      setConfirmPassword('');
+      await onRefreshMe();
+      showToast(
+        'تم إنشاء اسم المستخدم وكلمة المرور بنجاح! اختر الآن القسم الذي تعمل به.',
+        'success'
+      );
+    } catch (err) {
+      setCredsError(err.message || 'تعذر حفظ اسم المستخدم وكلمة المرور');
+    } finally {
+      setSavingCreds(false);
+    }
+  }
+
+  async function handleSaveDepartment(e) {
+    e.preventDefault();
+    if (!prefDeptId) {
+      showToast('يرجى اختيار القسم الذي تعمل به', 'error');
+      return;
+    }
+    setSavingDept(true);
     try {
       await apiFetch('/api/onboarding/my-preference', {
         method: 'PATCH',
         body: {
-          preferredDepartmentId: prefDeptId ? Number(prefDeptId) : null,
+          preferredDepartmentId: Number(prefDeptId),
           jobTitle,
         },
       });
+      setEditingDept(false);
       await onRefreshMe();
       showToast(
-        'تم حفظ قسمك وإرسال إشعار فوري إلى رئيس القسم لإضافتك!',
+        'تم تسجيل قسمك وإرسال إشعار فوري إلى رئيس القسم وبريد الإدارة!',
         'success'
       );
     } catch (err) {
       showToast(err.message || 'تعذر حفظ القسم', 'error');
     } finally {
-      setSaving(false);
+      setSavingDept(false);
     }
   }
 
@@ -90,21 +155,19 @@ export default function WaitingOnboardingView({
   }
 
   const providerLabel =
-    user.authProvider === 'facebook'
-      ? 'Facebook'
-      : user.authProvider === 'google'
-      ? 'Google'
-      : 'الشركة';
+    user.authProvider === 'google'
+      ? 'حساب Google الموثق'
+      : 'البريد الإلكتروني المؤكد';
 
   return (
     <div className="app-shell">
       <header className="top-navbar">
         <div className="nav-right">
           <div className="nav-brand" style={{ cursor: 'default' }}>
-            <img src="/logo.png" alt="ELHELB GROUP" />
+            <img src="/logo.gif" alt="ELHELB GROUP" />
             <div>
               <div className="nav-brand-title">ELHELB GROUP</div>
-              <div className="nav-brand-sub">بوابة ضم الموظفين للأقسام</div>
+              <div className="nav-brand-sub">إعداد حساب الموظف وتحديد القسم</div>
             </div>
           </div>
         </div>
@@ -117,7 +180,7 @@ export default function WaitingOnboardingView({
             <div style={{ lineHeight: 1.25 }}>
               <div style={{ fontSize: 12.5, fontWeight: 800 }}>{user.fullName}</div>
               <div style={{ fontSize: 10.5, color: '#fde68a', fontWeight: 700 }}>
-                مسجل عبر {providerLabel} • بانتظار رئيس القسم
+                {providerLabel}
               </div>
             </div>
           </div>
@@ -129,180 +192,473 @@ export default function WaitingOnboardingView({
         </div>
       </header>
 
-      <div className="page-container" style={{ maxWidth: 820, marginTop: 24 }}>
+      <div className="page-container" style={{ maxWidth: 850, marginTop: 22 }}>
+        {/* 3-Step Visual Stepper */}
         <div
-          className="card-box"
           style={{
-            padding: 28,
-            borderTop: '4px solid #d4a90a',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 1fr)',
+            gap: 10,
+            marginBottom: 20,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
-            <div
-              style={{
-                width: 58,
-                height: 58,
-                borderRadius: 16,
-                background: '#fffbeb',
-                border: '1px solid #fde68a',
-                color: '#d97706',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-              }}
-            >
-              <Clock size={30} />
-            </div>
-
-            <div style={{ flex: 1, minWidth: 250 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span
-                  className="badge"
-                  style={{
-                    background: user.authProvider === 'facebook' ? '#1877f2' : '#ea4335',
-                    color: '#fff',
-                  }}
-                >
-                  تم التحقق عبر {providerLabel}
-                </span>
-                {user.email && (
-                  <span className="badge" style={{ background: '#f1f5f9', color: '#334155' }} dir="ltr">
-                    {user.email}
+          {[
+            { num: 1, title: '1. إنشاء اسم وباسورد', done: user.hasCustomCredentials && activeStep > 1 },
+            { num: 2, title: '2. تحديد القسم بالشركة', done: user.departmentConfirmed && activeStep > 2 },
+            { num: 3, title: '3. اعتماد رئيس القسم', done: false },
+          ].map((st) => {
+            const isCurrent = activeStep === st.num;
+            return (
+              <div
+                key={st.num}
+                style={{
+                  padding: '12px 14px',
+                  borderRadius: 12,
+                  background: isCurrent
+                    ? '#0b2545'
+                    : st.done
+                    ? '#ecfdf5'
+                    : '#ffffff',
+                  color: isCurrent ? '#ffffff' : st.done ? '#065f46' : '#64748b',
+                  border: isCurrent
+                    ? '2px solid #d4a90a'
+                    : st.done
+                    ? '1px solid #6ee7b7'
+                    : '1px solid #e2e8f0',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  fontWeight: 800,
+                  fontSize: 13,
+                }}
+              >
+                {st.done ? (
+                  <CheckCircle2 size={17} color="#059669" />
+                ) : (
+                  <span
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: '50%',
+                      background: isCurrent ? '#d4a90a' : '#e2e8f0',
+                      color: isCurrent ? '#0b2545' : '#475569',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 12,
+                      fontWeight: 900,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {st.num}
                   </span>
                 )}
+                <span>{st.title}</span>
               </div>
+            );
+          })}
+        </div>
 
-              <h2 style={{ margin: '10px 0 6px', fontSize: 22, fontWeight: 900, color: '#0b2545' }}>
-                أهلاً بك يا {user.fullName} في منصة مجموعة الهلب!
-              </h2>
-              <p style={{ margin: 0, fontSize: 14, color: '#475569', lineHeight: 1.75 }}>
-                تم إنشاء حسابك باسمك الحقيقي بنجاح. حفاظاً على سرية لوحات كل قسم، حسابك الآن في{' '}
-                <strong>غرفة انتظار التسكين</strong> حتى يقوم <strong>رئيس القسم</strong> التابع له
-                (أو إدارة الـ IT) بإضافتك إلى قسمك بضغطة واحدة.
-              </p>
-            </div>
-          </div>
-
-          <form
-            onSubmit={handleSavePreference}
-            style={{
-              marginTop: 22,
-              padding: 18,
-              borderRadius: 12,
-              background: '#f8fafc',
-              border: '1px solid #e2e8f0',
-            }}
-          >
-            <div style={{ fontWeight: 800, fontSize: 14.5, color: '#0b2545', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 7 }}>
-              <Building2 size={17} color="#0a6fa8" />
-              حدد القسم الذي تعمل به ليظهر اسمك فوراً أمام رئيس القسم:
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 12 }}>
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">القسم التابع له بالشركة</label>
-                <select
-                  className="form-select"
-                  value={prefDeptId}
-                  onChange={(e) => setPrefDeptId(e.target.value)}
-                  required
-                >
-                  <option value="">-- اختر القسم --</option>
-                  {departments.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
+        {/* ============================================================
+            STEP 1: CREATE USERNAME & PASSWORD PAGE
+           ============================================================ */}
+        {activeStep === 1 && (
+          <div className="card-box" style={{ padding: 28, borderTop: '4px solid #0a6fa8' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18 }}>
+              <div
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 14,
+                  background: '#eff6ff',
+                  color: '#0a6fa8',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <KeyRound size={26} />
               </div>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span
+                    className="badge"
+                    style={{
+                      background: '#15803d',
+                      color: '#fff',
+                    }}
+                  >
+                    تم تأكيد البريد الإلكتروني بنجاح ✓
+                  </span>
+                  {user.email && (
+                    <span className="badge" style={{ background: '#f1f5f9', color: '#334155' }} dir="ltr">
+                      {user.email}
+                    </span>
+                  )}
+                </div>
+                <h2 style={{ margin: '8px 0 4px', fontSize: 21, fontWeight: 900, color: '#0b2545' }}>
+                  أنشئ اسم المستخدم وكلمة المرور الخاصة بك
+                </h2>
+                <p style={{ margin: 0, fontSize: 13.5, color: '#475569' }}>
+                  اختر اسم مستخدم وكلمة مرور ليسهل عليك الدخول مباشرة إلى المنصة في أي وقت، ثم انتقل لتحديد القسم الذي تعمل به.
+                </p>
+              </div>
+            </div>
 
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">المسمى الوظيفي (اختياري)</label>
+            <form onSubmit={handleSaveCredentials}>
+              <div className="form-group">
+                <label className="form-label">الاسم الكامل للموظف (كما يظهر لرئيس القسم) *</label>
                 <input
                   type="text"
                   className="form-input"
-                  placeholder="مثال: أخصائي تصدير / مسؤول تسجيل منتجات"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">
+                  اسم المستخدم للدخول (حروف إنجليزية أو أرقام بدون مسافات) *
+                </label>
+                <input
+                  type="text"
+                  className="form-input"
+                  dir="ltr"
+                  style={{ textAlign: 'left', fontWeight: 800, fontFamily: 'monospace' }}
+                  placeholder="مثال: ahmed.ali"
+                  value={username}
+                  onChange={(e) =>
+                    setUsername(e.target.value.replace(/\s+/g, '').toLowerCase())
+                  }
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                <div className="form-group">
+                  <label className="form-label">كلمة المرور الجديدة *</label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type={showPass ? 'text' : 'password'}
+                      className="form-input"
+                      dir="ltr"
+                      style={{ textAlign: 'left', paddingRight: 38 }}
+                      placeholder="4 أحرف أو أرقام على الأقل"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPass((s) => !s)}
+                      style={{
+                        position: 'absolute',
+                        right: 8,
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#64748b',
+                      }}
+                    >
+                      {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">تأكيد كلمة المرور *</label>
+                  <input
+                    type={showPass ? 'text' : 'password'}
+                    className="form-input"
+                    dir="ltr"
+                    style={{ textAlign: 'left' }}
+                    placeholder="أعد كتابة كلمة المرور"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              {credsError && (
+                <div
+                  style={{
+                    background: '#fee2e2',
+                    color: '#b91c1c',
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    fontSize: 13,
+                    fontWeight: 700,
+                    marginBottom: 14,
+                    border: '1px solid #fecaca',
+                  }}
+                >
+                  {credsError}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 10 }}>
+                {editingCreds && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setEditingCreds(false)}
+                  >
+                    إلغاء
+                  </button>
+                )}
+                <button type="submit" className="btn btn-primary" disabled={savingCreds}>
+                  <span>{savingCreds ? 'جاري الحفظ...' : 'حفظ والمتابعة لاختيار القسم'}</span>
+                  <ArrowLeft size={16} />
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* ============================================================
+            STEP 2: CHOOSE YOUR DEPARTMENT PAGE
+           ============================================================ */}
+        {activeStep === 2 && (
+          <div className="card-box" style={{ padding: 28, borderTop: '4px solid #059669' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18 }}>
+              <div
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 14,
+                  background: '#ecfdf5',
+                  color: '#059669',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <Building2 size={26} />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 800, color: '#059669' }}>
+                  تم حفظ اسم المستخدم (@{user.username}) بنجاح ✅
+                </div>
+                <h2 style={{ margin: '4px 0', fontSize: 21, fontWeight: 900, color: '#0b2545' }}>
+                  اختر القسم الذي تعمل به في مجموعة الهلب
+                </h2>
+                <p style={{ margin: 0, fontSize: 13.5, color: '#475569' }}>
+                  حدد قسمك بالأسفل ليصل إشعار فوري إلى <strong>رئيس القسم</strong> وبريد الإدارة لإضافتك إلى لوحات عمل قسمك.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveDepartment}>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                  gap: 10,
+                  marginBottom: 18,
+                }}
+              >
+                {departments.map((d) => {
+                  const selected = Number(prefDeptId) === Number(d.id);
+                  return (
+                    <button
+                      key={d.id}
+                      type="button"
+                      onClick={() => setPrefDeptId(d.id)}
+                      style={{
+                        textAlign: 'right',
+                        padding: '13px 14px',
+                        borderRadius: 12,
+                        border: selected
+                          ? `2.5px solid ${d.color || '#0a6fa8'}`
+                          : '1px solid #cbd5e1',
+                        background: selected ? '#f0f9ff' : '#ffffff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                        <span
+                          style={{
+                            width: 12,
+                            height: 12,
+                            borderRadius: '50%',
+                            background: d.color || '#0a6fa8',
+                            flexShrink: 0,
+                          }}
+                        />
+                        <span style={{ fontWeight: 800, fontSize: 13.5, color: '#0f172a' }}>
+                          {d.name}
+                        </span>
+                      </div>
+                      {selected && <CheckCircle2 size={17} color={d.color || '#0a6fa8'} />}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">المسمى الوظيفي داخل القسم (اختياري)</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="مثال: أخصائي تصدير دولي / مسؤول تسجيل منتجات"
                   value={jobTitle}
                   onChange={(e) => setJobTitle(e.target.value)}
                 />
               </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: 10,
+                  marginTop: 14,
+                }}
+              >
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setEditingCreds(true)}
+                >
+                  <Edit3 size={14} />
+                  تعديل اسم المستخدم / الباسورد
+                </button>
+
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{ background: '#059669', borderColor: '#059669' }}
+                  disabled={savingDept}
+                >
+                  <Send size={15} />
+                  {savingDept ? 'جاري إرسال الطلب...' : 'تأكيد القسم وإبلاغ رئيس القسم'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* ============================================================
+            STEP 3: WAITING FOR DEPARTMENT HEAD APPROVAL
+           ============================================================ */}
+        {activeStep === 3 && (
+          <div className="card-box" style={{ padding: 28, borderTop: '4px solid #d4a90a' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
+              <div
+                style={{
+                  width: 56,
+                  height: 56,
+                  borderRadius: 16,
+                  background: '#fffbeb',
+                  border: '1px solid #fde68a',
+                  color: '#d97706',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <Clock size={28} />
+              </div>
+
+              <div style={{ flex: 1, minWidth: 250 }}>
+                <h2 style={{ margin: '0 0 6px', fontSize: 21, fontWeight: 900, color: '#0b2545' }}>
+                  تم إرسال طلبك بنجاح يا {user.fullName}!
+                </h2>
+                <p style={{ margin: 0, fontSize: 14, color: '#475569', lineHeight: 1.75 }}>
+                  تم حفظ بيانات دخولك وإرسال إشعار فوري إلى <strong>رئيس القسم</strong> وبريد الإدارة. بمجرد ضغطة الاعتماد من رئيس القسم ستُفتح لك لوحات عمل قسمك تلقائياً.
+                </p>
+
+                <div
+                  style={{
+                    marginTop: 16,
+                    padding: 14,
+                    borderRadius: 12,
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                    gap: 10,
+                    fontSize: 13,
+                  }}
+                >
+                  <div>
+                    <span style={{ color: '#64748b' }}>اسم المستخدم الخاص بك: </span>
+                    <strong dir="ltr">@{user.username}</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: '#64748b' }}>القسم المطلوب: </span>
+                    <strong style={{ color: '#0a6fa8' }}>
+                      {user.preferredDepartmentName || 'قيد التحديد'}
+                    </strong>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    marginTop: 16,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setEditingDept(true)}
+                    >
+                      <Building2 size={14} />
+                      تغيير القسم المختار
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => setEditingCreds(true)}
+                    >
+                      <KeyRound size={14} />
+                      تعديل اسم المستخدم / الباسورد
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={handleCheckNow}
+                    disabled={checking}
+                  >
+                    <RefreshCw size={14} />
+                    {checking ? 'جاري التحقق...' : 'تحديث الحالة الآن'}
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div
               style={{
-                marginTop: 14,
+                marginTop: 16,
+                fontSize: 12,
+                color: '#64748b',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-                gap: 10,
+                gap: 6,
               }}
             >
-              <div style={{ fontSize: 12.5, color: '#059669', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <CheckCircle2 size={15} />
-                {user.preferredDepartmentName
-                  ? `طلبك موجه حالياً إلى: (${user.preferredDepartmentName})`
-                  : 'اختر قسمك واضغط حفظ لإشعار رئيس القسم'}
-              </div>
-
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={handleCheckNow}
-                  disabled={checking}
-                >
-                  <RefreshCw size={14} />
-                  {checking ? 'جاري التحقق...' : 'تحديث الحالة الآن'}
-                </button>
-                <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>
-                  <Send size={14} />
-                  {saving ? 'جاري الإرسال...' : 'حفظ وإبلاغ رئيس القسم'}
-                </button>
-              </div>
-            </div>
-          </form>
-
-          <div
-            style={{
-              marginTop: 16,
-              fontSize: 12.5,
-              color: '#64748b',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
-          >
-            <ShieldCheck size={15} color="#0a6fa8" />
-            تتحدث هذه الصفحة تلقائياً كل بضع ثوانٍ، وبمجرد موافقة رئيس القسم ستفتح لك لوحات قسمك مباشرة دون الحاجة لإعادة تسجيل الدخول.
-          </div>
-        </div>
-
-        {/* Helpful Manager Quick-Switch Box for testing the approval flow live! */}
-        {demoAccounts.length > 0 && (
-          <div className="card-box" style={{ marginTop: 18, padding: 18 }}>
-            <div style={{ fontWeight: 800, fontSize: 13.5, color: '#0b2545', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Users size={16} color="#0a6fa8" />
-              لتجربة خطوة الاعتماد الآن: انتقل بضغطة واحدة إلى حساب رئيس القسم أو الـ IT لضم هذا الموظف:
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {demoAccounts
-                .filter((a) =>
-                  ['chairman', 'it_mgr', 'export_mgr', 'reg_mgr', 'sales_mgr', 'media_mgr'].includes(
-                    a.username
-                  )
-                )
-                .map((acc) => (
-                  <button
-                    key={acc.username}
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => onQuickSwitchAccount(acc.username, acc.demoPassword)}
-                  >
-                    الدخول كـ {acc.fullName} ({acc.roleName})
-                  </button>
-                ))}
+              <ShieldCheck size={15} color="#0a6fa8" />
+              يمكنك الآن تسجيل الدخول مستقبلاً سواء عبر {providerLabel} أو مباشرة باسم المستخدم{' '}
+              <strong dir="ltr">@{user.username}</strong> وكلمة المرور التي اخترتها.
             </div>
           </div>
         )}

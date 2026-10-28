@@ -12,24 +12,6 @@ const {
 
 const router = express.Router();
 
-const DEMO_PASSWORDS = {
-  chairman: '123456',
-  admin: '123456',
-  it_mgr: '123456',
-  export_mgr: '123456',
-  reg_mgr: '123456',
-  sales_mgr: '123456',
-  media_mgr: '123456',
-  proc_mgr: '123456',
-  export_emp: '123456',
-  reg_emp: '123456',
-  sales_lead: '123456',
-  sales_emp: '123456',
-  sales_viewer: '123456',
-  media_emp: '123456',
-  hr_emp: '123456',
-};
-
 function countReviewablePendingRequests(user) {
   if (!user.permissionSet || user.onboarding_status === 'pending') return 0;
   if (user.permissionSet.has('requests.review_all')) {
@@ -90,6 +72,9 @@ function serializeCurrentUser(user) {
     avatarColor: user.avatar_color,
     avatarUrl: user.avatar_url || null,
     authProvider: user.auth_provider || 'local',
+    emailVerified: user.email_verified !== 0,
+    hasCustomCredentials: Boolean(user.has_custom_credentials),
+    departmentConfirmed: Boolean(user.department_confirmed),
     onboardingStatus: user.onboarding_status || 'approved',
     preferredDepartmentId: user.preferred_department_id || null,
     preferredDepartmentName: user.preferred_department_name || null,
@@ -112,37 +97,6 @@ function serializeCurrentUser(user) {
     pendingOnboardingCount: countPendingOnboardingUsers(user),
   };
 }
-
-// List demo accounts (for quick evaluation & testing across roles/departments)
-router.get('/demo-accounts', (req, res) => {
-  const users = all(
-    `SELECT u.id, u.username, u.full_name, u.job_title, u.avatar_color,
-            r.slug AS role_slug, r.name AS role_name, r.color AS role_color, r.rank_level,
-            d.name AS department_name, d.color AS department_color
-     FROM users u
-     JOIN roles r ON r.id = u.role_id
-     LEFT JOIN departments d ON d.id = u.department_id
-     WHERE u.is_active = 1 AND u.onboarding_status = 'approved'
-     ORDER BY r.rank_level DESC, u.id ASC`
-  );
-  res.json(
-    users
-      .filter((u) => DEMO_PASSWORDS[u.username])
-      .map((u) => ({
-        username: u.username,
-        demoPassword: DEMO_PASSWORDS[u.username],
-        fullName: u.full_name,
-        jobTitle: u.job_title,
-        avatarColor: u.avatar_color,
-        roleSlug: u.role_slug,
-        roleName: u.role_name,
-        roleColor: u.role_color,
-        roleRank: u.rank_level,
-        departmentName: u.department_name || 'جميع الأقسام (مجلس الإدارة والإدارة العليا)',
-        departmentColor: u.department_color || '#92400e',
-      }))
-  );
-});
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -189,7 +143,7 @@ router.post('/login', loginLimiter, async (req, res) => {
 
     if (!row.password_hash) {
       return res.status(400).json({
-        error: 'هذا الحساب مسجل عبر Google أو Facebook — يرجى تسجيل الدخول عبر الزر المخصص بالأسفل',
+        error: 'لم يتم استكمال إنشاء كلمة المرور لهذا الحساب بعد — يرجى المتابعة من تبويب تسجيل موظف جديد وتأكيد البريد الإلكتروني',
       });
     }
 
@@ -266,4 +220,5 @@ router.post('/notifications/read-all', authenticate, (req, res) => {
   res.json({ ok: true });
 });
 
+router.serializeCurrentUser = serializeCurrentUser;
 module.exports = router;
