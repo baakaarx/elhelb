@@ -6,10 +6,11 @@
     document.currentScript ||
     document.querySelector('script[src*="widget.js"]');
 
-  var scriptSrc = currentScript ? currentScript.src : window.location.origin + '/widget.js';
+  var scriptSrc = currentScript ? currentScript.src : window.location.href;
   var baseUrl = '';
   try {
-    baseUrl = new URL(scriptSrc, window.location.href).origin;
+    var fullUrl = new URL(scriptSrc, window.location.href).href;
+    baseUrl = fullUrl.replace(/\/widget\.js(?:\?.*)?$/i, '').replace(/\/+$/, '');
   } catch (e) {
     baseUrl = window.location.origin;
   }

@@ -41,7 +41,7 @@ export default function App() {
       <header className="chatbot-header">
         <div className="chatbot-header-inner">
           <div className="brand-identity">
-            <img src="/logo.png" alt="ELHELB GROUP" className="brand-crest" />
+            <img src="./logo.png" alt="ELHELB GROUP" className="brand-crest" />
             <div>
               <div className="brand-name">ELHELB GROUP</div>
               <div className="brand-tagline">المساعد الذكي والعيادة الزراعية</div>

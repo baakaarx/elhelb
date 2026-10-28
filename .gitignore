@@ -11,5 +11,4 @@ elhelb-llm/data/*.db-wal
 elhelb-llm/data/.vault.key
 elhelb-llm/data/.admin.key
 elhelb-llm/data/tessdata/
-elhelb-llm/public/
 

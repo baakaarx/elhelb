@@ -384,7 +384,7 @@ export default function ChatView({
           {messages.length === 0 ? (
             <div className="welcome-hero">
               <div className="welcome-logo-badge">
-                <img src="/logo.png" alt="ELHELB GROUP" />
+                <img src="./logo.png" alt="ELHELB GROUP" />
               </div>
 
               <h1 className="welcome-title">أهلاً بك في المساعد الذكي لمجموعة الهلب</h1>
@@ -429,7 +429,7 @@ export default function ChatView({
                     <div className={`chat-turn ${m.role}`}>
                       {m.role === 'assistant' && (
                         <div className="bot-avatar">
-                          <img src="/logo.png" alt="ELHELB" />
+                          <img src="./logo.png" alt="ELHELB" />
                         </div>
                       )}
 
@@ -491,7 +491,7 @@ export default function ChatView({
               {loading && (
                 <div className="chat-turn assistant">
                   <div className="bot-avatar">
-                    <img src="/logo.png" alt="ELHELB" />
+                    <img src="./logo.png" alt="ELHELB" />
                   </div>
                   <div className="turn-bubble typing-bubble">
                     <Sparkles size={16} />
@@ -611,7 +611,7 @@ export default function ChatView({
               <div className="orb-ring ring-1" />
               <div className="orb-ring ring-2" />
               <div className="voice-orb-core">
-                <img src="/logo.png" alt="ELHELB GROUP" />
+                <img src="./logo.png" alt="ELHELB GROUP" />
               </div>
             </div>
 
