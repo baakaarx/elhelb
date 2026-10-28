@@ -8,6 +8,7 @@
     "start": "node --no-warnings server/index.js",
     "build": "vite build",
     "dev": "vite",
+    "live": "node deploy/live-watch.js",
     "test": "node --no-warnings tests/security.test.js"
   },
   "engines": {

@@ -123,6 +123,16 @@ export default function AdminControlView({ user, onRefreshMe, showToast }) {
               سجل المراقبة الأمنية (Audit)
             </button>
           )}
+          {user.roleSlug === 'chairman' && (
+            <button
+              type="button"
+              className={`btn btn-sm ${subTab === 'backup' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setSubTab('backup')}
+            >
+              <Database size={15} />
+              نسخ ونقل الداتا للسيرفر
+            </button>
+          )}
         </div>
       </div>
 
@@ -138,6 +148,9 @@ export default function AdminControlView({ user, onRefreshMe, showToast }) {
       {subTab === 'gmail' && canRoles && <GmailSettingsPanel showToast={showToast} />}
       {subTab === 'oauth' && canRoles && <OAuthSettingsPanel showToast={showToast} />}
       {subTab === 'audit' && canAudit && <AuditLogsPanel showToast={showToast} />}
+      {subTab === 'backup' && user.roleSlug === 'chairman' && (
+        <SovereignBackupPanel onRefreshMe={onRefreshMe} showToast={showToast} />
+      )}
     </div>
   );
 }
@@ -2004,3 +2017,141 @@ function AuditLogsPanel({ showToast }) {
     </div>
   );
 }
+
+/* ==========================================
+   7. SOVEREIGN DATA BACKUP & SERVER MIGRATION (رئيس مجلس الإدارة فقط)
+   ========================================== */
+function SovereignBackupPanel({ onRefreshMe, showToast }) {
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+
+  async function handleExportBackup() {
+    setExporting(true);
+    try {
+      const res = await apiFetch('/api/admin/backup/export');
+      const blob = new Blob([JSON.stringify(res.snapshot, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      a.href = url;
+      a.download = `elhelb-boards-backup-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('تم تحميل النسخة الاحتياطية الكاملة بنجاح إلى جهازك', 'success');
+    } catch (err) {
+      showToast(err.message || 'تعذر تصدير النسخة الاحتياطية', 'error');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function handleImportFile(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setImporting(true);
+    try {
+      const rawText = await file.text();
+      const parsed = JSON.parse(rawText);
+      const res = await apiFetch('/api/admin/backup/import', {
+        method: 'POST',
+        body: { snapshot: parsed.snapshot || parsed },
+      });
+      await onRefreshMe();
+      showToast(res.message || 'تم استعادة كافة بيانات الشركة بنجاح', 'success');
+    } catch (err) {
+      showToast(err.message || 'تأكد من صحة ملف النسخة الاحتياطية (.json)', 'error');
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <div className="card-box">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <Crown size={20} color="#d4a90a" />
+        <h3 style={{ margin: 0, fontSize: 17, fontWeight: 900, color: '#071e14' }}>
+          النسخ الاحتياطي الكامل ونقل بيانات الشركة إلى السيرفر (حصري لرئيس مجلس الإدارة)
+        </h3>
+      </div>
+      <p style={{ margin: '0 0 18px', fontSize: 13.5, color: '#475569', lineHeight: 1.7 }}>
+        يمكنك من هنا تحميل ملف يحتوي على جميع حسابات الموظفين، الأقسام، مصفوفة الصلاحيات، لوحات العمل، القوائم، الكروت، والتعليقات بضغطة واحدة، ورفعه في أي وقت على السيرفر الجديد دون فقدان أي بيان.
+      </p>
+
+      <div className="form-grid-2" style={{ gap: 16 }}>
+        <div
+          style={{
+            padding: 18,
+            borderRadius: 14,
+            border: '1px solid #cbd5e1',
+            background: '#f8fafc',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            gap: 14,
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 900, fontSize: 15, color: '#0f172a', marginBottom: 4 }}>
+              1️⃣ تحميل نسخة احتياطية كاملة (.json)
+            </div>
+            <div style={{ fontSize: 12.5, color: '#64748b' }}>
+              يحفظ نسخة فورية من قاعدة البيانات بالكامل على جهازك للاحتفاظ بها أو نقلها للسيرفر.
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleExportBackup}
+            disabled={exporting}
+          >
+            <Save size={16} />
+            {exporting ? 'جاري تجهيز النسخة...' : 'تحميل النسخة الاحتياطية الآن'}
+          </button>
+        </div>
+
+        <div
+          style={{
+            padding: 18,
+            borderRadius: 14,
+            border: '1px solid #cbd5e1',
+            background: '#f8fafc',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            gap: 14,
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 900, fontSize: 15, color: '#0f172a', marginBottom: 4 }}>
+              2️⃣ استعادة / رفع نسخة احتياطية على السيرفر
+            </div>
+            <div style={{ fontSize: 12.5, color: '#64748b' }}>
+              ارفع ملف النسخة الاحتياطية هنا لنقل كل الموظفين واللوحات والمهام فوراً إلى السيرفر.
+            </div>
+          </div>
+          <label
+            className="btn btn-secondary"
+            style={{ cursor: importing ? 'wait' : 'pointer', justifyContent: 'center' }}
+          >
+            <Plus size={16} />
+            {importing ? 'جاري استعادة البيانات...' : 'اختيار ملف النسخة واستعادته'}
+            <input
+              type="file"
+              accept=".json,application/json"
+              style={{ display: 'none' }}
+              disabled={importing}
+              onChange={handleImportFile}
+            />
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+

@@ -1,6 +1,16 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { get, all, run, transaction, getSetting, setSetting } = require('../db');
+const {
+  get,
+  all,
+  run,
+  transaction,
+  getSetting,
+  setSetting,
+  exportDatabaseSnapshot,
+  importDatabaseSnapshot,
+} = require('../db');
+const { seedIfNeeded } = require('../seed');
 const {
   authenticate,
   evaluatePermission,
@@ -1072,6 +1082,80 @@ router.get('/audit-logs', (req, res) => {
   `;
 
   res.json(all(sql, params));
+});
+
+// ==========================================
+// SOVEREIGN DATA BACKUP EXPORT & RESTORE (رئيس مجلس الإدارة فقط)
+// ==========================================
+router.get('/backup/export', (req, res) => {
+  if (req.user.role_slug !== 'chairman') {
+    return res.status(403).json({
+      error: 'تصدير واستعادة النسخة الاحتياطية الكاملة مخصص لحساب رئيس مجلس الإدارة فقط',
+    });
+  }
+
+  const snapshot = exportDatabaseSnapshot();
+  writeAudit({
+    user: req.user,
+    action: 'تصدير نسخة احتياطية كاملة لقاعدة بيانات المنصة',
+    status: 'ALLOWED',
+    req,
+  });
+
+  res.json({
+    ok: true,
+    snapshot,
+  });
+});
+
+router.post('/backup/import', (req, res) => {
+  if (req.user.role_slug !== 'chairman') {
+    return res.status(403).json({
+      error: 'استعادة النسخة الاحتياطية الكاملة مخصص لحساب رئيس مجلس الإدارة فقط',
+    });
+  }
+
+  const snapshot = req.body && (req.body.snapshot || req.body);
+  if (
+    !snapshot ||
+    typeof snapshot !== 'object' ||
+    !snapshot.tables ||
+    !Array.isArray(snapshot.tables.users) ||
+    !Array.isArray(snapshot.tables.roles)
+  ) {
+    return res.status(400).json({
+      error: 'ملف النسخة الاحتياطية غير صالح — يرجى رفع ملف JSON المستخرج من المنصة',
+    });
+  }
+
+  const chairmanRole = snapshot.tables.roles.find((r) => r.slug === 'chairman');
+  const hasChairmanUser =
+    chairmanRole &&
+    snapshot.tables.users.some(
+      (u) => Number(u.role_id) === Number(chairmanRole.id) && Number(u.is_active) !== 0
+    );
+
+  if (!hasChairmanUser) {
+    return res.status(400).json({
+      error: 'رفض أمني: النسخة المرفوعة لا تحتوي على حساب رئيس مجلس الإدارة المفعل',
+    });
+  }
+
+  importDatabaseSnapshot(snapshot);
+  seedIfNeeded();
+
+  writeAudit({
+    user: req.user,
+    action: 'استعادة نسخة احتياطية كاملة لقاعدة بيانات المنصة',
+    status: 'ALLOWED',
+    req,
+    details: `عدد المستخدمين: ${snapshot.tables.users.length} — عدد اللوحات: ${(snapshot.tables.boards || []).length}`,
+  });
+
+  res.json({
+    ok: true,
+    message: 'تم استعادة كافة بيانات الشركة والموظفين واللوحات بنجاح 100%',
+  });
 });
 
 router.deleteUserCompletely = deleteUserCompletely;

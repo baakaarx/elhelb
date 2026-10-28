@@ -867,7 +867,28 @@ async function main() {
       mockBlobServer.close();
     }
 
-    console.log('\n✅ ALL 11 PRODUCTION v11 TESTS (CLOUD PERSISTENCE, SESSION ISOLATION, HR ONBOARDING, DELETION & RBAC) PASSED 100%!');
+    console.log('1️⃣2️⃣ Testing Sovereign Chairman-Only Server Backup Export & Restore...');
+    assert.equal((await api('GET', '/api/admin/backup/export', hrTok)).status, 403);
+    assert.equal((await api('GET', '/api/admin/backup/export', itMgrTok)).status, 403);
+
+    const exported = await api('GET', '/api/admin/backup/export', chairmanTok);
+    assert.equal(exported.status, 200);
+    assert.ok(Array.isArray(exported.data.snapshot?.tables?.users));
+
+    // Reject corrupt snapshot missing chairman
+    const badSnap = { tables: { users: [], roles: exported.data.snapshot.tables.roles } };
+    assert.equal(
+      (await api('POST', '/api/admin/backup/import', chairmanTok, { snapshot: badSnap })).status,
+      400
+    );
+
+    const imported = await api('POST', '/api/admin/backup/import', chairmanTok, {
+      snapshot: exported.data.snapshot,
+    });
+    assert.equal(imported.status, 200);
+    assert.equal((await api('POST', '/api/auth/login', null, { username: 'mo.ai', password: '010228513849' })).status, 200);
+
+    console.log('\n✅ ALL 12 PRODUCTION v12 TESTS (SERVER MIGRATION BACKUP, CLOUD PERSISTENCE, SESSION ISOLATION & RBAC) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}
