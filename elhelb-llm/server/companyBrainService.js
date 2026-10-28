@@ -58,14 +58,12 @@ async function processCompanyQuery({
     ).reverse();
 
   // 1) فهم كلام الناس باللهجة الطبيعية وسياق المحادثة المستمر (بدون صورة)
-  const nlu = !imageInput
-    ? analyzeHumanIntent(cleanMessage, historyRows)
-    : {
-        handledDirectly: false,
-        colloquialRule: null,
-        expandedSearchTerms: cleanMessage,
-        suggestions: ['إيه طريقة الاستخدام الموصى بها؟', 'عاوز أسأل عن آفة تانية'],
-      };
+  const nlu = analyzeHumanIntent(cleanMessage, historyRows);
+  if (imageInput && nlu.handledDirectly) {
+    // نص المستخدم جزء من التشخيص البصري، ولا نُسقطه لمجرد إرفاق صورة.
+    nlu.handledDirectly = false;
+    nlu.expandedSearchTerms = cleanMessage;
+  }
 
   // إذا كان حواراً بشرياً مباشراً (تحية، شكر، طلب مساعدة عامة، تشخيص تفاعلي خطوة بخطوة)
   if (nlu.handledDirectly && !imageInput) {
@@ -169,9 +167,9 @@ async function processCompanyQuery({
   if (visionReport?.plantAnalysis?.isPlantPhoto && !visionReport?.ocr?.hasReadableText) {
     if (visionReport.plantAnalysis.plantCondition === 'blight_or_leaf_spot') {
       suggestions = [
-        'أيوه المحصول بطاطس، أكرر الرش كل كام يوم؟',
-        'إيه أهم نصائح الرش السليم للندوة؟',
-        'إزاي أتواصل لطلب تازولين ودودجو؟',
+        'المحصول بطاطس، ما الاحتمالات الأقرب؟',
+        'المحصول طماطم، هل يختلف التشخيص؟',
+        'كيف أميّز الندوة عن التبقع؟',
       ];
     } else {
       suggestions = [

@@ -176,7 +176,7 @@
     var iframe = document.createElement('iframe');
     iframe.className = 'elh-iframe';
     iframe.title = 'المساعد الذكي لمجموعة الهلب — ELHELB GROUP AI';
-    iframe.setAttribute('allow', 'microphone; clipboard-read; clipboard-write');
+    iframe.setAttribute('allow', 'microphone; camera; autoplay; clipboard-read; clipboard-write');
 
     panel.appendChild(iframe);
 

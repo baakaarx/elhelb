@@ -1,3 +1,5 @@
+import agriKnowledge from '../shared/agriKnowledgeBase.json';
+
 const AR_START = '(?:^|\\s)';
 const AR_END = '(?=\\s|$|[؟?!.,،])';
 
@@ -311,11 +313,11 @@ async function analyzeImageInBrowserCanvas(dataUrl) {
           yellowChlorotic++;
           pixelClass[p] = 3;
         } else if (
-          lum >= 14 &&
+          lum >= 24 &&
           lum <= 105 &&
-          r >= b * 1.05 &&
-          g <= r * 1.08 &&
-          !(r < 35 && g < 35 && b < 35 && sat < 0.06)
+          r >= b * 1.08 &&
+          g <= r * 0.88 &&
+          !(r < 35 && g < 35 && b < 35 && sat < 0.08)
         ) {
           darkNecrotic++;
           pixelClass[p] = 2;
@@ -331,18 +333,17 @@ async function analyzeImageInBrowserCanvas(dataUrl) {
 
       let lesionNearGreen = 0;
       let powderyNearGreen = 0;
-      const rad = 5;
+      const rad = 2;
       for (let y = rad; y < h - rad; y++) {
         for (let x = rad; x < w - rad; x++) {
           const idx = y * w + x;
           const cls = pixelClass[idx];
           if (cls !== 2 && cls !== 4) continue;
-          const nearGreen =
-            pixelClass[(y - rad) * w + x] === 1 ||
-            pixelClass[(y + rad) * w + x] === 1 ||
-            pixelClass[y * w + (x - rad)] === 1 ||
-            pixelClass[y * w + (x + rad)] === 1;
-          if (nearGreen) {
+          const greenSides = [
+            pixelClass[(y - rad) * w + x], pixelClass[(y + rad) * w + x],
+            pixelClass[y * w + (x - rad)], pixelClass[y * w + (x + rad)],
+          ].filter((value) => value === 1).length;
+          if (greenSides >= 3) {
             if (cls === 2) lesionNearGreen++;
             if (cls === 4) powderyNearGreen++;
           }
@@ -351,19 +352,18 @@ async function analyzeImageInBrowserCanvas(dataUrl) {
 
       const leafLesionPct = (lesionNearGreen / total) * 100;
       const leafPowderyPct = (powderyNearGreen / total) * 100;
-      const isPlantPhoto = greenPct >= 16 && paperPct < 55;
+      const isPlantPhoto = greenPct >= 12 && paperPct < 65;
 
+      // لا نعدّ التربة أو الظلال تشخيصاً؛ لا تُحتسب البقعة إلا بجوار نسيج أخضر قريب.
       let condition = 'general';
       if (isPlantPhoto) {
-        if (leafLesionPct >= 1.2 || (rawNecroticPct >= 5 && greenPct >= 22)) {
-          condition = 'blight';
-        } else if (yellowPct >= 7) {
-          condition = 'chlorosis';
-        } else if (leafPowderyPct >= 3.5 && paperPct < 20) {
-          condition = 'powdery';
-        } else {
-          condition = 'healthy_plant';
-        }
+        const scores = [
+          ['blight', Math.min(1, leafLesionPct / 3)],
+          ['powdery', Math.min(1, leafPowderyPct / 6)],
+          ['chlorosis', Math.min(1, yellowPct / 18)],
+        ].sort((a, b) => b[1] - a[1]);
+        if (scores[0][1] >= 0.22 && (scores[0][0] !== 'blight' || leafLesionPct >= 1.2)) condition = scores[0][0];
+        else condition = 'healthy_plant';
       }
 
       resolve({ thumbDataUrl, isPlantPhoto, condition });
@@ -371,6 +371,43 @@ async function analyzeImageInBrowserCanvas(dataUrl) {
     img.onerror = () => resolve({ thumbDataUrl: dataUrl, isPlantPhoto: false, condition: 'general' });
     img.src = dataUrl;
   });
+}
+
+function getStandaloneKnowledgeReply(rawText) {
+  const norm = normalizeArabicClient(rawText);
+  const asksWeeds = /(?:حشائش|حشايش|حشيش|مبيد حشائش|السعد|الدنيبه|ابو ركبه|العجيره)/.test(norm);
+  const herbicide = agriKnowledge.herbicides.find((item) => {
+    const names = normalizeArabicClient(item.name.split('(')[0]).split(/\s+/).filter((term) => term.length > 3);
+    return names.some((term) => norm.includes(term));
+  });
+  if (asksWeeds || herbicide) {
+    let items = herbicide ? [herbicide] : agriKnowledge.herbicides;
+    const weed = ['الدنيبه', 'ابو ركبه', 'العجيره', 'السعد'].find((term) => norm.includes(term));
+    if (!herbicide && weed) {
+      const matches = items.filter((item) => normalizeArabicClient(`${item.target} ${item.rate}`).includes(weed));
+      if (matches.length) items = matches;
+    }
+    const crop = agriKnowledge.crops.find((name) => norm.includes(normalizeArabicClient(name).replace(/^ال/, '')));
+    if (!herbicide && crop) {
+      const token = normalizeArabicClient(crop).replace(/^ال/, '');
+      const matches = items.filter((item) => normalizeArabicClient(`${item.target} ${item.rate}`).replace(/^ال/, '').includes(token));
+      if (matches.length) items = matches;
+    }
+    return `🌱 **مبيدات الحشائش بمجموعة الهلب:**\n${items.map((item) => `• **${item.name}** (${item.active}) — ${item.target}. المعدل والتوقيت: ${item.rate}.`).join('\n')}\n\n⚠️ اتبع ملصق العبوة، فاختيار مبيد الحشائش يتوقف على المحصول ونوع الحشيشة ومرحلة النمو.`;
+  }
+  if (/(?:محاصيل|المحاصيل|محصولات)/.test(norm)) return `🌾 المحاصيل الموجودة في دليل العيادة: ${agriKnowledge.crops.join('، ')}.`;
+  const symptomWords = /(?:بقع|اصفرار|حشر|دوده|ذبول|عنكبوت|ندوه|بياض|توتا|حفار|تعقد|رش|مبيد|مرض)/;
+  if (norm.split(/\s+/).length <= 6 && !symptomWords.test(norm)) {
+    const crop = agriKnowledge.crops.find((name) => norm.includes(normalizeArabicClient(name).replace(/^ال/, '')));
+    if (crop) return `🌱 سجل العيادة يشمل محصول ${crop}. اذكر الإصابة أو ارفع صورة واضحة لنرشح خياراً مناسباً من دليل الشركة.`;
+  }
+  const cropTerms = new Set(agriKnowledge.crops.map((crop) => normalizeArabicClient(crop)));
+  const protocol = agriKnowledge.protocols.map((item) => {
+    const terms = normalizeArabicClient(item.issue).split(/\s+/).filter((term) => term.length > 4 && !cropTerms.has(term));
+    return { item, score: terms.filter((term) => norm.includes(term)).length };
+  }).filter((entry) => entry.score > 0).sort((a, b) => b.score - a.score)[0]?.item;
+  if (protocol) return `🌿 **${protocol.issue}:**\nالبدائل: ${protocol.products}.\nالإرشاد: ${protocol.rate}.\nاذكر المحصول ومرحلة نموه لتضييق الخيارات، واتبع الملصق الفني.`;
+  return null;
 }
 
 function fileToDataUrl(file) {
@@ -425,6 +462,12 @@ export async function runStandaloneClientTurn({ sessionId, message = '', imageFi
 
   if (dataUrl) {
     const vis = await analyzeImageInBrowserCanvas(dataUrl);
+    const textContext = normalizeArabicClient(cleanMsg);
+    if (/(?:الصدأ|صدأ|rust)/.test(textContext)) vis.condition = 'rust';
+    else if (/(?:البياض الزغبي|بياض زغبي|downy mildew)/.test(textContext)) vis.condition = 'downy';
+    else if (/(?:التوتا|صانعات الانفاق|leafminer|توتا ابسلوتا)/.test(textContext)) vis.condition = 'leafminer';
+    else if (/(?:البياض الدقيقي|بودره بيضا|powdery mildew)/.test(textContext)) vis.condition = 'powdery';
+    else if (/(?:عنكبوت احمر|اكاروس|نقط صفراء)/.test(textContext)) vis.condition = 'chlorosis';
     thumbToSave = vis.thumbDataUrl;
 
     if (vis.condition === 'blight') {
@@ -467,9 +510,22 @@ export async function runStandaloneClientTurn({ sessionId, message = '', imageFi
       ];
     }
   } else {
-    const answerObj = generateStandaloneTextReply(cleanMsg, history);
-    reply = answerObj.reply;
-    suggestions = answerObj.suggestions;
+    const catalogReply = getStandaloneKnowledgeReply(cleanMsg);
+    if (catalogReply) {
+      reply = catalogReply;
+      suggestions = ['اذكر المحصول والآفة لتوصية أدق', 'ما المنتجات المتاحة لمشكلة أخرى؟', 'تحدث عن المحاصيل التي أزرعها'];
+    } else {
+      const answerObj = generateStandaloneTextReply(cleanMsg, history);
+      reply = answerObj.reply;
+      suggestions = answerObj.suggestions;
+    }
+  }
+
+  if (dataUrl && cleanMsg) {
+    const contextReply = getStandaloneKnowledgeReply(cleanMsg);
+    reply += `\n\n🧭 **تم دمج وصفك مع ملاحظة الصورة:** «${cleanMsg}»`;
+    if (contextReply && !contextReply.includes('سجل العيادة يشمل')) reply += `\n${contextReply}`;
+    else reply += '\nالصورة لا تؤكد المسبب وحدها؛ اذكر المحصول وعمره وصوّر موضع الإصابة عن قرب لتضييق الاحتمالات.';
   }
 
   const speechText = formatForSpeechClient(reply);

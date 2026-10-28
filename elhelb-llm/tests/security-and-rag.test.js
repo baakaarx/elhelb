@@ -4,6 +4,8 @@ const sharp = require('sharp');
 const app = require('../server/index');
 const { all } = require('../server/db');
 const { getAdminKey } = require('../server/adminAuth');
+const { analyzePlantPathologyPixels } = require('../server/visionEngine');
+const agriKnowledge = require('../shared/agriKnowledgeBase.json');
 
 function request(baseUrl, path, { method = 'GET', body, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
@@ -205,7 +207,37 @@ async function runTests() {
     });
     assert.equal(thanksTurn.status, 200);
     assert.ok(thanksTurn.data.reply.includes('العفو'));
-    console.log('✅ [6/6] نظام التحدث الصوتي + فهم اللهجة العامية وسياق الحوار المتصل يعمل بنجاح 100%\n');
+
+    const herbicideTurn = await request(baseUrl, '/api/chat/ask', {
+      method: 'POST',
+      body: { sessionId: 'vis_herbicide_test_session_001', message: 'عاوز مبيد حشائش للقمح' },
+    });
+    assert.equal(herbicideTurn.status, 200);
+    assert.ok(herbicideTurn.data.reply.includes('ألدو') && herbicideTurn.data.reply.includes('برومو بلس'));
+    assert.equal(agriKnowledge.herbicides.length, 12, 'يجب أن يتضمن الدليل جميع مبيدات الحشائش الاثني عشر');
+
+    const cropsTurn = await request(baseUrl, '/api/chat/ask', {
+      method: 'POST',
+      body: { sessionId: 'vis_crops_test_session_0001', message: 'ما المحاصيل التي تدعمها العيادة؟' },
+    });
+    assert.equal(cropsTurn.status, 200);
+    assert.ok(cropsTurn.data.reply.includes('البسلة') && cropsTurn.data.reply.includes('الفول السوداني'));
+    assert.ok(agriKnowledge.crops.length >= 21);
+
+    const mitesTurn = await request(baseUrl, '/api/chat/ask', {
+      method: 'POST',
+      body: { sessionId: 'vis_protocol_test_session_001', message: 'ما بدائل العنكبوت الأحمر؟' },
+    });
+    assert.equal(mitesTurn.status, 200);
+    assert.ok(mitesTurn.data.reply.includes('HelbStar') && mitesTurn.data.reply.includes('Developer'));
+
+    const soilLeafSvg = `<svg width="320" height="240" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#704020"/><ellipse cx="160" cy="120" rx="70" ry="100" fill="#2c9b36"/></svg>`;
+    const soilLeaf = await sharp(Buffer.from(soilLeafSvg)).png().toBuffer();
+    const soilCheck = await analyzePlantPathologyPixels(soilLeaf);
+    assert.ok(soilCheck.isPlantPhoto);
+    assert.notEqual(soilCheck.plantCondition, 'blight_or_leaf_spot', 'يجب ألا تُصنّف التربة البنية حول ورقة سليمة كندوة/لفحة');
+    console.log('✅ [6/6] الصوت واللهجة + 12 مبيد حشائش + 21 محصولاً + بدائل الآفات + منع تصنيف التربة كمرض');
+    console.log('');
 
     console.log('🎉 اجتازت جميع اختبارات الشات بوت ونظام التحدث والأمان بنجاح 100%!');
   } finally {

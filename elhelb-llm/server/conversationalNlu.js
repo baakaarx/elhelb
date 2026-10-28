@@ -1,4 +1,53 @@
 const { normalizeArabic } = require('./arabicRag');
+const agriKnowledge = require('../shared/agriKnowledgeBase.json');
+
+function getCatalogAnswer(norm) {
+  const herbicide = agriKnowledge.herbicides.find((item) => {
+    const names = normalizeArabic(item.name.split('(')[0]).split(/\s+/).filter((part) => part.length > 4);
+    return names.some((part) => norm.includes(part));
+  });
+  const asksWeeds = /(?:حشايش|حشيش|مبيد حشائش|مبيدات حشائش|عشب|الدنيبه|ابو ركبه|العجيره|السعد)/.test(norm);
+  if (herbicide || asksWeeds) {
+    let items = herbicide ? [herbicide] : agriKnowledge.herbicides;
+    const weedAliases = ['الدنيبه', 'ابو ركبه', 'العجيره', 'السعد', 'الحشائش العريضه', 'الحشائش الرفيعه'];
+    const weed = weedAliases.find((term) => norm.includes(normalizeArabic(term)));
+    if (!herbicide && weed) {
+      const matches = items.filter((item) => normalizeArabic(`${item.target} ${item.rate}`).includes(normalizeArabic(weed)));
+      if (matches.length) items = matches;
+    }
+    const crop = agriKnowledge.crops.find((name) => {
+      const term = normalizeArabic(name).replace(/^ال/, '');
+      return term.length > 2 && norm.includes(term);
+    });
+    if (!herbicide && crop) {
+      const cropNorm = normalizeArabic(crop).replace(/^ال/, '');
+      const matches = items.filter((item) => normalizeArabic(`${item.target} ${item.rate}`).replace(/^ال/, '').includes(cropNorm));
+      if (matches.length) items = matches;
+    }
+    const details = items.map((item) => `• **${item.name}** — المادة الفعالة: ${item.active}.\n  الاستخدام: ${item.target}.\n  المعدل/التوقيت: ${item.rate}.`).join('\n');
+    return `🌱 **مبيدات الحشائش من مجموعة الهلب:**\n${details}\n\n⚠️ تختلف التسجيلات والجرعات حسب المحصول والحشيشة ومرحلة النمو؛ اتبع ملصق العبوة واستشر مهندساً زراعياً قبل الرش، خصوصاً للمبيدات غير الانتقائية.`;
+  }
+  if (/(?:محاصيل|المحاصيل|بتزرعوا|المحاصيل المدعومه|محصولات)/.test(norm)) {
+    return `🌾 يدعم دليل العيادة الزراعية المحاصيل التالية: ${agriKnowledge.crops.join('، ')}. اذكر المحصول والعرض أو الآفة لأعرض التوصيات المناسبة.`;
+  }
+  const symptomWords = /(?:بقع|اصفرار|حشر|دوده|ذبول|عنكبوت|من |ندوه|بياض|توتا|حفار|تعقد|رش|مبيد|مصاب|مرض)/;
+  if (norm.split(/\s+/).length <= 6 && !symptomWords.test(norm)) {
+    const crop = agriKnowledge.crops.find((name) => norm.includes(normalizeArabic(name).replace(/^ال/, '')));
+    if (crop) return `🌱 سجل العيادة يشمل محصول **${crop}**. اكتب وصف الإصابة أو ارفع صورة واضحة، وسأرشح لك الخيارات المناسبة من دليل مجموعة الهلب مع التنبيه لاتباع ملصق المنتج.`;
+  }
+  const genericTerms = new Set(['الحشائش', 'المبيدات', 'المحاصيل', 'النباتات', 'المحصول', 'المرض', 'الامراض', 'ويمكن', 'وذلك']);
+  const cropTerms = new Set(agriKnowledge.crops.map((crop) => normalizeArabic(crop)));
+  const protocol = agriKnowledge.protocols
+    .map((item) => {
+      const terms = normalizeArabic(item.issue).split(/\s+/).filter((part) => part.length > 4 && !genericTerms.has(part) && !cropTerms.has(part));
+      const hits = terms.filter((part) => norm.includes(part));
+      return { item, hits: hits.length, ratio: hits.length / Math.max(1, terms.length) };
+    })
+    .filter((entry) => entry.hits > 0)
+    .sort((a, b) => b.hits - a.hits || b.ratio - a.ratio)[0]?.item;
+  if (protocol) return `🌿 **توصية أولية — ${protocol.issue}:**\n- الخيارات المسجلة في دليل مجموعة الهلب: ${protocol.products}.\n- المعدل والإرشاد: ${protocol.rate}.\n\nلتحديد اختيار دقيق، اذكر المحصول وعمره وشدة الإصابة. اتبع ملصق المنتج وفترة ما قبل الحصاد، ولا تخلط مستحضرات دون توصية فنية.`;
+  return null;
+}
 
 // حدود كلمات آمنة تماماً للغة العربية والإنجليزية (بدلاً من \b التي لا تدعم الحروف العربية في JavaScript)
 const AR_START = '(?:^|\\s)';
@@ -278,6 +327,15 @@ function analyzeHumanIntent(rawQuery, conversationHistory = []) {
   const norm = normalizeArabic(trimmed);
   const words = norm.split(/\s+/).filter(Boolean);
   const wordCount = words.length;
+
+  const catalogAnswer = getCatalogAnswer(norm);
+  if (catalogAnswer) {
+    return {
+      handledDirectly: true,
+      reply: catalogAnswer,
+      suggestions: ['اذكر اسم المحصول والحشيشة لتحديد الخيار الأنسب', 'ما الجرعة المسجلة لهذا المنتج؟', 'اسأل عن آفة أو محصول آخر'],
+    };
+  }
 
   const hasAgriTopic =
     /(?:بطاطس|طماطم|قوطه|موالح|برتقال|ليمون|مانجو|عنب|فراوله|قمح|قطن|ذره|بصل|خيار|فلفل|مبيد|مبيدات|رش|حفار|ندوه|عنكبوت|اكاروس|نيماتودا|بياض|ذبابه|توتا|دوده|كابيتول|جولد|بيريبان|هلبان|لافيدا|بيست|كورد|سلفر|دايفر|سماد|اسمده|حشائش)/.test(
