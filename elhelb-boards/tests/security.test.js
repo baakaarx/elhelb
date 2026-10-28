@@ -5,8 +5,10 @@ const fs = require('node:fs');
 
 const tmpDb = path.join(os.tmpdir(), `elhelb-test-${Date.now()}.db`);
 process.env.DB_PATH = tmpDb;
+process.env.ELHELB_TEST_MODE = '1';
 
 const app = require('../server/index');
+const oauthRoutes = require('../server/routes/oauth');
 
 async function main() {
   const server = app.listen(0, '127.0.0.1');
@@ -246,22 +248,51 @@ async function main() {
     });
     assert.equal(moveAllowedAgain.status, 200, 'Restoring permission in DB must immediately allow request');
 
-    console.log('6️⃣ Testing Google/Facebook Sign-In -> Create Username/Password -> Pick Department -> Claim + Gmail Logs...');
+    console.log('6️⃣ Testing Email Verification OTP -> Zero Facebook -> Create Username/Password -> Pick Department -> Claim...');
     const exportDept = deptBySlug('export');
 
-    // New employee signs in via Google with ONLY their real name & Gmail
-    const googleSign = await api('POST', '/api/auth/social-entry', null, {
-      provider: 'google',
+    // Facebook & unverified social-entry endpoints must be completely removed (404)!
+    const fbGone = await api('GET', '/api/auth/oauth/facebook/start', chairmanTok);
+    assert.equal(fbGone.status, 404, 'Facebook OAuth route must be completely removed');
+    const unverifiedSocialGone = await api('POST', '/api/auth/social-entry', chairmanTok, {
+      fullName: 'Bypass',
+      email: 'bypass@gmail.com',
+    });
+    assert.equal(unverifiedSocialGone.status, 404, 'Unverified social-entry route must be completely removed');
+
+    // Step 0A: New employee requests 6-digit verification code sent to their Email
+    const sendCodeRes = await api('POST', '/api/auth/email/send-code', null, {
       fullName: 'محمود سامي الشناوي',
       email: 'mahmoud.shennawy@gmail.com',
     });
-    assert.equal(googleSign.status, 200);
-    assert.equal(googleSign.data.isNewUser, true);
-    const newGoogleTok = googleSign.data.token;
+    assert.equal(sendCodeRes.status, 200);
+    assert.equal(sendCodeRes.data.code, undefined, 'API response must NEVER leak OTP code to browser');
 
-    // Check /me shows Step 1 required (hasCustomCredentials: false, departmentConfirmed: false)
+    const realOtp = oauthRoutes._lastTestOtpByEmail.get('mahmoud.shennawy@gmail.com');
+    assert.match(realOtp, /^\d{6}$/);
+
+    // Wrong 6-digit code MUST be rejected!
+    const wrongOtp = realOtp === '000000' ? '999999' : '000000';
+    const badVerify = await api('POST', '/api/auth/email/verify-code', null, {
+      email: 'mahmoud.shennawy@gmail.com',
+      code: wrongOtp,
+    });
+    assert.equal(badVerify.status, 400, 'Wrong OTP code must be rejected');
+
+    // Valid 6-digit OTP verifies email and creates pending onboarding employee!
+    const verifyRes = await api('POST', '/api/auth/email/verify-code', null, {
+      email: 'mahmoud.shennawy@gmail.com',
+      code: realOtp,
+      fullName: 'محمود سامي الشناوي',
+    });
+    assert.equal(verifyRes.status, 200);
+    assert.equal(verifyRes.data.isNewUser, true);
+    const newGoogleTok = verifyRes.data.token;
+
+    // Check /me shows emailVerified: true & Step 1 required (hasCustomCredentials: false)
     const mePending = await api('GET', '/api/auth/me', newGoogleTok);
     assert.equal(mePending.status, 200);
+    assert.equal(mePending.data.user.emailVerified, true);
     assert.equal(mePending.data.user.onboardingStatus, 'pending');
     assert.equal(mePending.data.user.hasCustomCredentials, false);
     assert.equal(mePending.data.user.departmentConfirmed, false);

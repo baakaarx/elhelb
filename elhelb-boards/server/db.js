@@ -6,7 +6,7 @@ const { DatabaseSync } = require('node:sqlite');
 function resolveDbPath() {
   if (process.env.DB_PATH) return process.env.DB_PATH;
   if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
-    return path.join(os.tmpdir(), 'elhelb-boards-prod-v4.db');
+    return path.join(os.tmpdir(), 'elhelb-boards-prod-v5.db');
   }
   const defaultDataDir = path.join(__dirname, '..', 'data');
   try {
@@ -15,7 +15,7 @@ function resolveDbPath() {
     }
     return path.join(defaultDataDir, 'elhelb-boards.db');
   } catch (_) {
-    return path.join(os.tmpdir(), 'elhelb-boards-prod-v4.db');
+    return path.join(os.tmpdir(), 'elhelb-boards-prod-v5.db');
   }
 }
 
@@ -157,6 +157,7 @@ function initSchema() {
       avatar_url TEXT DEFAULT NULL,
       auth_provider TEXT NOT NULL DEFAULT 'local',
       oauth_id TEXT DEFAULT NULL,
+      email_verified INTEGER NOT NULL DEFAULT 1,
       has_custom_credentials INTEGER NOT NULL DEFAULT 1,
       department_confirmed INTEGER NOT NULL DEFAULT 1,
       onboarding_status TEXT NOT NULL DEFAULT 'approved' CHECK(onboarding_status IN ('pending', 'approved')),
@@ -319,6 +320,17 @@ function initSchema() {
       error_message TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS email_verifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL,
+      full_name TEXT NOT NULL DEFAULT '',
+      code_hash TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      expires_at TEXT NOT NULL,
+      verified_at TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   // Safe migrations for existing local DB files
@@ -327,6 +339,7 @@ function initSchema() {
   ensureColumn('users', 'avatar_url', 'TEXT DEFAULT NULL');
   ensureColumn('users', 'auth_provider', "TEXT NOT NULL DEFAULT 'local'");
   ensureColumn('users', 'oauth_id', 'TEXT DEFAULT NULL');
+  ensureColumn('users', 'email_verified', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn('users', 'has_custom_credentials', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn('users', 'department_confirmed', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn('users', 'onboarding_status', "TEXT NOT NULL DEFAULT 'approved'");
@@ -344,6 +357,7 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read);
     CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(id DESC);
     CREATE INDEX IF NOT EXISTS idx_users_onboarding ON users(onboarding_status, preferred_department_id);
+    CREATE INDEX IF NOT EXISTS idx_email_verif_lookup ON email_verifications(email, id DESC);
   `);
 }
 

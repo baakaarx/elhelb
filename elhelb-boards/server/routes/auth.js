@@ -72,6 +72,7 @@ function serializeCurrentUser(user) {
     avatarColor: user.avatar_color,
     avatarUrl: user.avatar_url || null,
     authProvider: user.auth_provider || 'local',
+    emailVerified: user.email_verified !== 0,
     hasCustomCredentials: Boolean(user.has_custom_credentials),
     departmentConfirmed: Boolean(user.department_confirmed),
     onboardingStatus: user.onboarding_status || 'approved',
@@ -142,7 +143,7 @@ router.post('/login', loginLimiter, async (req, res) => {
 
     if (!row.password_hash) {
       return res.status(400).json({
-        error: 'هذا الحساب مسجل عبر Google أو Facebook ولم تُنشأ له كلمة مرور بعد — يرجى تسجيل الدخول عبر الزر المخصص بالأسفل',
+        error: 'لم يتم استكمال إنشاء كلمة المرور لهذا الحساب بعد — يرجى المتابعة من تبويب تسجيل موظف جديد وتأكيد البريد الإلكتروني',
       });
     }
 
@@ -219,4 +220,5 @@ router.post('/notifications/read-all', authenticate, (req, res) => {
   res.json({ ok: true });
 });
 
+router.serializeCurrentUser = serializeCurrentUser;
 module.exports = router;

@@ -109,7 +109,7 @@ export default function AdminControlView({ user, onRefreshMe, showToast }) {
               onClick={() => setSubTab('oauth')}
             >
               <Globe size={15} />
-              ربط Google و Facebook
+              ربط Google OAuth
             </button>
           )}
           {canAudit && (
@@ -363,7 +363,7 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
               {currentRole.slug === 'chairman' ? <Crown size={17} /> : <Lock size={16} />}
               <span>
                 {currentRole.slug === 'pending_onboarding'
-                  ? 'هذا الدور مخصص أمنياً للموظفين الجدد المسجلين عبر Google/Facebook بدون أي صلاحيات حتى يضمهم رئيس القسم.'
+                  ? 'هذا الدور مخصص أمنياً للموظفين الجدد المؤكد بريدهم الإلكتروني بدون أي صلاحيات حتى يضمهم رئيس القسم.'
                   : currentRole.slug === 'chairman'
                   ? 'حماية سيادية: دور (رئيس مجلس الإدارة) هو الأعلى في النظام ومغلق ضد التعديل من أي رتبة أدنى.'
                   : `هذا الدور (${currentRole.name}) يماثل أو يعلو رتبتك الإدارية الحالية — يمكنك استعراض صلاحياته فقط.`}
@@ -766,13 +766,13 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                     <span className="badge" style={{ background: '#fee2e2', color: '#b91c1c' }}>
                       Google
                     </span>
-                  ) : u.auth_provider === 'facebook' ? (
-                    <span className="badge" style={{ background: '#dbeafe', color: '#1d4ed8' }}>
-                      Facebook
+                  ) : u.auth_provider === 'email' ? (
+                    <span className="badge" style={{ background: '#dcfce7', color: '#166534' }}>
+                      بريد مؤكد ✓
                     </span>
                   ) : (
                     <span className="badge" style={{ background: '#f1f5f9', color: '#334155' }}>
-                      باسورد داخلي
+                      حساب الشركة
                     </span>
                   )}
                 </td>
@@ -1599,14 +1599,12 @@ function GmailSettingsPanel({ showToast }) {
 }
 
 /* ==========================================
-   5. GOOGLE & FACEBOOK OAUTH SETTINGS (للـ IT والإدارة)
+   5. GOOGLE OAUTH 2.0 SETTINGS (للـ IT والإدارة)
    ========================================== */
 function OAuthSettingsPanel({ showToast }) {
   const [settings, setSettings] = useState(null);
   const [googleClientId, setGoogleClientId] = useState('');
   const [googleClientSecret, setGoogleClientSecret] = useState('');
-  const [facebookAppId, setFacebookAppId] = useState('');
-  const [facebookAppSecret, setFacebookAppSecret] = useState('');
   const [saving, setSaving] = useState(false);
 
   async function loadSettings() {
@@ -1614,7 +1612,6 @@ function OAuthSettingsPanel({ showToast }) {
       const res = await apiFetch('/api/admin/oauth-settings');
       setSettings(res);
       setGoogleClientId(res.googleClientId || '');
-      setFacebookAppId(res.facebookAppId || '');
     } catch (err) {
       showToast(err.message || 'تعذر تحميل إعدادات الربط', 'error');
     }
@@ -1633,14 +1630,11 @@ function OAuthSettingsPanel({ showToast }) {
         body: {
           googleClientId,
           googleClientSecret,
-          facebookAppId,
-          facebookAppSecret,
         },
       });
       setGoogleClientSecret('');
-      setFacebookAppSecret('');
       await loadSettings();
-      showToast('تم حفظ مفاتيح الربط مع Google و Facebook بنجاح', 'success');
+      showToast('تم حفظ مفاتيح الربط مع Google OAuth بنجاح', 'success');
     } catch (err) {
       showToast(err.message || 'تعذر الحفظ', 'error');
     } finally {
@@ -1657,171 +1651,94 @@ function OAuthSettingsPanel({ showToast }) {
   if (!settings) {
     return (
       <div className="card-box" style={{ padding: 30, textAlign: 'center', color: '#64748b' }}>
-        جاري تحميل إعدادات OAuth...
+        جاري تحميل إعدادات Google OAuth...
       </div>
     );
   }
 
   return (
     <div className="card-box">
-      <h3 style={{ margin: '0 0 8px', fontSize: 17, fontWeight: 900, color: '#0b2545' }}>
-        إعدادات تسجيل الدخول الرسمي عبر Google و Facebook (لقسم الـ IT)
+      <h3 style={{ margin: '0 0 8px', fontSize: 17, fontWeight: 900, color: '#071e14' }}>
+        إعدادات الربط الاختياري مع Google OAuth 2.0 (لقسم الـ IT)
       </h3>
       <p style={{ margin: '0 0 18px', fontSize: 13, color: '#475569', lineHeight: 1.7 }}>
-        تعمل بوابة التسجيل السريع بالاسم والبريد في شاشة الدخول تلقائياً دون أي إعدادات إضافية. وعند رغبة قسم الـ IT بربط التحويل المباشر لحسابات Google Cloud أو Meta for Developers، ضع المفاتيح هنا:
+        يتم تأكيد البريد الإلكتروني للموظفين الجدد عبر <strong>كود تحقق من 6 أرقام</strong> يُرسل إلى البريد الإلكتروني عبر تبويب (إشعارات البريد Gmail). ويمكن لقسم الـ IT اختيارياً تفعيل زر الدخول المباشر عبر Google Cloud OAuth من هنا:
       </p>
 
       <form onSubmit={handleSave}>
         <div
           style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))',
-            gap: 18,
+            padding: 18,
+            borderRadius: 12,
+            border: '1px solid #e2e8f0',
+            background: '#f8fafc',
+            maxWidth: 640,
           }}
         >
-          {/* Google Config */}
-          <div
-            style={{
-              padding: 16,
-              borderRadius: 12,
-              border: '1px solid #e2e8f0',
-              background: '#f8fafc',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-              <span style={{ fontWeight: 900, fontSize: 15 }}>Google OAuth 2.0</span>
-              <span
-                className="badge"
-                style={{
-                  background: settings.googleConfigured ? '#dcfce7' : '#fef3c7',
-                  color: settings.googleConfigured ? '#166534' : '#92400e',
-                }}
-              >
-                {settings.googleConfigured ? 'مربوط بـ Google Cloud' : 'وضع التسجيل السريع مفعل'}
-              </span>
-            </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+            <span style={{ fontWeight: 900, fontSize: 15 }}>Google OAuth 2.0</span>
+            <span
+              className="badge"
+              style={{
+                background: settings.googleConfigured ? '#dcfce7' : '#f1f5f9',
+                color: settings.googleConfigured ? '#166534' : '#475569',
+              }}
+            >
+              {settings.googleConfigured ? 'مربوط ومفعل ✅' : 'غير مفعل (يُستخدم كود تأكيد البريد)'}
+            </span>
+          </div>
 
-            <div className="form-group">
-              <label className="form-label">رابط Authorized Redirect URI</label>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <input
-                  type="text"
-                  className="form-input"
-                  dir="ltr"
-                  readOnly
-                  value={settings.googleCallbackUrl}
-                />
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => copyText(settings.googleCallbackUrl)}
-                >
-                  <Copy size={14} />
-                </button>
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Google Client ID</label>
+          <div className="form-group">
+            <label className="form-label">رابط Authorized Redirect URI</label>
+            <div style={{ display: 'flex', gap: 6 }}>
               <input
                 type="text"
                 className="form-input"
                 dir="ltr"
-                placeholder="xxxx.apps.googleusercontent.com"
-                value={googleClientId}
-                onChange={(e) => setGoogleClientId(e.target.value)}
+                readOnly
+                value={settings.googleCallbackUrl}
               />
-            </div>
-
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">
-                Google Client Secret {settings.googleSecretSaved ? '(محفوظ مسبقاً ✅)' : ''}
-              </label>
-              <input
-                type="password"
-                className="form-input"
-                dir="ltr"
-                placeholder={settings.googleSecretSaved ? '••••••••••••' : 'GOCSPX-...'}
-                value={googleClientSecret}
-                onChange={(e) => setGoogleClientSecret(e.target.value)}
-              />
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => copyText(settings.googleCallbackUrl)}
+              >
+                <Copy size={14} />
+              </button>
             </div>
           </div>
 
-          {/* Facebook Config */}
-          <div
-            style={{
-              padding: 16,
-              borderRadius: 12,
-              border: '1px solid #e2e8f0',
-              background: '#f8fafc',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-              <span style={{ fontWeight: 900, fontSize: 15 }}>Facebook Login (Meta)</span>
-              <span
-                className="badge"
-                style={{
-                  background: settings.facebookConfigured ? '#dcfce7' : '#fef3c7',
-                  color: settings.facebookConfigured ? '#166534' : '#92400e',
-                }}
-              >
-                {settings.facebookConfigured ? 'مربوط بـ Meta App' : 'وضع التسجيل السريع مفعل'}
-              </span>
-            </div>
+          <div className="form-group">
+            <label className="form-label">Google Client ID</label>
+            <input
+              type="text"
+              className="form-input"
+              dir="ltr"
+              placeholder="xxxx.apps.googleusercontent.com"
+              value={googleClientId}
+              onChange={(e) => setGoogleClientId(e.target.value)}
+            />
+          </div>
 
-            <div className="form-group">
-              <label className="form-label">رابط Valid OAuth Redirect URI</label>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <input
-                  type="text"
-                  className="form-input"
-                  dir="ltr"
-                  readOnly
-                  value={settings.facebookCallbackUrl}
-                />
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => copyText(settings.facebookCallbackUrl)}
-                >
-                  <Copy size={14} />
-                </button>
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Facebook App ID</label>
-              <input
-                type="text"
-                className="form-input"
-                dir="ltr"
-                placeholder="123456789012345"
-                value={facebookAppId}
-                onChange={(e) => setFacebookAppId(e.target.value)}
-              />
-            </div>
-
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">
-                Facebook App Secret {settings.facebookSecretSaved ? '(محفوظ مسبقاً ✅)' : ''}
-              </label>
-              <input
-                type="password"
-                className="form-input"
-                dir="ltr"
-                placeholder={settings.facebookSecretSaved ? '••••••••••••' : 'App Secret'}
-                value={facebookAppSecret}
-                onChange={(e) => setFacebookAppSecret(e.target.value)}
-              />
-            </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">
+              Google Client Secret {settings.googleSecretSaved ? '(محفوظ مسبقاً ✅)' : ''}
+            </label>
+            <input
+              type="password"
+              className="form-input"
+              dir="ltr"
+              placeholder={settings.googleSecretSaved ? '••••••••••••' : 'GOCSPX-...'}
+              value={googleClientSecret}
+              onChange={(e) => setGoogleClientSecret(e.target.value)}
+            />
           </div>
         </div>
 
         <div style={{ marginTop: 18, display: 'flex', justifyContent: 'flex-end' }}>
           <button type="submit" className="btn btn-primary" disabled={saving}>
             <Save size={16} />
-            {saving ? 'جاري الحفظ...' : 'حفظ إعدادات Google و Facebook'}
+            {saving ? 'جاري الحفظ...' : 'حفظ إعدادات Google OAuth'}
           </button>
         </div>
       </form>

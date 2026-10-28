@@ -1,6 +1,8 @@
 const express = require('express');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
 const { get, all, run, transaction, getSetting } = require('../db');
 const {
   JWT_SECRET,
@@ -9,24 +11,35 @@ const {
   loadUserById,
   writeAudit,
 } = require('../rbac');
+const {
+  getGmailConfig,
+  isDeliverableEmail,
+  sendEmailVerificationCode,
+} = require('../mailer');
+const authRoutes = require('./auth');
 
 const router = express.Router();
 
-function getOAuthCredentials() {
+// Internal Map used ONLY by Node integration tests (never exposed over HTTP)
+const _lastTestOtpByEmail = new Map();
+
+const otpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'طلبات تحقق كثيرة جداً، يرجى الانتظار قليلاً والمحاولة مرة أخرى' },
+});
+
+function getGoogleCredentials() {
   const googleClientId =
     process.env.GOOGLE_CLIENT_ID || getSetting('google_client_id', '');
   const googleClientSecret =
     process.env.GOOGLE_CLIENT_SECRET || getSetting('google_client_secret', '');
-  const facebookAppId =
-    process.env.FACEBOOK_APP_ID || getSetting('facebook_app_id', '');
-  const facebookAppSecret =
-    process.env.FACEBOOK_APP_SECRET || getSetting('facebook_app_secret', '');
 
   return {
     googleClientId: googleClientId.trim(),
     googleClientSecret: googleClientSecret.trim(),
-    facebookAppId: facebookAppId.trim(),
-    facebookAppSecret: facebookAppSecret.trim(),
   };
 }
 
@@ -42,7 +55,7 @@ function getBaseOrigin(req) {
   return `${proto}://${host}`;
 }
 
-function generateUniqueUsername(emailOrName, provider) {
+function generateUniqueUsername(emailOrName, provider = 'emp') {
   const base = String(emailOrName || '')
     .split('@')[0]
     .toLowerCase()
@@ -58,18 +71,13 @@ function generateUniqueUsername(emailOrName, provider) {
   return candidate;
 }
 
-/**
- * Finds an existing user by OAuth ID or Email, OR registers a brand-new user
- * in 'pending' onboarding state waiting for a Department Head to claim them!
- */
-function findOrCreateSocialUser({
-  provider,
-  oauthId,
+function findOrCreateVerifiedEmployee({
+  provider = 'email',
+  oauthId = null,
   fullName,
   email,
   avatarUrl = null,
   preferredDepartmentId = null,
-  jobTitle = '',
   req = null,
 }) {
   const cleanEmail = String(email || '').trim().toLowerCase();
@@ -92,10 +100,10 @@ function findOrCreateSocialUser({
       err.statusCode = 403;
       throw err;
     }
-    // Keep profile name / avatar synced if missing
     run(
       `UPDATE users
-       SET avatar_url = COALESCE(?, avatar_url),
+       SET email_verified = 1,
+           avatar_url = COALESCE(?, avatar_url),
            oauth_id = COALESCE(oauth_id, ?)
        WHERE id = ?`,
       [avatarUrl || null, oauthId ? String(oauthId) : null, existing.id]
@@ -103,7 +111,7 @@ function findOrCreateSocialUser({
     const loaded = loadUserById(existing.id);
     writeAudit({
       user: loaded,
-      action: `تسجيل دخول عبر ${provider === 'google' ? 'Google' : 'Facebook'}`,
+      action: provider === 'google' ? 'تسجيل دخول موثق عبر Google' : 'تأكيد البريد الإلكتروني بنجاح',
       status: 'ALLOWED',
       req,
       details: cleanEmail || loaded.username,
@@ -111,7 +119,6 @@ function findOrCreateSocialUser({
     return { user: loaded, isNewUser: false };
   }
 
-  // Brand-new employee -> place in Pending Onboarding Waiting Room!
   let pendingRole = get(`SELECT id FROM roles WHERE slug = 'pending_onboarding'`);
   if (!pendingRole) {
     const rId = run(
@@ -129,22 +136,21 @@ function findOrCreateSocialUser({
   }
 
   const username = generateUniqueUsername(cleanEmail || cleanName, provider);
-  const avatarColor = provider === 'facebook' ? '#1877f2' : '#ea4335';
+  const avatarColor = '#15803d';
   const deptConfirmed = validPrefDept ? 1 : 0;
 
-  const newUserId = transaction(() => {
-    const uid = run(
+  const newUserId = transaction(() =>
+    run(
       `INSERT INTO users (
         username, email, password_hash, full_name, job_title,
         avatar_color, avatar_url, auth_provider, oauth_id,
-        has_custom_credentials, department_confirmed,
+        email_verified, has_custom_credentials, department_confirmed,
         onboarding_status, preferred_department_id, role_id, department_id
-      ) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, 0, ?, 'pending', ?, ?, NULL)`,
+      ) VALUES (?, ?, '', ?, '', ?, ?, ?, ?, 1, 0, ?, 'pending', ?, ?, NULL)`,
       [
         username,
-        cleanEmail || null,
+        cleanEmail,
         cleanName,
-        String(jobTitle || '').trim().slice(0, 100),
         avatarColor,
         avatarUrl || null,
         provider,
@@ -153,45 +159,231 @@ function findOrCreateSocialUser({
         validPrefDept ? validPrefDept.id : null,
         pendingRole.id,
       ]
-    ).lastInsertRowid;
-
-    return uid;
-  });
+    ).lastInsertRowid
+  );
 
   const loaded = loadUserById(newUserId);
   writeAudit({
     user: loaded,
-    action: `تسجيل حساب موظف جديد عبر ${provider === 'facebook' ? 'Facebook' : 'Google'}`,
+    action: 'تسجيل موظف جديد بعد تأكيد البريد الإلكتروني',
     status: 'ALLOWED',
     req,
-    details: `${cleanName} (${cleanEmail || username}) — بانتظار تسكين رئيس القسم`,
+    details: `${cleanName} (${cleanEmail}) — بانتظار إنشاء بيانات الدخول وتسكين رئيس القسم`,
   });
 
   return { user: loaded, isNewUser: true };
 }
 
-// Public metadata about configured OAuth providers + public department list for registration
+// Public metadata for registration & departments
 router.get('/oauth/providers', (req, res) => {
-  const creds = getOAuthCredentials();
+  const creds = getGoogleCredentials();
+  const gmailCfg = getGmailConfig();
   const origin = getBaseOrigin(req);
-  const departments = all(
-    `SELECT id, name, color FROM departments ORDER BY id ASC`
-  );
+  const departments = all(`SELECT id, name, color FROM departments ORDER BY id ASC`);
 
   res.json({
     googleConfigured: Boolean(creds.googleClientId && creds.googleClientSecret),
-    facebookConfigured: Boolean(creds.facebookAppId && creds.facebookAppSecret),
+    gmailConfigured: Boolean(gmailCfg.configured && gmailCfg.enabled),
     googleCallbackUrl: `${origin}/api/auth/oauth/google/callback`,
-    facebookCallbackUrl: `${origin}/api/auth/oauth/facebook/callback`,
     departments,
   });
 });
 
 // ==========================================
-// 1. REAL GOOGLE OAUTH 2.0 FLOW
+// 1. EMAIL VERIFICATION (6-DIGIT OTP CODE)
+// ==========================================
+router.post('/email/send-code', otpLimiter, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const fullName = String(body.fullName || '').trim();
+    const email = String(body.email || '').trim().toLowerCase();
+
+    if (fullName.length < 3) {
+      return res.status(400).json({
+        error: 'يرجى كتابة الاسم الكامل للموظف (3 أحرف على الأقل)',
+      });
+    }
+    if (!isDeliverableEmail(email)) {
+      return res.status(400).json({
+        error: 'يرجى إدخال بريد إلكتروني صحيح لاستلام كود التأكيد',
+      });
+    }
+
+    // Block re-registration if an active account already completed setup with this email
+    const existingActive = get(
+      `SELECT id, has_custom_credentials, is_active FROM users WHERE LOWER(email) = LOWER(?)`,
+      [email]
+    );
+    if (existingActive && !existingActive.is_active) {
+      return res.status(403).json({
+        error: 'هذا الحساب موقوف حالياً من الإدارة',
+      });
+    }
+    if (existingActive && existingActive.has_custom_credentials) {
+      return res.status(409).json({
+        error: 'هذا البريد الإلكتروني مسجل بالفعل — يرجى تسجيل الدخول مباشرة باسم المستخدم أو البريد وكلمة المرور',
+      });
+    }
+
+    // Per-email rate cap: max 5 codes within 15 minutes
+    const recentCount = get(
+      `SELECT COUNT(*) AS cnt FROM email_verifications
+       WHERE email = ? AND datetime(created_at) > datetime('now', '-15 minutes')`,
+      [email]
+    );
+    if (recentCount && recentCount.cnt >= 5) {
+      return res.status(429).json({
+        error: 'تم إرسال عدة أكواد لهذا البريد مؤخراً — يرجى مراجعة صندوق الوارد أو الانتظار بضع دقائق',
+      });
+    }
+
+    const code = String(crypto.randomInt(100000, 1000000));
+    const codeHash = bcrypt.hashSync(code, 8);
+
+    run(
+      `INSERT INTO email_verifications (email, full_name, code_hash, attempts, expires_at)
+       VALUES (?, ?, ?, 0, datetime('now', '+10 minutes'))`,
+      [email, fullName, codeHash]
+    );
+
+    if (process.env.ELHELB_TEST_MODE === '1') {
+      _lastTestOtpByEmail.set(email, code);
+    }
+
+    const mailRes = await sendEmailVerificationCode({
+      toEmail: email,
+      fullName,
+      code,
+    });
+
+    if (!mailRes.sent && process.env.ELHELB_TEST_MODE !== '1') {
+      if (mailRes.reason === 'NOT_CONFIGURED') {
+        return res.status(503).json({
+          error:
+            'خدمة إرسال البريد (Gmail) غير مفعلة بعد — يرجى من مسؤول النظام (admin) ربط بريد الشركة من تبويب إشعارات البريد أولاً.',
+          code: 'GMAIL_NOT_CONFIGURED',
+        });
+      }
+      return res.status(502).json({
+        error:
+          'تعذر إرسال كود التأكيد عبر البريد الإلكتروني حالياً — يرجى التأكد من صحة إعدادات Gmail App Password في لوحة الإدارة.',
+      });
+    }
+
+    return res.json({
+      ok: true,
+      email,
+      expiresInMinutes: 10,
+      message: `تم إرسال كود التأكيد المكون من 6 أرقام إلى ${email}`,
+    });
+  } catch (err) {
+    console.error('send-code error:', err);
+    return res.status(500).json({ error: 'تعذر إرسال كود التأكيد للبريد الإلكتروني' });
+  }
+});
+
+router.post('/email/verify-code', otpLimiter, (req, res) => {
+  try {
+    const body = req.body || {};
+    const email = String(body.email || '').trim().toLowerCase();
+    const code = String(body.code || '').replace(/\s+/g, '').trim();
+    const fallbackName = String(body.fullName || '').trim();
+
+    if (!isDeliverableEmail(email) || !/^\d{6}$/.test(code)) {
+      return res.status(400).json({
+        error: 'يرجى إدخال البريد الإلكتروني وكود التأكيد المكون من 6 أرقام بشكل صحيح',
+      });
+    }
+
+    const record = get(
+      `SELECT * FROM email_verifications
+       WHERE email = ? AND verified_at IS NULL
+       ORDER BY id DESC LIMIT 1`,
+      [email]
+    );
+
+    if (!record) {
+      return res.status(400).json({
+        error: 'لا يوجد كود تأكيد نشط لهذا البريد — يرجى طلب إرسال كود جديد',
+      });
+    }
+
+    const notExpired = get(
+      `SELECT 1 AS ok FROM email_verifications
+       WHERE id = ? AND datetime(expires_at) > datetime('now')`,
+      [record.id]
+    );
+    if (!notExpired) {
+      return res.status(400).json({
+        error: 'انتهت صلاحية كود التأكيد (10 دقائق) — يرجى الضغط على إعادة إرسال الكود',
+      });
+    }
+
+    if (record.attempts >= 5) {
+      return res.status(429).json({
+        error: 'تم تجاوز الحد الأقصى لمحاولات إدخال الكود — يرجى طلب كود جديد',
+      });
+    }
+
+    const isMatch = bcrypt.compareSync(code, record.code_hash);
+    if (!isMatch) {
+      run(`UPDATE email_verifications SET attempts = attempts + 1 WHERE id = ?`, [
+        record.id,
+      ]);
+      writeAudit({
+        actorName: email,
+        action: 'إدخال كود تأكيد بريد خاطئ',
+        status: 'DENIED',
+        req,
+        details: `المحاولة رقم ${record.attempts + 1}`,
+      });
+      return res.status(400).json({
+        error: 'كود التأكيد غير صحيح — يرجى مراجعة الرسالة المرسلة إلى بريدك الإلكتروني',
+      });
+    }
+
+    run(`UPDATE email_verifications SET verified_at = datetime('now') WHERE id = ?`, [
+      record.id,
+    ]);
+
+    const { user, isNewUser } = findOrCreateVerifiedEmployee({
+      provider: 'email',
+      fullName: record.full_name || fallbackName || email.split('@')[0],
+      email,
+      req,
+    });
+
+    const rawRow = get(`SELECT * FROM users WHERE id = ?`, [user.id]);
+    const token = signUserToken(rawRow);
+    const isHttps =
+      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    res.cookie(COOKIE_NAME, token, {
+      httpOnly: true,
+      sameSite: isHttps ? 'none' : 'lax',
+      secure: isHttps,
+      partitioned: isHttps,
+      maxAge: 12 * 3600 * 1000,
+    });
+
+    return res.json({
+      ok: true,
+      token,
+      isNewUser,
+      user: authRoutes.serializeCurrentUser(user),
+    });
+  } catch (err) {
+    console.error('verify-code error:', err);
+    return res
+      .status(err.statusCode || 500)
+      .json({ error: err.message || 'تعذر التحقق من الكود' });
+  }
+});
+
+// ==========================================
+// 2. REAL GOOGLE OAUTH 2.0 FLOW (OPTIONAL)
 // ==========================================
 router.get('/oauth/google/start', (req, res) => {
-  const { googleClientId, googleClientSecret } = getOAuthCredentials();
+  const { googleClientId, googleClientSecret } = getGoogleCredentials();
   if (!googleClientId || !googleClientSecret) {
     return res.redirect('/?oauth_error=google_not_configured');
   }
@@ -217,7 +409,7 @@ router.get('/oauth/google/callback', async (req, res) => {
     if (!code || !state) return res.redirect('/?oauth_error=cancelled');
 
     const decodedState = jwt.verify(String(state), JWT_SECRET);
-    const { googleClientId, googleClientSecret } = getOAuthCredentials();
+    const { googleClientId, googleClientSecret } = getGoogleCredentials();
     const redirectUri = `${getBaseOrigin(req)}/api/auth/oauth/google/callback`;
 
     const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
@@ -240,155 +432,17 @@ router.get('/oauth/google/callback', async (req, res) => {
       headers: { Authorization: `Bearer ${tokenJson.access_token}` },
     });
     const profile = await profileResp.json();
-    if (!profile || !profile.sub) {
+    if (!profileResp.ok || !profile.sub || !profile.email || profile.email_verified === false) {
       return res.redirect('/?oauth_error=google_profile_failed');
     }
 
-    const { user } = findOrCreateSocialUser({
+    const { user } = findOrCreateVerifiedEmployee({
       provider: 'google',
       oauthId: profile.sub,
       fullName: profile.name || profile.email || 'موظف Google',
-      email: profile.email || '',
+      email: profile.email,
       avatarUrl: profile.picture || null,
       preferredDepartmentId: decodedState.d || null,
-      req,
-    });
-
-    const rawRow = get(`SELECT * FROM users WHERE id = ?`, [user.id]);
-    const appToken = signUserToken(rawRow);
-    const isHttps =
-      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
-    res.cookie(COOKIE_NAME, appToken, {
-      httpOnly: true,
-      sameSite: isHttps ? 'none' : 'lax',
-      secure: isHttps,
-      partitioned: isHttps,
-      maxAge: 12 * 3600 * 1000,
-    });
-
-    return res.redirect(`/?oauth_token=${encodeURIComponent(appToken)}`);
-  } catch (err) {
-    console.error('Google OAuth callback error:', err);
-    return res.redirect('/?oauth_error=google_exception');
-  }
-});
-
-// ==========================================
-// 2. REAL FACEBOOK OAUTH 2.0 FLOW
-// ==========================================
-router.get('/oauth/facebook/start', (req, res) => {
-  const { facebookAppId, facebookAppSecret } = getOAuthCredentials();
-  if (!facebookAppId || !facebookAppSecret) {
-    return res.redirect('/?oauth_error=facebook_not_configured');
-  }
-  const redirectUri = `${getBaseOrigin(req)}/api/auth/oauth/facebook/callback`;
-  const prefDept = req.query.dept ? Number(req.query.dept) : null;
-  const state = jwt.sign({ p: 'facebook', d: prefDept }, JWT_SECRET, { expiresIn: '15m' });
-
-  const params = new URLSearchParams({
-    client_id: facebookAppId,
-    redirect_uri: redirectUri,
-    response_type: 'code',
-    scope: 'public_profile,email',
-    state,
-  });
-
-  res.redirect(`https://www.facebook.com/v20.0/dialog/oauth?${params.toString()}`);
-});
-
-router.get('/oauth/facebook/callback', async (req, res) => {
-  try {
-    const { code, state } = req.query;
-    if (!code || !state) return res.redirect('/?oauth_error=cancelled');
-
-    const decodedState = jwt.verify(String(state), JWT_SECRET);
-    const { facebookAppId, facebookAppSecret } = getOAuthCredentials();
-    const redirectUri = `${getBaseOrigin(req)}/api/auth/oauth/facebook/callback`;
-
-    const tokenUrl = `https://graph.facebook.com/v20.0/oauth/access_token?${new URLSearchParams({
-      client_id: facebookAppId,
-      client_secret: facebookAppSecret,
-      redirect_uri: redirectUri,
-      code: String(code),
-    }).toString()}`;
-
-    const tokenResp = await fetch(tokenUrl);
-    const tokenJson = await tokenResp.json();
-    if (!tokenResp.ok || !tokenJson.access_token) {
-      return res.redirect('/?oauth_error=facebook_token_failed');
-    }
-
-    const meUrl = `https://graph.facebook.com/me?fields=id,name,email,picture.type(large)&access_token=${encodeURIComponent(
-      tokenJson.access_token
-    )}`;
-    const meResp = await fetch(meUrl);
-    const profile = await meResp.json();
-    if (!profile || !profile.id) {
-      return res.redirect('/?oauth_error=facebook_profile_failed');
-    }
-
-    const picUrl =
-      profile.picture && profile.picture.data && profile.picture.data.url
-        ? profile.picture.data.url
-        : null;
-
-    const { user } = findOrCreateSocialUser({
-      provider: 'facebook',
-      oauthId: profile.id,
-      fullName: profile.name || 'موظف Facebook',
-      email: profile.email || `${profile.id}@facebook.user`,
-      avatarUrl: picUrl,
-      preferredDepartmentId: decodedState.d || null,
-      req,
-    });
-
-    const rawRow = get(`SELECT * FROM users WHERE id = ?`, [user.id]);
-    const appToken = signUserToken(rawRow);
-    const isHttps =
-      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
-    res.cookie(COOKIE_NAME, appToken, {
-      httpOnly: true,
-      sameSite: isHttps ? 'none' : 'lax',
-      secure: isHttps,
-      partitioned: isHttps,
-      maxAge: 12 * 3600 * 1000,
-    });
-
-    return res.redirect(`/?oauth_token=${encodeURIComponent(appToken)}`);
-  } catch (err) {
-    console.error('Facebook OAuth callback error:', err);
-    return res.redirect('/?oauth_error=facebook_exception');
-  }
-});
-
-// ==========================================
-// 3. INSTANT SOCIAL ENTRY (Works immediately without external API keys for fast onboarding & testing!)
-// ==========================================
-router.post('/social-entry', (req, res) => {
-  try {
-    const body = req.body || {};
-    const provider = body.provider === 'facebook' ? 'facebook' : 'google';
-    const fullName = String(body.fullName || '').trim();
-    const email = String(body.email || '').trim().toLowerCase();
-    const jobTitle = String(body.jobTitle || '').trim();
-    const preferredDepartmentId = body.preferredDepartmentId
-      ? Number(body.preferredDepartmentId)
-      : null;
-
-    if (fullName.length < 2 || fullName.length > 100) {
-      return res.status(400).json({ error: 'يرجى كتابة اسمك الثلاثي أو الكامل باللغة العربية أو الإنجليزية' });
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ error: 'يرجى إدخال بريد إلكتروني صحيح مرتبط بحسابك' });
-    }
-
-    const { user, isNewUser } = findOrCreateSocialUser({
-      provider,
-      oauthId: `${provider}:${email}`,
-      fullName,
-      email,
-      preferredDepartmentId,
-      jobTitle,
       req,
     });
 
@@ -404,19 +458,16 @@ router.post('/social-entry', (req, res) => {
       maxAge: 12 * 3600 * 1000,
     });
 
-    res.json({
-      ok: true,
-      isNewUser,
-      token,
-    });
+    return res.redirect(`/?oauth_token=${encodeURIComponent(token)}`);
   } catch (err) {
-    const code = err.statusCode || 500;
-    res.status(code).json({ error: err.message || 'تعذر إتمام التسجيل' });
+    console.error('Google OAuth callback error:', err);
+    return res.redirect('/?oauth_error=google_exception');
   }
 });
 
-module.exports = {
-  router,
-  getOAuthCredentials,
-  getBaseOrigin,
-};
+router.router = router;
+router.getGoogleCredentials = getGoogleCredentials;
+router.getOAuthCredentials = getGoogleCredentials;
+router.getBaseOrigin = getBaseOrigin;
+router._lastTestOtpByEmail = _lastTestOtpByEmail;
+module.exports = router;

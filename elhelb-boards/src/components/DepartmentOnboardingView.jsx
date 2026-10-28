@@ -120,7 +120,7 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                 : `ضم الموظفين الجدد إلى (${user.departmentName})`}
             </div>
             <div style={{ fontSize: 13, color: '#475569', marginTop: 2 }}>
-              كل موظف يسجل دخوله بحساب <strong>Google</strong> أو <strong>Facebook</strong> يظهر هنا باسمه الحقيقي ليقوم رئيس القسم بإضافته إلى قسمه وتحديد صلاحيته بضغطة واحدة.
+              كل موظف يؤكد بريده الإلكتروني وينشئ بيانات دخوله يظهر هنا باسمه الحقيقي ليقوم رئيس القسم بإضافته إلى قسمه وتحديد صلاحيته بضغطة واحدة.
             </div>
           </div>
         </div>
@@ -131,7 +131,7 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
         </button>
       </div>
 
-      {/* Pending Social Signups Section */}
+      {/* Pending Signups Section */}
       <div className="card-box" style={{ marginBottom: 24 }}>
         <div
           style={{
@@ -143,9 +143,9 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
             gap: 8,
           }}
         >
-          <h3 style={{ margin: 0, fontSize: 16.5, fontWeight: 900, color: '#0b2545', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <h3 style={{ margin: 0, fontSize: 16.5, fontWeight: 900, color: '#071e14', display: 'flex', alignItems: 'center', gap: 8 }}>
             <Clock size={18} color="#d97706" />
-            موظفون مسجلون بـ Google / Facebook بانتظار الضم للأقسام ({data.pendingUsers.length})
+            موظفون مؤكد بريدهم الإلكتروني بانتظار الضم للأقسام ({data.pendingUsers.length})
           </h3>
         </div>
 
@@ -169,7 +169,7 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
               لا يوجد موظفون في قائمة الانتظار حالياً
             </div>
             <div style={{ fontSize: 13 }}>
-              بمجرد تسجيل أي موظف جديد عبر Google أو Facebook من شاشة الدخول، سيظهر اسمه هنا فوراً لتضمه إلى قسمك.
+              بمجرد تسجيل أي موظف جديد وتأكيد بريده الإلكتروني من شاشة الدخول، سيظهر اسمه هنا فوراً لتضمه إلى قسمك.
             </div>
           </div>
         ) : (
@@ -181,9 +181,9 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                 Number(pu.preferred_department_id) === Number(user.departmentId);
 
               const providerBadgeBg =
-                pu.auth_provider === 'facebook' ? '#1877f2' : '#ea4335';
+                pu.auth_provider === 'google' ? '#ea4335' : '#15803d';
               const providerLabel =
-                pu.auth_provider === 'facebook' ? 'Facebook' : 'Google';
+                pu.auth_provider === 'google' ? 'Google' : 'بريد مؤكد ✓';
 
               return (
                 <div
@@ -406,9 +406,9 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                       <span className="badge" style={{ background: '#fee2e2', color: '#b91c1c' }}>
                         Google
                       </span>
-                    ) : m.auth_provider === 'facebook' ? (
-                      <span className="badge" style={{ background: '#dbeafe', color: '#1d4ed8' }}>
-                        Facebook
+                    ) : m.auth_provider === 'email' ? (
+                      <span className="badge" style={{ background: '#dcfce7', color: '#166534' }}>
+                        بريد مؤكد ✓
                       </span>
                     ) : (
                       <span className="badge" style={{ background: '#f1f5f9', color: '#334155' }}>

@@ -155,18 +155,16 @@ export default function WaitingOnboardingView({
   }
 
   const providerLabel =
-    user.authProvider === 'facebook'
-      ? 'Facebook'
-      : user.authProvider === 'google'
-      ? 'Google'
-      : 'الشركة';
+    user.authProvider === 'google'
+      ? 'حساب Google الموثق'
+      : 'البريد الإلكتروني المؤكد';
 
   return (
     <div className="app-shell">
       <header className="top-navbar">
         <div className="nav-right">
           <div className="nav-brand" style={{ cursor: 'default' }}>
-            <img src="/logo.png" alt="ELHELB GROUP" />
+            <img src="/logo.gif" alt="ELHELB GROUP" />
             <div>
               <div className="nav-brand-title">ELHELB GROUP</div>
               <div className="nav-brand-sub">إعداد حساب الموظف وتحديد القسم</div>
@@ -182,7 +180,7 @@ export default function WaitingOnboardingView({
             <div style={{ lineHeight: 1.25 }}>
               <div style={{ fontSize: 12.5, fontWeight: 800 }}>{user.fullName}</div>
               <div style={{ fontSize: 10.5, color: '#fde68a', fontWeight: 700 }}>
-                مسجل عبر {providerLabel}
+                {providerLabel}
               </div>
             </div>
           </div>
@@ -287,11 +285,11 @@ export default function WaitingOnboardingView({
                   <span
                     className="badge"
                     style={{
-                      background: user.authProvider === 'facebook' ? '#1877f2' : '#ea4335',
+                      background: '#15803d',
                       color: '#fff',
                     }}
                   >
-                    تم التحقق بحساب {providerLabel}
+                    تم تأكيد البريد الإلكتروني بنجاح ✓
                   </span>
                   {user.email && (
                     <span className="badge" style={{ background: '#f1f5f9', color: '#334155' }} dir="ltr">

@@ -7,7 +7,7 @@ const { sendElhelbEmail } = require('../mailer');
 const router = express.Router();
 router.use(authenticate);
 
-// Step 1 after Google/Facebook login: Employee creates their own Username & Password!
+// Step 1 after Email Verification: Employee creates their own Username & Password!
 router.post('/setup-credentials', async (req, res) => {
   try {
     const body = req.body || {};
@@ -78,7 +78,7 @@ router.post('/setup-credentials', async (req, res) => {
   }
 });
 
-// Step 2 after Google/Facebook login: Employee selects their Department & notifies Department Head + Gmail!
+// Step 2 after Email Verification: Employee selects their Department & notifies Department Head + Gmail!
 router.patch('/my-preference', async (req, res) => {
   try {
     const { preferredDepartmentId, jobTitle } = req.body || {};
@@ -144,7 +144,7 @@ router.patch('/my-preference', async (req, res) => {
         badgeColor: '#d97706',
         heading: `قام (${req.user.full_name}) بالتسجيل وتحديد قسمه في مجموعة الهلب`,
         bodyLines: [
-          `سجّل الموظف دخوله عبر (${req.user.auth_provider === 'facebook' ? 'Facebook' : 'Google'}) وأنشأ اسم المستخدم وكلمة المرور الخاصة به، وحدد أنه تابع لـ (${dept.name}).`,
+          `أكد الموظف بريده الإلكتروني وأنشأ اسم المستخدم وكلمة المرور الخاصة به، وحدد أنه تابع لـ (${dept.name}).`,
           `يرجى الدخول إلى تبويب "ضم الموظفين للقسم" لاعتماده وتحديد دوره الوظيفي.`,
         ],
         details: [
@@ -169,7 +169,7 @@ router.patch('/my-preference', async (req, res) => {
   }
 });
 
-// List pending Google/Facebook employees + department team roster for Department Heads & IT/Admin
+// List pending verified employees + department team roster for Department Heads & IT/Admin
 router.get('/pending', (req, res) => {
   const canManageAll = userHasPermission(req.user, 'users.manage');
   const canOnboardDept = userHasPermission(req.user, 'department.onboard_members');

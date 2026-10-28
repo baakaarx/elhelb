@@ -155,11 +155,20 @@ export default function App() {
           justifyContent: 'center',
           flexDirection: 'column',
           gap: 12,
-          background: '#06182c',
+          background: '#071e14',
           color: '#fff',
         }}
       >
-        <img src="/logo.png" alt="ELHELB" style={{ width: 72 }} />
+        <img
+          src="/logo.gif"
+          alt="ELHELB"
+          style={{
+            width: 112,
+            height: 112,
+            borderRadius: 20,
+            border: '1px solid rgba(212,169,10,0.45)',
+          }}
+        />
         <div style={{ fontWeight: 800, fontSize: 16 }}>
           جاري تحميل منصة مجموعة الهلب والتحقق من الصلاحيات...
         </div>
@@ -179,7 +188,7 @@ export default function App() {
     );
   }
 
-  // Gate newly registered Google / Facebook employees in the Onboarding Wizard until credentials + department head approval!
+  // Gate newly registered employees in the Onboarding Wizard until credentials + department head approval!
   if (user.onboardingStatus === 'pending' || !user.hasCustomCredentials) {
     return (
       <>

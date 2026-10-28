@@ -42,17 +42,18 @@ function getGmailConfig() {
 function isDeliverableEmail(email) {
   const clean = String(email || '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) return false;
-  if (clean.endsWith('@facebook.user') || clean.endsWith('@example.com')) return false;
+  if (clean.endsWith('@example.com')) return false;
   return true;
 }
 
 function buildArabicEmailHtml({
   heading,
   badgeText,
-  badgeColor = '#0a6fa8',
+  badgeColor = '#15803d',
   bodyLines = [],
+  otpCode = '',
   details = [],
-  footerNote = 'هذه رسالة إشعار تلقائية صادرة من نظام إدارة اللوحات والصلاحيات لمجموعة الهلب (ELHELB GROUP).',
+  footerNote = 'رسالة رسمية صادرة من المنصة الرقمية الموحدة لمجموعة الهلب (ELHELB GROUP — Manufacturers of Pesticides & Agrochemicals).',
 }) {
   const badgeHtml = badgeText
     ? `<div style="display:inline-block;background:${escapeHtml(
@@ -71,6 +72,15 @@ function buildArabicEmailHtml({
     )
     .join('');
 
+  const otpHtml = otpCode
+    ? `<div style="margin:20px 0;padding:18px 16px;text-align:center;background:#f0fdf4;border:2px dashed #16a34a;border-radius:12px;">
+         <div style="font-size:12px;font-weight:700;color:#166534;margin-bottom:6px;">كود تأكيد البريد الإلكتروني (صالح لمدة 10 دقائق)</div>
+         <div dir="ltr" style="font-size:32px;font-weight:900;letter-spacing:9px;color:#071e14;font-family:'Courier New',monospace;">${escapeHtml(
+           otpCode
+         )}</div>
+       </div>`
+    : '';
+
   const detailsHtml =
     details.length > 0
       ? `<table style="width:100%;border-collapse:collapse;margin:16px 0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
@@ -78,7 +88,7 @@ function buildArabicEmailHtml({
             .map(
               ([label, val]) => `
             <tr>
-              <td style="padding:9px 14px;border-bottom:1px solid #e2e8f0;font-weight:700;color:#0b2545;font-size:13px;width:36%;">${escapeHtml(
+              <td style="padding:9px 14px;border-bottom:1px solid #e2e8f0;font-weight:700;color:#071e14;font-size:13px;width:36%;">${escapeHtml(
                 label
               )}</td>
               <td style="padding:9px 14px;border-bottom:1px solid #e2e8f0;color:#1e293b;font-size:13.5px;">${escapeHtml(
@@ -93,16 +103,17 @@ function buildArabicEmailHtml({
   return `<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head><meta charset="UTF-8" /></head>
-<body style="margin:0;padding:24px 12px;background:#f1f5f9;font-family:'Segoe UI',Tahoma,Arial,sans-serif;direction:rtl;text-align:right;">
-  <div style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #cbd5e1;box-shadow:0 4px 14px rgba(15,23,42,0.06);">
-    <div style="background:linear-gradient(135deg,#06182c 0%,#0b2545 100%);padding:20px 24px;border-bottom:4px solid #d4a90a;">
-      <div style="color:#fde68a;font-size:12px;font-weight:700;letter-spacing:0.5px;">ELHELB GROUP</div>
-      <div style="color:#ffffff;font-size:19px;font-weight:800;margin-top:3px;">مجموعة الهلب — إدارة المهام والأقسام</div>
+<body style="margin:0;padding:24px 12px;background:#eef5f0;font-family:'Segoe UI',Tahoma,Arial,sans-serif;direction:rtl;text-align:right;">
+  <div style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #cbd5e1;box-shadow:0 4px 14px rgba(7,30,20,0.08);">
+    <div style="background:linear-gradient(135deg,#071e14 0%,#0f3a25 100%);padding:22px 24px;border-bottom:4px solid #d4a90a;">
+      <div style="color:#fde68a;font-size:12px;font-weight:700;letter-spacing:1.2px;">ELHELB GROUP • SINCE 1993</div>
+      <div style="color:#ffffff;font-size:19px;font-weight:800;margin-top:3px;">مجموعة الهلب — المنصة الرقمية لإدارة القطاعات والأقسام</div>
     </div>
     <div style="padding:24px;">
       ${badgeHtml}
-      <h2 style="margin:0 0 12px;font-size:18px;color:#0b2545;">${escapeHtml(heading)}</h2>
+      <h2 style="margin:0 0 12px;font-size:18px;color:#071e14;">${escapeHtml(heading)}</h2>
       ${paragraphsHtml}
+      ${otpHtml}
       ${detailsHtml}
     </div>
     <div style="background:#f8fafc;padding:14px 24px;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b;line-height:1.6;">
@@ -287,13 +298,76 @@ async function sendTestGmail(targetEmail) {
   }
 }
 
+async function sendEmailVerificationCode({ toEmail, fullName, code }) {
+  const cfg = getGmailConfig();
+  const cleanEmail = String(toEmail || '').trim().toLowerCase();
+  if (!isDeliverableEmail(cleanEmail)) {
+    return { sent: false, reason: 'INVALID_EMAIL' };
+  }
+
+  const subject = `🔐 كود تأكيد بريدك الإلكتروني (${code}) — مجموعة الهلب ELHELB GROUP`;
+
+  if (!cfg.enabled || !cfg.configured) {
+    logEmailAttempt({
+      toEmail: cleanEmail,
+      subject: 'كود تأكيد البريد الإلكتروني للتسجيل',
+      eventType: 'email_verification',
+      status: 'SKIPPED_NOT_CONFIGURED',
+      errorMessage: 'لم يتم تفعيل إعدادات البريد Gmail من لوحة الإدارة بعد',
+    });
+    return { sent: false, reason: 'NOT_CONFIGURED' };
+  }
+
+  const html = buildArabicEmailHtml({
+    heading: `أهلاً بك ${fullName || ''} في منصة مجموعة الهلب`,
+    badgeText: 'تأكيد البريد الإلكتروني',
+    badgeColor: '#15803d',
+    bodyLines: [
+      'أدخل كود التحقق التالي في شاشة التسجيل لتأكيد ملكية بريدك الإلكتروني والمتابعة لإنشاء اسم المستخدم وكلمة المرور واختيار قسمك:',
+    ],
+    otpCode: String(code),
+    details: [
+      ['البريد الإلكتروني', cleanEmail],
+      ['صلاحية الكود', '10 دقائق من وقت الإرسال'],
+    ],
+  });
+
+  try {
+    const transporter = createGmailTransport(cfg);
+    const info = await transporter.sendMail({
+      from: `"${cfg.senderName.replace(/"/g, '')}" <${cfg.gmailUser}>`,
+      to: cleanEmail,
+      subject,
+      html,
+    });
+    logEmailAttempt({
+      toEmail: cleanEmail,
+      subject: 'كود تأكيد البريد الإلكتروني للتسجيل',
+      eventType: 'email_verification',
+      status: 'SENT',
+    });
+    return { sent: true, messageId: info.messageId };
+  } catch (err) {
+    logEmailAttempt({
+      toEmail: cleanEmail,
+      subject: 'كود تأكيد البريد الإلكتروني للتسجيل',
+      eventType: 'email_verification',
+      status: 'FAILED',
+      errorMessage: err.message || 'SMTP Error',
+    });
+    return { sent: false, reason: 'SMTP_ERROR', error: err.message };
+  }
+}
+
 function getRecentEmailLogs(limit = 50) {
   return all(`SELECT * FROM email_logs ORDER BY id DESC LIMIT ?`, [Number(limit)]);
 }
 
 module.exports = {
   getGmailConfig,
+  isDeliverableEmail,
   sendElhelbEmail,
+  sendEmailVerificationCode,
   sendTestGmail,
   getRecentEmailLogs,
 };

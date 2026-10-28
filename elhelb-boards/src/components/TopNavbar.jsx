@@ -109,10 +109,10 @@ export default function TopNavbar({
           onClick={() => onSelectTab('boards')}
           title="العودة إلى لوحات العمل"
         >
-          <img src="/logo.png" alt="ELHELB GROUP" />
+          <img src="/logo.gif" alt="ELHELB GROUP" />
           <div>
             <div className="nav-brand-title">ELHELB GROUP</div>
-            <div className="nav-brand-sub">إدارة المهام والصلاحيات</div>
+            <div className="nav-brand-sub">إدارة المهام والقطاعات</div>
           </div>
         </div>
 

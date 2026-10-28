@@ -741,7 +741,7 @@ router.delete('/departments/:id(\\d+)', (req, res) => {
 });
 
 // ==========================================
-// GOOGLE & FACEBOOK OAUTH CONFIGURATION (لـ IT والإدارة العليا)
+// GOOGLE OAUTH 2.0 CONFIGURATION (لـ IT والإدارة العليا)
 // ==========================================
 
 router.get('/oauth-settings', (req, res) => {
@@ -751,7 +751,7 @@ router.get('/oauth-settings', (req, res) => {
   ) {
     return denyPermission(req, res, {
       permissionKey: 'roles.manage',
-      actionLabel: 'عرض إعدادات ربط تسجيل الدخول عبر Google وFacebook',
+      actionLabel: 'عرض إعدادات ربط تسجيل الدخول عبر Google',
       canRequestElevation: false,
     });
   }
@@ -764,11 +764,6 @@ router.get('/oauth-settings', (req, res) => {
     googleSecretSaved: Boolean(creds.googleClientSecret),
     googleConfigured: Boolean(creds.googleClientId && creds.googleClientSecret),
     googleCallbackUrl: `${origin}/api/auth/oauth/google/callback`,
-
-    facebookAppId: getSetting('facebook_app_id', process.env.FACEBOOK_APP_ID || ''),
-    facebookSecretSaved: Boolean(creds.facebookAppSecret),
-    facebookConfigured: Boolean(creds.facebookAppId && creds.facebookAppSecret),
-    facebookCallbackUrl: `${origin}/api/auth/oauth/facebook/callback`,
   });
 });
 
@@ -776,7 +771,7 @@ router.put('/oauth-settings', (req, res) => {
   if (!evaluatePermission(req.user, 'roles.manage').allowed) {
     return denyPermission(req, res, {
       permissionKey: 'roles.manage',
-      actionLabel: 'تحديث مفاتيح الربط مع Google وFacebook',
+      actionLabel: 'تحديث مفاتيح الربط مع Google',
       canRequestElevation: false,
     });
   }
@@ -792,19 +787,9 @@ router.put('/oauth-settings', (req, res) => {
     setSetting('google_client_secret', '', req.user.id);
   }
 
-  if (body.facebookAppId !== undefined) {
-    setSetting('facebook_app_id', String(body.facebookAppId || '').trim(), req.user.id);
-  }
-  if (body.facebookAppSecret !== undefined && String(body.facebookAppSecret).trim() !== '') {
-    setSetting('facebook_app_secret', String(body.facebookAppSecret).trim(), req.user.id);
-  }
-  if (body.clearFacebookSecret) {
-    setSetting('facebook_app_secret', '', req.user.id);
-  }
-
   writeAudit({
     user: req.user,
-    action: 'تحديث إعدادات تسجيل الدخول عبر Google / Facebook',
+    action: 'تحديث إعدادات تسجيل الدخول عبر Google',
     permissionKey: 'roles.manage',
     status: 'ALLOWED',
     req,
@@ -814,7 +799,6 @@ router.put('/oauth-settings', (req, res) => {
   res.json({
     ok: true,
     googleConfigured: Boolean(creds.googleClientId && creds.googleClientSecret),
-    facebookConfigured: Boolean(creds.facebookAppId && creds.facebookAppSecret),
   });
 });
 
