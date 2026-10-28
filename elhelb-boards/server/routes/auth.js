@@ -39,12 +39,19 @@ function countReviewablePendingRequests(user) {
 
 function countPendingOnboardingUsers(user) {
   if (!user.permissionSet || user.onboarding_status === 'pending') return 0;
-  if (
-    user.permissionSet.has('users.manage') ||
-    user.permissionSet.has('department.onboard_members')
-  ) {
+  if (user.permissionSet.has('users.manage')) {
     const r = get(
       `SELECT COUNT(*) AS cnt FROM users WHERE onboarding_status = 'pending' AND is_active = 1`
+    );
+    return r ? r.cnt : 0;
+  }
+  if (user.permissionSet.has('department.onboard_members') && user.department_id) {
+    const r = get(
+      `SELECT COUNT(*) AS cnt FROM users
+       WHERE onboarding_status = 'pending'
+         AND is_active = 1
+         AND (preferred_department_id IS NULL OR preferred_department_id = ?)`,
+      [user.department_id]
     );
     return r ? r.cnt : 0;
   }
@@ -86,7 +93,7 @@ function serializeCurrentUser(user) {
     departmentId: user.department_id,
     departmentSlug: user.department_slug,
     departmentName: isPending
-      ? 'بانتظار ضم رئيس القسم'
+      ? 'بانتظار اعتماد الموارد البشرية (HR)'
       : user.department_name || 'الإدارة العليا (كل الأقسام)',
     departmentColor: isPending ? '#64748b' : user.department_color || '#b45309',
     permissions: user.permissions,

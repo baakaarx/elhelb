@@ -133,9 +133,9 @@ export default function TopNavbar({
               onClick={() => onSelectTab('onboarding')}
             >
               <UserPlus size={15} />
-              ضم الموظفين للقسم
+              تسكين وقبول الموظفين (HR)
               {user.pendingOnboardingCount > 0 && (
-                <span className="nav-badge" title="موظفون مسجلون بانتظار الضم">
+                <span className="nav-badge" title="موظفون جدد بانتظار التسكين">
                   {user.pendingOnboardingCount}
                 </span>
               )}
@@ -177,7 +177,7 @@ export default function TopNavbar({
               onClick={() => onSelectTab('admin')}
             >
               <Shield size={15} />
-              إدارة الصلاحيات والنظام
+              {permSet.has('roles.manage') ? 'إدارة الصلاحيات والنظام' : 'إدارة الموظفين والحسابات'}
             </button>
           )}
         </nav>

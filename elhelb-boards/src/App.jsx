@@ -111,7 +111,7 @@ export default function App() {
       );
     } else if (loggedUser.onboardingStatus === 'pending') {
       showToast(
-        `أهلاً بك ${loggedUser.fullName} — حسابك جاهز وبانتظار ضم رئيس القسم`,
+        `أهلاً بك ${loggedUser.fullName} — حسابك جاهز وبانتظار اعتماد الموارد البشرية (HR)`,
         'info'
       );
     } else {

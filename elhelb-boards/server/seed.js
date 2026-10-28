@@ -130,13 +130,13 @@ const PERMISSIONS_CATALOG = [
     sort_order: 150,
   },
 
-  // 5. إدارة موظفي القسم وطلبات الصلاحيات
+  // 5. إدارة الموظفين وتسكين الأقسام وطلبات الصلاحيات
   {
     key: 'department.onboard_members',
-    name: 'ضم وتسكين الموظفين الجدد في القسم (لرئيس القسم)',
-    description: 'يسمح لرئيس القسم بإضافة الموظفين الجدد المؤكد بريدهم الإلكتروني إلى قسمه وتعيين دورهم بالقسم',
+    name: 'ضم وتسكين الموظفين الجدد في القسم',
+    description: 'يسمح بقبول وتسكين الموظفين الجدد وتحديد دورهم داخل القسم التابع له',
     category: 'governance',
-    category_label: 'إدارة القسم والطلبات والنظام',
+    category_label: 'إدارة الموارد البشرية والأقسام والنظام',
     sort_order: 155,
   },
   {
@@ -144,7 +144,7 @@ const PERMISSIONS_CATALOG = [
     name: 'اعتماد طلبات الصلاحيات لموظفي القسم',
     description: 'مراجعة وقبول أو رفض طلبات الاستثناء المؤقتة داخل نفس القسم',
     category: 'governance',
-    category_label: 'إدارة القسم والطلبات والنظام',
+    category_label: 'إدارة الموارد البشرية والأقسام والنظام',
     sort_order: 160,
   },
   {
@@ -152,15 +152,15 @@ const PERMISSIONS_CATALOG = [
     name: 'اعتماد طلبات الصلاحيات لجميع الأقسام',
     description: 'مراجعة ومنح تصاريح العمل المؤقتة أو العابرة للأقسام على مستوى الشركة',
     category: 'governance',
-    category_label: 'إدارة القسم والطلبات والنظام',
+    category_label: 'إدارة الموارد البشرية والأقسام والنظام',
     sort_order: 170,
   },
   {
     key: 'users.manage',
-    name: 'إدارة حسابات الموظفين وتعيين أدوارهم على مستوى الشركة',
-    description: 'إضافة موظفين جدد، تعديل أقسامهم أو أدوارهم، أو إيقاف الحسابات',
+    name: 'إدارة وتسكين وحذف حسابات الموظفين على مستوى الشركة (HR / الإدارة)',
+    description: 'تسجيل موظفين جدد، قبول وتسكين المسجلين في كافة الأقسام، تعديل الأدوار والأقسام، إيقاف الحسابات، أو الحذف النهائي لمن ترك العمل',
     category: 'governance',
-    category_label: 'إدارة القسم والطلبات والنظام',
+    category_label: 'إدارة الموارد البشرية والأقسام والنظام',
     sort_order: 180,
   },
   {
@@ -168,7 +168,7 @@ const PERMISSIONS_CATALOG = [
     name: 'إدارة الأدوار ومصفوفة الصلاحيات (DB)',
     description: 'إنشاء وتعديل الأدوار وتفعيل/إلغاء الصلاحيات مباشرة في قاعدة البيانات',
     category: 'governance',
-    category_label: 'إدارة القسم والطلبات والنظام',
+    category_label: 'إدارة الموارد البشرية والأقسام والنظام',
     sort_order: 190,
   },
   {
@@ -176,7 +176,7 @@ const PERMISSIONS_CATALOG = [
     name: 'إدارة هيكل أقسام الشركة',
     description: 'إضافة أو تعديل أو حذف الأقسام الإدارية والتشغيلية بالشركة',
     category: 'governance',
-    category_label: 'إدارة القسم والطلبات والنظام',
+    category_label: 'إدارة الموارد البشرية والأقسام والنظام',
     sort_order: 200,
   },
   {
@@ -184,7 +184,7 @@ const PERMISSIONS_CATALOG = [
     name: 'الاطلاع على سجل المراقبة الأمنية (Audit Log)',
     description: 'مراجعة كافة العمليات المسموحة والمرفوضة أمنياً على السيرفر',
     category: 'governance',
-    category_label: 'إدارة القسم والطلبات والنظام',
+    category_label: 'إدارة الموارد البشرية والأقسام والنظام',
     sort_order: 210,
   },
 ];
@@ -212,8 +212,46 @@ function seedIfNeeded() {
     `INSERT OR IGNORE INTO system_settings (key, value) VALUES ('gmail_admin_cc', 'mb9836504@gmail.com')`
   );
 
+  const HR_ROLE_DEFAULT_PERMS = [
+    'users.manage',
+    'department.onboard_members',
+    'boards.view_department',
+    'boards.create',
+    'boards.edit',
+    'lists.create',
+    'lists.edit',
+    'lists.delete',
+    'cards.create',
+    'cards.edit',
+    'cards.move',
+    'cards.assign',
+    'cards.delete',
+    'comments.create',
+    'comments.delete_any',
+    'requests.review_department',
+  ];
+
   const existingUsers = get(`SELECT COUNT(*) AS cnt FROM users`);
   if (existingUsers && existingUsers.cnt > 0) {
+    // Safe migration: ensure hr_manager role exists in pre-existing local databases
+    const existingHrRole = get(`SELECT id FROM roles WHERE slug = 'hr_manager'`);
+    if (!existingHrRole) {
+      transaction(() => {
+        const hrRoleId = run(
+          `INSERT INTO roles (slug, name, description, color, rank_level, is_protected)
+           VALUES ('hr_manager', 'مسؤول الموارد البشرية (HR)', ?, '#d97706', 70, 1)`,
+          [
+            'قبول وتسكين الموظفين الجدد عبر كافة أقسام الشركة، إنشاء حسابات الموظفين، وحذف أو إيقاف حسابات من يترك العمل (مع عزله التشغيلي داخل لوحات قسم الموارد البشرية فقط)',
+          ]
+        ).lastInsertRowid;
+        for (const k of HR_ROLE_DEFAULT_PERMS) {
+          run(`INSERT OR IGNORE INTO role_permissions (role_id, permission_key) VALUES (?, ?)`, [
+            hrRoleId,
+            k,
+          ]);
+        }
+      });
+    }
     return;
   }
 
@@ -335,12 +373,22 @@ function seedIfNeeded() {
       ]
     ).lastInsertRowid;
 
+    const hrMgrRole = run(
+      `INSERT INTO roles (slug, name, description, color, rank_level, is_protected) VALUES (?, ?, ?, ?, 70, 1)`,
+      [
+        'hr_manager',
+        'مسؤول الموارد البشرية (HR)',
+        'قبول وتسكين الموظفين الجدد عبر كافة أقسام الشركة، تسجيل حسابات الموظفين، وحذف أو إيقاف حسابات من يترك العمل (مع عزله التشغيلي داخل لوحات قسم الموارد البشرية فقط)',
+        '#d97706',
+      ]
+    ).lastInsertRowid;
+
     const deptMgrRole = run(
       `INSERT INTO roles (slug, name, description, color, rank_level, is_protected) VALUES (?, ?, ?, ?, 60, 1)`,
       [
         'dept_manager',
         'رئيس قسم',
-        'إدارة شاملة للوحات ومهام القسم، ضم وتسكين موظفي قسمه الجدد، واعتماد طلبات الصلاحيات داخل قسمه',
+        'إدارة شاملة للوحات ومهام القسم وتوزيع الأعمال واعتماد طلبات الصلاحيات داخل قسمه',
         '#0a6fa8',
       ]
     ).lastInsertRowid;
@@ -379,8 +427,8 @@ function seedIfNeeded() {
       `INSERT INTO roles (slug, name, description, color, rank_level, is_protected) VALUES (?, ?, ?, ?, 0, 1)`,
       [
         'pending_onboarding',
-        'بانتظار التسكين في قسم',
-        'موظف أكد بريده الإلكتروني وينتظر قيام رئيس القسم بضمه إلى قسمه',
+        'بانتظار اعتماد وتسكين الـ HR',
+        'موظف جديد سجّل حسابه وينتظر قيام الموارد البشرية (HR) أو الإدارة العليا بقبوله وتسكينه في قسمه',
         '#94a3b8',
       ]
     );
@@ -399,6 +447,7 @@ function seedIfNeeded() {
       itAdminRole,
       allPermKeys.filter((k) => k !== 'boards.delete')
     );
+    assignPerms(hrMgrRole, HR_ROLE_DEFAULT_PERMS);
 
     assignPerms(deptMgrRole, [
       'boards.view_department',
@@ -415,7 +464,6 @@ function seedIfNeeded() {
       'cards.delete',
       'comments.create',
       'comments.delete_any',
-      'department.onboard_members',
       'requests.review_department',
     ]);
 

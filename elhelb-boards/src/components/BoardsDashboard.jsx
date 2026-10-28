@@ -138,7 +138,7 @@ export default function BoardsDashboard({
 
   return (
     <div className="page-container">
-      {/* Pending Employees Alert for Department Heads & IT */}
+      {/* Pending Employees Alert for HR, IT & Top Management */}
       {canOnboard && user.pendingOnboardingCount > 0 && onOpenOnboarding && (
         <div
           style={{
@@ -157,7 +157,7 @@ export default function BoardsDashboard({
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <UserPlus size={20} color="#059669" />
             <div style={{ fontSize: 13.5, color: '#065f46', fontWeight: 800 }}>
-              يوجد ({user.pendingOnboardingCount}) موظف جديد ينتظر ضمه إلى قسمه!
+              يوجد ({user.pendingOnboardingCount}) موظف جديد بانتظار القبول والتسكين في الأقسام (HR)!
             </div>
           </div>
           <button
@@ -167,7 +167,7 @@ export default function BoardsDashboard({
             onClick={onOpenOnboarding}
           >
             <UserPlus size={14} />
-            مراجعة وضم الموظفين للقسم
+            مراجعة وتسكين الموظفين (HR)
           </button>
         </div>
       )}

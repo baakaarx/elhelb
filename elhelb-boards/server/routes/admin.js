@@ -31,6 +31,32 @@ function canCallerModifyRank(caller, targetRank) {
   return Number(targetRank || 0) < callerRank;
 }
 
+function deleteUserCompletely(targetId) {
+  transaction(() => {
+    run(`UPDATE users SET approved_by = NULL WHERE approved_by = ?`, [targetId]);
+    run(`UPDATE boards SET created_by = NULL WHERE created_by = ?`, [targetId]);
+    run(`UPDATE cards SET created_by = NULL WHERE created_by = ?`, [targetId]);
+    run(`UPDATE permission_requests SET reviewed_by = NULL WHERE reviewed_by = ?`, [targetId]);
+    run(`UPDATE permission_grants SET granted_by = NULL WHERE granted_by = ?`, [targetId]);
+    run(
+      `UPDATE permission_grants
+       SET request_id = NULL
+       WHERE request_id IN (SELECT id FROM permission_requests WHERE requester_id = ?)`,
+      [targetId]
+    );
+    run(`UPDATE audit_logs SET actor_id = NULL WHERE actor_id = ?`, [targetId]);
+
+    run(`DELETE FROM board_stars WHERE user_id = ?`, [targetId]);
+    run(`DELETE FROM card_assignees WHERE user_id = ?`, [targetId]);
+    run(`DELETE FROM card_comments WHERE user_id = ?`, [targetId]);
+    run(`DELETE FROM permission_grants WHERE user_id = ?`, [targetId]);
+    run(`DELETE FROM permission_requests WHERE requester_id = ?`, [targetId]);
+    run(`DELETE FROM notifications WHERE user_id = ?`, [targetId]);
+
+    run(`DELETE FROM users WHERE id = ?`, [targetId]);
+  });
+}
+
 // ==========================================
 // ROLES & PERMISSIONS MATRIX (DB-Driven + Ranked Hierarchy)
 // ==========================================
@@ -349,6 +375,10 @@ router.get('/users', (req, res) => {
     is_active: Boolean(u.is_active),
     can_caller_edit:
       u.id === req.user.id || canCallerModifyRank(req.user, u.rank_level),
+    can_caller_delete:
+      u.id !== req.user.id &&
+      u.role_slug !== 'chairman' &&
+      canCallerModifyRank(req.user, u.rank_level),
   }));
 
   res.json(users);
@@ -593,6 +623,95 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
   });
 
   res.json({ ok: true });
+});
+
+router.delete('/users/:id(\\d+)', (req, res) => {
+  if (!evaluatePermission(req.user, 'users.manage').allowed) {
+    return denyPermission(req, res, {
+      permissionKey: 'users.manage',
+      actionLabel: 'حذف حساب موظف نهائياً',
+      canRequestElevation: false,
+    });
+  }
+
+  const targetId = Number(req.params.id);
+  if (targetId === req.user.id) {
+    return res.status(400).json({ error: 'لا يمكنك حذف حسابك الشخصي أثناء تسجيل دخولك' });
+  }
+
+  const existing = get(
+    `SELECT u.*, r.rank_level AS current_rank, r.slug AS current_role_slug, r.name AS current_role_name,
+            d.name AS current_department_name
+     FROM users u
+     JOIN roles r ON r.id = u.role_id
+     LEFT JOIN departments d ON d.id = u.department_id
+     WHERE u.id = ?`,
+    [targetId]
+  );
+  if (!existing) {
+    return res.status(404).json({ error: 'الموظف غير موجود أو تم حذفه مسبقاً' });
+  }
+
+  if (existing.current_role_slug === 'chairman') {
+    writeAudit({
+      user: req.user,
+      action: `محاولة حذف الحساب السيادي لرئيس مجلس الإدارة (${existing.full_name})`,
+      permissionKey: 'users.manage',
+      status: 'DENIED',
+      req,
+    });
+    return res.status(403).json({
+      error: 'حماية سيادية: حساب رئيس مجلس الإدارة محمي ولا يمكن حذفه نهائياً تحت أي ظرف.',
+    });
+  }
+
+  if (!canCallerModifyRank(req.user, existing.current_rank)) {
+    writeAudit({
+      user: req.user,
+      action: `محاولة حذف حساب أعلى أو مساوٍ في الرتبة السيادية (${existing.full_name})`,
+      permissionKey: 'users.manage',
+      status: 'DENIED',
+      req,
+    });
+    return res.status(403).json({
+      error: `لا يمكنك حذف حساب (${existing.full_name}) لأن دوره (${existing.current_role_name}) يماثل أو يعلو رتبتك الإدارية.`,
+    });
+  }
+
+  // Anti-lockout safety: ensure at least 1 active roles.manage holder remains
+  const remainingManagers = get(
+    `SELECT COUNT(*) AS cnt
+     FROM users u
+     JOIN role_permissions rp ON rp.role_id = u.role_id
+     WHERE u.is_active = 1
+       AND u.onboarding_status = 'approved'
+       AND u.id != ?
+       AND rp.permission_key = 'roles.manage'`,
+    [existing.id]
+  );
+  if (!remainingManagers || remainingManagers.cnt === 0) {
+    return res.status(400).json({
+      error: 'حماية النظام: لا يمكن حذف آخر حساب نشط يحمل صلاحية إدارة الأدوار والصلاحيات.',
+    });
+  }
+
+  deleteUserCompletely(existing.id);
+
+  writeAudit({
+    user: req.user,
+    action: 'حذف حساب موظف نهائياً من النظام',
+    permissionKey: 'users.manage',
+    status: 'ALLOWED',
+    req,
+    details: `${existing.full_name} (@${existing.username}) — الدور: ${existing.current_role_name} — القسم: ${
+      existing.current_department_name || 'غير مسكن'
+    }`,
+  });
+
+  return res.json({
+    ok: true,
+    message: `تم حذف حساب (${existing.full_name}) نهائياً من النظام بنجاح`,
+  });
 });
 
 // ==========================================
@@ -950,4 +1069,5 @@ router.get('/audit-logs', (req, res) => {
   res.json(all(sql, params));
 });
 
+router.deleteUserCompletely = deleteUserCompletely;
 module.exports = router;
