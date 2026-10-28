@@ -1,4 +1,5 @@
 {
+  "installCommand": "npm install --no-fund --loglevel=error",
   "buildCommand": "npm run build",
   "outputDirectory": "public",
   "headers": [
