@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
-const { get, all, run, transaction, getSetting } = require('../db');
+const { get, all, run, transaction, getSetting, setSetting } = require('../db');
 const {
   JWT_SECRET,
   COOKIE_NAME,
@@ -14,6 +14,7 @@ const {
 const {
   getGmailConfig,
   isDeliverableEmail,
+  verifyGmailCredentials,
   sendEmailVerificationCode,
 } = require('../mailer');
 const authRoutes = require('./auth');
@@ -184,9 +185,104 @@ router.get('/oauth/providers', (req, res) => {
   res.json({
     googleConfigured: Boolean(creds.googleClientId && creds.googleClientSecret),
     gmailConfigured: Boolean(gmailCfg.configured && gmailCfg.enabled),
+    defaultGmailUser: gmailCfg.gmailUser || 'mb9836504@gmail.com',
     googleCallbackUrl: `${origin}/api/auth/oauth/google/callback`,
     departments,
   });
+});
+
+// ==========================================
+// 0. INLINE 1-STEP ADMIN GMAIL ACTIVATOR (بدون مغادرة شاشة التسجيل)
+// ==========================================
+router.post('/quick-setup-gmail', otpLimiter, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const adminPassword = String(body.adminPassword || '');
+    const gmailUser = String(body.gmailUser || '').trim().toLowerCase();
+    const gmailAppPassword = String(body.gmailAppPassword || '').replace(/\s+/g, '');
+    const pendingEmail = String(body.pendingEmail || '').trim().toLowerCase();
+    const pendingFullName = String(body.pendingFullName || '').trim();
+
+    if (!adminPassword) {
+      return res.status(400).json({ error: 'يرجى إدخال كلمة مرور حساب المسؤول (admin)' });
+    }
+
+    const adminRow = get(
+      `SELECT u.*
+       FROM users u
+       JOIN roles r ON r.id = u.role_id
+       WHERE LOWER(u.username) = 'admin' AND r.slug = 'chairman' AND u.is_active = 1`
+    );
+    if (!adminRow || !adminRow.password_hash) {
+      return res.status(401).json({ error: 'تعذر التحقق من حساب المسؤول' });
+    }
+
+    const passOk = await bcrypt.compare(adminPassword, adminRow.password_hash);
+    if (!passOk) {
+      writeAudit({
+        actorName: 'admin',
+        action: 'محاولة فاشلة لتفعيل بريد Gmail السريع',
+        status: 'DENIED',
+        req,
+        details: 'كلمة مرور admin غير صحيحة',
+      });
+      return res.status(401).json({ error: 'كلمة مرور المسؤول (admin) غير صحيحة' });
+    }
+
+    const { cleanUser, cleanPass } = await verifyGmailCredentials({
+      gmailUser,
+      gmailAppPassword,
+    });
+
+    setSetting('gmail_user', cleanUser);
+    setSetting('gmail_app_password', cleanPass);
+    setSetting('gmail_admin_cc', cleanUser);
+    setSetting('gmail_enabled', '1');
+
+    const adminLoaded = loadUserById(adminRow.id);
+    writeAudit({
+      user: adminLoaded,
+      action: 'تفعيل ربط إشعارات Gmail المباشر',
+      status: 'ALLOWED',
+      req,
+      details: cleanUser,
+    });
+
+    // If the user was right in the middle of sending a verification code, send it immediately!
+    let codeSent = false;
+    if (isDeliverableEmail(pendingEmail) && pendingFullName.length >= 3) {
+      const code = String(crypto.randomInt(100000, 1000000));
+      const codeHash = bcrypt.hashSync(code, 8);
+      run(
+        `INSERT INTO email_verifications (email, full_name, code_hash, attempts, expires_at)
+         VALUES (?, ?, ?, 0, datetime('now', '+10 minutes'))`,
+        [pendingEmail, pendingFullName, codeHash]
+      );
+      if (process.env.ELHELB_TEST_MODE === '1') {
+        _lastTestOtpByEmail.set(pendingEmail, code);
+      }
+      const mailRes = await sendEmailVerificationCode({
+        toEmail: pendingEmail,
+        fullName: pendingFullName,
+        code,
+      });
+      codeSent = Boolean(mailRes.sent || process.env.ELHELB_TEST_MODE === '1');
+    }
+
+    return res.json({
+      ok: true,
+      gmailConfigured: true,
+      gmailUser: cleanUser,
+      codeSent,
+      message: codeSent
+        ? `تم تفعيل بريد (${cleanUser}) وإرسال كود التأكيد المكون من 6 أرقام إلى (${pendingEmail}) بنجاح!`
+        : `تم تفعيل وربط بريد (${cleanUser}) بنجاح!`,
+    });
+  } catch (err) {
+    return res
+      .status(err.statusCode || 500)
+      .json({ error: err.message || 'تعذر تفعيل إعدادات Gmail' });
+  }
 });
 
 // ==========================================

@@ -204,6 +204,14 @@ function seedIfNeeded() {
     );
   }
 
+  // Pre-seed default sender & admin notification email so admin doesn't have to retype it
+  run(
+    `INSERT OR IGNORE INTO system_settings (key, value) VALUES ('gmail_user', 'mb9836504@gmail.com')`
+  );
+  run(
+    `INSERT OR IGNORE INTO system_settings (key, value) VALUES ('gmail_admin_cc', 'mb9836504@gmail.com')`
+  );
+
   const existingUsers = get(`SELECT COUNT(*) AS cnt FROM users`);
   if (existingUsers && existingUsers.cnt > 0) {
     return;

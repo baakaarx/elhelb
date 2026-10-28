@@ -52,8 +52,10 @@ export function setStoredToken(token) {
 
 const PUBLIC_NO_TOKEN_PATHS = new Set([
   '/api/auth/login',
-  '/api/auth/social-entry',
   '/api/auth/oauth/providers',
+  '/api/auth/email/send-code',
+  '/api/auth/email/verify-code',
+  '/api/auth/quick-setup-gmail',
 ]);
 
 function attachTokenToUrl(path, token) {
@@ -94,13 +96,13 @@ export async function apiFetch(path, options = {}) {
 
   if (
     res.status === 401 &&
-    path !== '/api/auth/login' &&
-    path !== '/api/auth/social-entry'
+    !PUBLIC_NO_TOKEN_PATHS.has(path)
   ) {
     setStoredToken('');
     if (sessionExpiredHandler) sessionExpiredHandler();
     const err = new Error(payload.error || 'انتهت الجلسة');
     err.status = 401;
+    err.code = payload && payload.code;
     err.payload = payload;
     throw err;
   }
@@ -117,6 +119,7 @@ export async function apiFetch(path, options = {}) {
     }
     const err = new Error(payload.error || 'ليس لديك صلاحية لتنفيذ هذا الإجراء');
     err.status = 403;
+    err.code = payload && payload.code;
     err.payload = payload;
     throw err;
   }
@@ -124,6 +127,7 @@ export async function apiFetch(path, options = {}) {
   if (!res.ok) {
     const err = new Error(payload.error || 'حدث خطأ أثناء تنفيذ الطلب');
     err.status = res.status;
+    err.code = payload && payload.code;
     err.payload = payload;
     throw err;
   }

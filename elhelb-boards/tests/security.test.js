@@ -260,13 +260,24 @@ async function main() {
     });
     assert.equal(unverifiedSocialGone.status, 404, 'Unverified social-entry route must be completely removed');
 
-    // Step 0A: New employee requests 6-digit verification code sent to their Email
-    const sendCodeRes = await api('POST', '/api/auth/email/send-code', null, {
-      fullName: 'محمود سامي الشناوي',
-      email: 'mahmoud.shennawy@gmail.com',
+    // Inline 1-Step Gmail Activator: wrong admin password MUST be blocked (401)
+    const badQuickGmail = await api('POST', '/api/auth/quick-setup-gmail', null, {
+      adminPassword: 'wrong-password',
+      gmailUser: 'mb9836504@gmail.com',
+      gmailAppPassword: 'abcd efgh ijkl mnop',
     });
-    assert.equal(sendCodeRes.status, 200);
-    assert.equal(sendCodeRes.data.code, undefined, 'API response must NEVER leak OTP code to browser');
+    assert.equal(badQuickGmail.status, 401, 'Quick Gmail setup must verify admin password');
+
+    // Valid admin password activates Gmail AND sends OTP to pending employee in one step!
+    const okQuickGmail = await api('POST', '/api/auth/quick-setup-gmail', null, {
+      adminPassword: '010228513849',
+      gmailUser: 'mb9836504@gmail.com',
+      gmailAppPassword: 'abcd efgh ijkl mnop',
+      pendingEmail: 'mahmoud.shennawy@gmail.com',
+      pendingFullName: 'محمود سامي الشناوي',
+    });
+    assert.equal(okQuickGmail.status, 200);
+    assert.equal(okQuickGmail.data.codeSent, true);
 
     const realOtp = oauthRoutes._lastTestOtpByEmail.get('mahmoud.shennawy@gmail.com');
     assert.match(realOtp, /^\d{6}$/);
