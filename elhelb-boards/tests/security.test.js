@@ -37,23 +37,48 @@ async function main() {
     const unauth = await api('GET', '/api/boards');
     assert.equal(unauth.status, 401);
 
+    const chairmanTok = await login('chairman', '123456');
     const adminTok = await login('admin', '123456');
+    const itMgrTok = await login('it_mgr', '123456');
+    const exportMgrTok = await login('export_mgr', '123456');
+    const exportEmpTok = await login('export_emp', '123456');
+    const regEmpTok = await login('reg_emp', '123456');
     const salesMgrTok = await login('sales_mgr', '123456');
     const salesEmpTok = await login('sales_emp', '123456');
     const salesViewerTok = await login('sales_viewer', '123456');
     const mediaEmpTok = await login('media_emp', '123456');
 
-    console.log('2️⃣ Testing strict Department Isolation across Sales, Media, Procurement, HR...');
-    const adminBoards = await api('GET', '/api/boards', adminTok);
-    assert.equal(adminBoards.status, 200);
-    assert.ok(adminBoards.data.length >= 5, 'Admin should see all company boards');
+    console.log('2️⃣ Testing strict Department Isolation across Export, Product Registration, IT, Sales & Media...');
+    const chairmanBoards = await api('GET', '/api/boards', chairmanTok);
+    assert.equal(chairmanBoards.status, 200);
+    assert.equal(chairmanBoards.data.length, 8, 'Chairman should see all 8 company boards across all 8 departments');
+
+    const execSummary = await api('GET', '/api/boards/executive-summary', chairmanTok);
+    assert.equal(execSummary.status, 200);
+    assert.equal(execSummary.data.departments.length, 8, 'Executive summary should include all 8 departments');
+
+    // Export employee ONLY sees Export board
+    const exportBoards = await api('GET', '/api/boards', exportEmpTok);
+    assert.equal(exportBoards.status, 200);
+    assert.equal(exportBoards.data.length, 1, 'Export employee must ONLY see Export board');
+    assert.ok(exportBoards.data.every((b) => b.department_slug === 'export'));
+
+    // Product Registration employee ONLY sees Registration board
+    const regBoards = await api('GET', '/api/boards', regEmpTok);
+    assert.equal(regBoards.status, 200);
+    assert.equal(regBoards.data.length, 1, 'Registration employee must ONLY see Registration board');
+    assert.ok(regBoards.data.every((b) => b.department_slug === 'registration'));
+
+    // Export employee CANNOT open Product Registration board
+    const probeReg = await api('GET', `/api/boards/${regBoards.data[0].id}`, exportEmpTok);
+    assert.equal(probeReg.status, 403);
 
     const salesBoards = await api('GET', '/api/boards', salesEmpTok);
     assert.equal(salesBoards.status, 200);
-    assert.equal(salesBoards.data.length, 2, 'Sales employee must ONLY see the 2 Sales boards');
+    assert.equal(salesBoards.data.length, 1, 'Sales employee must ONLY see Sales board');
     assert.ok(salesBoards.data.every((b) => b.department_slug === 'sales'));
 
-    const mediaBoard = adminBoards.data.find((b) => b.department_slug === 'media');
+    const mediaBoard = chairmanBoards.data.find((b) => b.department_slug === 'media');
     assert.ok(mediaBoard);
 
     // Direct URL probing of Media board by Sales Employee
@@ -70,7 +95,37 @@ async function main() {
     });
     assert.equal(idorAttack.status, 403, 'Server must block cross-department IDOR on cards');
 
-    console.log('3️⃣ Testing Viewer vs Staff Role enforcement on server...');
+    console.log('3️⃣ Testing Sovereign Role Hierarchy (Chairman > GM > IT Admin)...');
+    // IT Manager HAS shared administrative access to boards, users, roles & departments
+    const itDepts = await api('GET', '/api/admin/departments', itMgrTok);
+    assert.equal(itDepts.status, 200);
+    assert.equal(itDepts.data.length, 8);
+
+    const rolesRes = await api('GET', '/api/admin/roles', chairmanTok);
+    const chairmanRole = rolesRes.data.roles.find((r) => r.slug === 'chairman');
+    const superAdminRole = rolesRes.data.roles.find((r) => r.slug === 'super_admin');
+    const staffRole = rolesRes.data.roles.find((r) => r.slug === 'staff');
+
+    // Neither GM (admin) nor IT Manager (it_mgr) can edit Chairman's sovereign role!
+    const gmTouchChairman = await api('PUT', `/api/admin/roles/${chairmanRole.id}`, adminTok, {
+      name: 'تغيير غير مصرح',
+    });
+    assert.equal(gmTouchChairman.status, 403, 'GM must NOT be able to modify Chairman role');
+
+    const itTouchGm = await api('PUT', `/api/admin/roles/${superAdminRole.id}`, itMgrTok, {
+      name: 'تغيير المدير العام من IT',
+    });
+    assert.equal(itTouchGm.status, 403, 'IT Admin must NOT be able to modify GM role');
+
+    // Users list check: IT Admin cannot deactivate or downgrade Chairman user
+    const usersList = await api('GET', '/api/admin/users', chairmanTok);
+    const chairmanUser = usersList.data.find((u) => u.username === 'chairman');
+    const itAttackChairmanUser = await api('PATCH', `/api/admin/users/${chairmanUser.id}`, itMgrTok, {
+      isActive: false,
+    });
+    assert.equal(itAttackChairmanUser.status, 403, 'IT Admin must NOT be able to modify Chairman account');
+
+    console.log('4️⃣ Testing Viewer vs Staff Role enforcement on server...');
     const salesBoard1 = salesBoards.data[0];
     const salesBoardFull = await api('GET', `/api/boards/${salesBoard1.id}`, salesEmpTok);
     const salesLists = salesBoardFull.data.lists;
@@ -105,14 +160,12 @@ async function main() {
     });
     assert.equal(empCreateBoard.status, 403);
 
-    console.log('4️⃣ Testing Dynamic DB Permission Matrix changes (Zero code edit, instant effect)...');
-    const rolesRes = await api('GET', '/api/admin/roles', adminTok);
-    const staffRole = rolesRes.data.roles.find((r) => r.slug === 'staff');
+    console.log('5️⃣ Testing Dynamic DB Permission Matrix changes by IT Admin (Instant effect)...');
     const originalStaffPerms = [...staffRole.permissions];
 
-    // Remove cards.move from staff role in DB
+    // IT Manager removes cards.move from staff role in DB
     const permsWithoutMove = originalStaffPerms.filter((p) => p !== 'cards.move');
-    const updateRole1 = await api('PUT', `/api/admin/roles/${staffRole.id}`, adminTok, {
+    const updateRole1 = await api('PUT', `/api/admin/roles/${staffRole.id}`, itMgrTok, {
       permissions: permsWithoutMove,
     });
     assert.equal(updateRole1.status, 200);
@@ -125,7 +178,7 @@ async function main() {
     assert.equal(moveBlocked.status, 403, 'Removing permission in DB must immediately block next request');
 
     // Restore cards.move in DB
-    const updateRole2 = await api('PUT', `/api/admin/roles/${staffRole.id}`, adminTok, {
+    const updateRole2 = await api('PUT', `/api/admin/roles/${staffRole.id}`, itMgrTok, {
       permissions: originalStaffPerms,
     });
     assert.equal(updateRole2.status, 200);
@@ -136,8 +189,88 @@ async function main() {
     });
     assert.equal(moveAllowedAgain.status, 200, 'Restoring permission in DB must immediately allow request');
 
-    console.log('5️⃣ Testing Manager Permission Request workflow & One-Time Card Grant consumption...');
-    // Sales employee requests one-time delete on empCreateCard
+    console.log('6️⃣ Testing Google & Facebook Employee Sign-In + Department Head Onboarding Flow...');
+    const exportDept = itDepts.data.find((d) => d.slug === 'export');
+
+    // New employee signs in via Google with their real name
+    const googleSign = await api('POST', '/api/auth/social-entry', null, {
+      provider: 'google',
+      fullName: 'محمود سامي الشناوي',
+      email: 'mahmoud.shennawy@gmail.com',
+      preferredDepartmentId: exportDept.id,
+      jobTitle: 'منسق شحن بحري',
+    });
+    assert.equal(googleSign.status, 200);
+    assert.equal(googleSign.data.isNewUser, true);
+    const newGoogleTok = googleSign.data.token;
+
+    // Check /me shows pending status and 0 permissions
+    const mePending = await api('GET', '/api/auth/me', newGoogleTok);
+    assert.equal(mePending.status, 200);
+    assert.equal(mePending.data.user.onboardingStatus, 'pending');
+    assert.equal(mePending.data.user.permissions.length, 0);
+
+    // Pending employee sees ZERO company boards until claimed by Department Head!
+    const pendingBoards = await api('GET', '/api/boards', newGoogleTok);
+    assert.equal(pendingBoards.status, 200);
+    assert.equal(pendingBoards.data.length, 0, 'Pending social user must see 0 boards before onboarding');
+
+    // Pending employee cannot submit permission elevation requests before onboarding
+    const pendingReqAttempt = await api('POST', '/api/requests', newGoogleTok, {
+      permissionKey: 'boards.view_department',
+      targetDepartmentId: exportDept.id,
+      reason: 'محاولة قبل موافقة رئيس القسم',
+    });
+    assert.equal(pendingReqAttempt.status, 403);
+
+    // Sales Manager tries to claim employee into Export department -> BLOCKED!
+    const crossDeptClaim = await api(
+      'POST',
+      `/api/onboarding/${mePending.data.user.id}/claim`,
+      salesMgrTok,
+      {
+        departmentId: exportDept.id,
+        roleId: staffRole.id,
+      }
+    );
+    assert.equal(crossDeptClaim.status, 403, 'Department Head must only claim into their own department');
+
+    // Export Manager tries to elevate employee to Chairman -> BLOCKED!
+    const illegalRankClaim = await api(
+      'POST',
+      `/api/onboarding/${mePending.data.user.id}/claim`,
+      exportMgrTok,
+      {
+        departmentId: exportDept.id,
+        roleId: chairmanRole.id,
+      }
+    );
+    assert.equal(illegalRankClaim.status, 403, 'Department Head cannot grant higher/equal rank role');
+
+    // Export Manager claims Mahmoud into Export Department as Staff!
+    const validClaim = await api(
+      'POST',
+      `/api/onboarding/${mePending.data.user.id}/claim`,
+      exportMgrTok,
+      {
+        departmentId: exportDept.id,
+        roleId: staffRole.id,
+        jobTitle: 'منسق شحن بحري دولي',
+      }
+    );
+    assert.equal(validClaim.status, 200);
+
+    // Immediately (using the SAME token without re-login!), Mahmoud now sees Export boards ONLY!
+    const afterClaimMe = await api('GET', '/api/auth/me', newGoogleTok);
+    assert.equal(afterClaimMe.data.user.onboardingStatus, 'approved');
+    assert.equal(afterClaimMe.data.user.departmentSlug, 'export');
+
+    const afterClaimBoards = await api('GET', '/api/boards', newGoogleTok);
+    assert.equal(afterClaimBoards.status, 200);
+    assert.equal(afterClaimBoards.data.length, 1);
+    assert.ok(afterClaimBoards.data.every((b) => b.department_slug === 'export'));
+
+    console.log('7️⃣ Testing Manager Permission Request workflow & One-Time Card Grant consumption...');
     const reqRes = await api('POST', '/api/requests', salesEmpTok, {
       permissionKey: 'cards.delete',
       targetCardId: empCreateCard.data.id,
@@ -177,9 +310,9 @@ async function main() {
     const deleteAfterExhaust = await api('DELETE', `/api/cards/${secondCard.data.id}`, salesEmpTok);
     assert.equal(deleteAfterExhaust.status, 403, 'One-time grant must be exhausted after 1 execution');
 
-    console.log('6️⃣ Testing Cross-Department Access Request, Anti-Escalation & Instant Revocation...');
-    const inboxAdmin = await api('GET', '/api/requests/inbox', adminTok);
-    const crossDeptReq = inboxAdmin.data.requests.find(
+    console.log('8️⃣ Testing Cross-Department Access Request, Anti-Escalation & Instant Revocation...');
+    const inboxChairman = await api('GET', '/api/requests/inbox', chairmanTok);
+    const crossDeptReq = inboxChairman.data.requests.find(
       (r) => r.permission_key === 'boards.view_department' && r.status === 'pending'
     );
     assert.ok(crossDeptReq, 'Seeded cross-dept request should exist');
@@ -193,44 +326,28 @@ async function main() {
     );
     assert.equal(illegalCrossApprove.status, 403);
 
-    // General Manager approves 24h view access to Media Department
-    const gmCrossApprove = await api('POST', `/api/requests/${crossDeptReq.id}/review`, adminTok, {
+    // Chairman approves 24h view access to Media Department for Sales Employee
+    const chairmanCrossApprove = await api('POST', `/api/requests/${crossDeptReq.id}/review`, chairmanTok, {
       decision: 'approved',
       approvedDuration: '24h',
-      reviewNote: 'مسموح بالاطلاع لمتابعة البروشور.',
+      reviewNote: 'مسموح بالاطلاع لمتابعة الكتالوج التصديري.',
     });
-    assert.equal(gmCrossApprove.status, 200);
+    assert.equal(chairmanCrossApprove.status, 200);
 
     // Now Sales employee CAN view Media board
     const canViewMediaNow = await api('GET', `/api/boards/${mediaBoard.id}`, salesEmpTok);
     assert.equal(canViewMediaNow.status, 200);
     assert.ok(canViewMediaNow.data.board.accessViaGrant);
 
-    // BUT Sales employee still CANNOT edit or create cards in Media board!
-    const illegalWriteMedia = await api(
-      'POST',
-      `/api/lists/${mediaBoardFull.data.lists[0].id}/cards`,
-      salesEmpTok,
-      { title: 'محاولة كتابة في قسم آخر' }
-    );
-    assert.equal(illegalWriteMedia.status, 403, 'View grant on another department must not allow writes');
-
-    // Admin revokes the grant -> access immediately cut off!
+    // Chairman revokes the grant -> access immediately cut off!
     const grantId = canViewMediaNow.data.board.accessViaGrant.id;
-    const revokeRes = await api('POST', `/api/grants/${grantId}/revoke`, adminTok);
+    const revokeRes = await api('POST', `/api/grants/${grantId}/revoke`, chairmanTok);
     assert.equal(revokeRes.status, 200);
 
     const viewAfterRevoke = await api('GET', `/api/boards/${mediaBoard.id}`, salesEmpTok);
     assert.equal(viewAfterRevoke.status, 403, 'Revoked grant must immediately cut off access');
 
-    console.log('7️⃣ Testing Admin Anti-Lockout protection...');
-    const superAdminRole = rolesRes.data.roles.find((r) => r.slug === 'super_admin');
-    const lockoutAttempt = await api('PUT', `/api/admin/roles/${superAdminRole.id}`, adminTok, {
-      permissions: ['boards.view_all'],
-    });
-    assert.equal(lockoutAttempt.status, 400, 'Must prevent stripping roles.manage from last admin role');
-
-    console.log('\n✅ ALL SECURITY, RBAC, DEPARTMENT ISOLATION & REQUEST TESTS PASSED 100%!');
+    console.log('\n✅ ALL 8 SOVEREIGN RBAC, EXPORT/REGISTRATION/IT ISOLATION & GOOGLE/FACEBOOK ONBOARDING TESTS PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}

@@ -46,12 +46,19 @@ export function setStoredToken(token) {
   } catch (_) {}
   try {
     if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
+    else localStorage.setItem && localStorage.removeItem(TOKEN_KEY);
   } catch (_) {}
 }
 
+const PUBLIC_NO_TOKEN_PATHS = new Set([
+  '/api/auth/login',
+  '/api/auth/social-entry',
+  '/api/auth/oauth/providers',
+  '/api/auth/demo-accounts',
+]);
+
 function attachTokenToUrl(path, token) {
-  if (!token || path === '/api/auth/login') return path;
+  if (!token || PUBLIC_NO_TOKEN_PATHS.has(path)) return path;
   const sep = path.includes('?') ? '&' : '?';
   return `${path}${sep}_t=${encodeURIComponent(token)}`;
 }
@@ -70,7 +77,7 @@ export async function apiFetch(path, options = {}) {
     headers['Content-Type'] = 'application/json';
   }
   const token = getStoredToken();
-  if (token) {
+  if (token && !PUBLIC_NO_TOKEN_PATHS.has(path)) {
     headers['X-Elhelb-Token'] = token;
     headers.Authorization = `Bearer ${token}`;
   }
@@ -86,7 +93,11 @@ export async function apiFetch(path, options = {}) {
 
   const payload = await res.json().catch(() => ({}));
 
-  if (res.status === 401 && path !== '/api/auth/login') {
+  if (
+    res.status === 401 &&
+    path !== '/api/auth/login' &&
+    path !== '/api/auth/social-entry'
+  ) {
     setStoredToken('');
     if (sessionExpiredHandler) sessionExpiredHandler();
     const err = new Error(payload.error || 'انتهت الجلسة');
@@ -119,36 +130,4 @@ export async function apiFetch(path, options = {}) {
   }
 
   return payload;
-}
-
-// Raw API tester that never triggers modals — returns raw status & JSON for live server security verification
-export async function rawServerProbe(method, path, body = undefined) {
-  const headers = { Accept: 'application/json' };
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const token = getStoredToken();
-  if (token) {
-    headers['X-Elhelb-Token'] = token;
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  const finalUrl = attachTokenToUrl(path, token);
-
-  const started = performance.now();
-  const res = await fetch(finalUrl, {
-    method,
-    headers,
-    credentials: 'include',
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  const elapsedMs = Math.round(performance.now() - started);
-  const json = await res.json().catch(() => ({}));
-  return {
-    ok: res.ok,
-    status: res.status,
-    statusText: res.statusText,
-    elapsedMs,
-    method,
-    path,
-    response: json,
-  };
 }

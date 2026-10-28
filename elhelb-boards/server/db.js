@@ -6,7 +6,7 @@ const { DatabaseSync } = require('node:sqlite');
 function resolveDbPath() {
   if (process.env.DB_PATH) return process.env.DB_PATH;
   if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
-    return path.join(os.tmpdir(), 'elhelb-boards.db');
+    return path.join(os.tmpdir(), 'elhelb-boards-v2.db');
   }
   const defaultDataDir = path.join(__dirname, '..', 'data');
   try {
@@ -15,7 +15,7 @@ function resolveDbPath() {
     }
     return path.join(defaultDataDir, 'elhelb-boards.db');
   } catch (_) {
-    return path.join(os.tmpdir(), 'elhelb-boards.db');
+    return path.join(os.tmpdir(), 'elhelb-boards-v2.db');
   }
 }
 
@@ -81,8 +81,35 @@ function transaction(fn) {
   }
 }
 
+function ensureColumn(tableName, colName, colDef) {
+  const cols = all(`PRAGMA table_info(${tableName})`);
+  if (!cols.some((c) => c.name === colName)) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${colName} ${colDef}`);
+  }
+}
+
+function getSetting(key, fallback = '') {
+  const row = get(`SELECT value FROM system_settings WHERE key = ?`, [key]);
+  return row ? row.value : fallback;
+}
+
+function setSetting(key, value) {
+  run(
+    `INSERT INTO system_settings (key, value, updated_at)
+     VALUES (?, ?, datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
+    [key, String(value ?? '')]
+  );
+}
+
 function initSchema() {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS departments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       slug TEXT NOT NULL UNIQUE,
@@ -108,6 +135,7 @@ function initSchema() {
       name TEXT NOT NULL UNIQUE,
       description TEXT NOT NULL DEFAULT '',
       color TEXT NOT NULL DEFAULT '#0a6fa8',
+      rank_level INTEGER NOT NULL DEFAULT 20,
       is_protected INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -121,10 +149,18 @@ function initSchema() {
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
+      email TEXT DEFAULT NULL,
+      password_hash TEXT NOT NULL DEFAULT '',
       full_name TEXT NOT NULL,
       job_title TEXT NOT NULL DEFAULT '',
       avatar_color TEXT NOT NULL DEFAULT '#0a6fa8',
+      avatar_url TEXT DEFAULT NULL,
+      auth_provider TEXT NOT NULL DEFAULT 'local',
+      oauth_id TEXT DEFAULT NULL,
+      onboarding_status TEXT NOT NULL DEFAULT 'approved' CHECK(onboarding_status IN ('pending', 'approved')),
+      preferred_department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+      approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      approved_at TEXT DEFAULT NULL,
       role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE RESTRICT,
       department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
       is_active INTEGER NOT NULL DEFAULT 1,
@@ -272,7 +308,20 @@ function initSchema() {
       ip TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+  `);
 
+  // Safe migrations for existing local DB files
+  ensureColumn('roles', 'rank_level', 'INTEGER NOT NULL DEFAULT 20');
+  ensureColumn('users', 'email', 'TEXT DEFAULT NULL');
+  ensureColumn('users', 'avatar_url', 'TEXT DEFAULT NULL');
+  ensureColumn('users', 'auth_provider', "TEXT NOT NULL DEFAULT 'local'");
+  ensureColumn('users', 'oauth_id', 'TEXT DEFAULT NULL');
+  ensureColumn('users', 'onboarding_status', "TEXT NOT NULL DEFAULT 'approved'");
+  ensureColumn('users', 'preferred_department_id', 'INTEGER DEFAULT NULL');
+  ensureColumn('users', 'approved_by', 'INTEGER DEFAULT NULL');
+  ensureColumn('users', 'approved_at', 'TEXT DEFAULT NULL');
+
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_boards_dept ON boards(department_id);
     CREATE INDEX IF NOT EXISTS idx_lists_board ON lists(board_id, position);
     CREATE INDEX IF NOT EXISTS idx_cards_list ON cards(list_id, position);
@@ -281,6 +330,7 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_requests_status ON permission_requests(status, target_department_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read);
     CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(id DESC);
+    CREATE INDEX IF NOT EXISTS idx_users_onboarding ON users(onboarding_status, preferred_department_id);
   `);
 }
 
@@ -292,4 +342,6 @@ module.exports = {
   run,
   transaction,
   initSchema,
+  getSetting,
+  setSetting,
 };

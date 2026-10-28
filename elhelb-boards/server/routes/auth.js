@@ -13,19 +13,25 @@ const {
 const router = express.Router();
 
 const DEMO_PASSWORDS = {
+  chairman: '123456',
   admin: '123456',
+  it_mgr: '123456',
+  export_mgr: '123456',
+  reg_mgr: '123456',
   sales_mgr: '123456',
+  media_mgr: '123456',
+  proc_mgr: '123456',
+  export_emp: '123456',
+  reg_emp: '123456',
   sales_lead: '123456',
   sales_emp: '123456',
   sales_viewer: '123456',
-  media_mgr: '123456',
   media_emp: '123456',
-  proc_mgr: '123456',
-  proc_emp: '123456',
   hr_emp: '123456',
 };
 
 function countReviewablePendingRequests(user) {
+  if (!user.permissionSet || user.onboarding_status === 'pending') return 0;
   if (user.permissionSet.has('requests.review_all')) {
     const r = get(
       `SELECT COUNT(*) AS cnt FROM permission_requests WHERE status = 'pending' AND requester_id != ?`,
@@ -49,6 +55,20 @@ function countReviewablePendingRequests(user) {
   return 0;
 }
 
+function countPendingOnboardingUsers(user) {
+  if (!user.permissionSet || user.onboarding_status === 'pending') return 0;
+  if (
+    user.permissionSet.has('users.manage') ||
+    user.permissionSet.has('department.onboard_members')
+  ) {
+    const r = get(
+      `SELECT COUNT(*) AS cnt FROM users WHERE onboarding_status = 'pending' AND is_active = 1`
+    );
+    return r ? r.cnt : 0;
+  }
+  return 0;
+}
+
 function serializeCurrentUser(user) {
   const unreadNotifs = get(
     `SELECT COUNT(*) AS cnt FROM notifications WHERE user_id = ? AND is_read = 0`,
@@ -59,25 +79,37 @@ function serializeCurrentUser(user) {
     [user.id]
   );
 
+  const isPending = user.onboarding_status === 'pending';
+
   return {
     id: user.id,
     username: user.username,
+    email: user.email || null,
     fullName: user.full_name,
     jobTitle: user.job_title,
     avatarColor: user.avatar_color,
+    avatarUrl: user.avatar_url || null,
+    authProvider: user.auth_provider || 'local',
+    onboardingStatus: user.onboarding_status || 'approved',
+    preferredDepartmentId: user.preferred_department_id || null,
+    preferredDepartmentName: user.preferred_department_name || null,
     roleId: user.role_id,
     roleSlug: user.role_slug,
     roleName: user.role_name,
     roleColor: user.role_color,
+    roleRank: Number(user.roleRank || 0),
     departmentId: user.department_id,
     departmentSlug: user.department_slug,
-    departmentName: user.department_name || 'الإدارة العليا (كل الأقسام)',
-    departmentColor: user.department_color || '#b45309',
+    departmentName: isPending
+      ? 'بانتظار ضم رئيس القسم'
+      : user.department_name || 'الإدارة العليا (كل الأقسام)',
+    departmentColor: isPending ? '#64748b' : user.department_color || '#b45309',
     permissions: user.permissions,
     activeGrants: user.activeGrants,
     unreadNotificationsCount: unreadNotifs ? unreadNotifs.cnt : 0,
     myPendingRequestsCount: myPendingRequests ? myPendingRequests.cnt : 0,
     reviewableRequestsCount: countReviewablePendingRequests(user),
+    pendingOnboardingCount: countPendingOnboardingUsers(user),
   };
 }
 
@@ -85,13 +117,13 @@ function serializeCurrentUser(user) {
 router.get('/demo-accounts', (req, res) => {
   const users = all(
     `SELECT u.id, u.username, u.full_name, u.job_title, u.avatar_color,
-            r.name AS role_name, r.color AS role_color,
+            r.slug AS role_slug, r.name AS role_name, r.color AS role_color, r.rank_level,
             d.name AS department_name, d.color AS department_color
      FROM users u
      JOIN roles r ON r.id = u.role_id
      LEFT JOIN departments d ON d.id = u.department_id
-     WHERE u.is_active = 1
-     ORDER BY u.id ASC`
+     WHERE u.is_active = 1 AND u.onboarding_status = 'approved'
+     ORDER BY r.rank_level DESC, u.id ASC`
   );
   res.json(
     users
@@ -102,17 +134,19 @@ router.get('/demo-accounts', (req, res) => {
         fullName: u.full_name,
         jobTitle: u.job_title,
         avatarColor: u.avatar_color,
+        roleSlug: u.role_slug,
         roleName: u.role_name,
         roleColor: u.role_color,
-        departmentName: u.department_name || 'جميع الأقسام (إدارة عليا)',
-        departmentColor: u.department_color || '#b45309',
+        roleRank: u.rank_level,
+        departmentName: u.department_name || 'جميع الأقسام (مجلس الإدارة والإدارة العليا)',
+        departmentColor: u.department_color || '#92400e',
       }))
   );
 });
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 80,
+  max: 100,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'محاولات تسجيل دخول كثيرة، يرجى الانتظار قليلاً' },
@@ -127,7 +161,10 @@ router.post('/login', loginLimiter, async (req, res) => {
       return res.status(400).json({ error: 'يرجى إدخال اسم المستخدم وكلمة المرور' });
     }
 
-    const row = get(`SELECT * FROM users WHERE LOWER(username) = LOWER(?)`, [username]);
+    const row = get(
+      `SELECT * FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)`,
+      [username, username]
+    );
     if (!row) {
       writeAudit({
         actorName: username.slice(0, 40),
@@ -148,6 +185,12 @@ router.post('/login', loginLimiter, async (req, res) => {
         details: `الحساب (${row.username}) غير مفعل حالياً`,
       });
       return res.status(403).json({ error: 'هذا الحساب موقوف حالياً، يرجى مراجعة الإدارة' });
+    }
+
+    if (!row.password_hash) {
+      return res.status(400).json({
+        error: 'هذا الحساب مسجل عبر Google أو Facebook — يرجى تسجيل الدخول عبر الزر المخصص بالأسفل',
+      });
     }
 
     const valid = await bcrypt.compare(password, row.password_hash);

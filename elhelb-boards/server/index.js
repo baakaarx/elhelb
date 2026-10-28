@@ -7,6 +7,8 @@ const { initSchema } = require('./db');
 const { seedIfNeeded } = require('./seed');
 
 const authRoutes = require('./routes/auth');
+const { router: oauthRoutes } = require('./routes/oauth');
+const onboardingRoutes = require('./routes/onboarding');
 const boardsRoutes = require('./routes/boards');
 const kanbanRoutes = require('./routes/kanban');
 const requestsRoutes = require('./routes/requests');
@@ -35,6 +37,8 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/auth', oauthRoutes);
+app.use('/api/onboarding', onboardingRoutes);
 app.use('/api', boardsRoutes);
 app.use('/api', kanbanRoutes);
 app.use('/api', requestsRoutes);

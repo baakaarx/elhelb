@@ -195,6 +195,11 @@ router.get('/requests/inbox', (req, res) => {
 
 // Submit a new Permission Request to Manager
 router.post('/requests', (req, res) => {
+  if (req.user.onboarding_status === 'pending') {
+    return res.status(403).json({
+      error: 'حسابك بانتظار ضم رئيس القسم أولاً قبل إرسال طلبات صلاحية إضافية',
+    });
+  }
   const body = req.body || {};
   const permissionKey = String(body.permissionKey || '').trim();
   const reason = String(body.reason || '').trim();

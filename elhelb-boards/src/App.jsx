@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   apiFetch,
-  getStoredToken,
   setApiHandlers,
   setStoredToken,
 } from './api';
@@ -12,11 +11,13 @@ import KanbanBoardView from './components/KanbanBoardView';
 import PermissionRequestModal from './components/PermissionRequestModal';
 import { ManagerInboxView, MyRequestsView } from './components/RequestsViews';
 import AdminControlView from './components/AdminControlView';
-import SecurityTesterView from './components/SecurityTesterView';
+import WaitingOnboardingView from './components/WaitingOnboardingView';
+import DepartmentOnboardingView from './components/DepartmentOnboardingView';
 
 export default function App() {
   const [user, setUser] = useState(null);
   const [booting, setBooting] = useState(true);
+  const [oauthError, setOauthError] = useState('');
 
   const [activeTab, setActiveTab] = useState('boards');
   const [activeBoardId, setActiveBoardId] = useState(null);
@@ -61,13 +62,30 @@ export default function App() {
   }, [refreshMe]);
 
   useEffect(() => {
+    // Handle OAuth 2.0 callback token or error in URL query
+    if (typeof window !== 'undefined' && window.location.search) {
+      const params = new URLSearchParams(window.location.search);
+      const oauthToken = params.get('oauth_token');
+      const oauthErr = params.get('oauth_error');
+      if (oauthToken) {
+        setStoredToken(oauthToken);
+      }
+      if (oauthErr) {
+        setOauthError('لم يكتمل تسجيل الدخول عبر المزود الخارجي، يمكنك المحاولة مرة أخرى.');
+      }
+      if (oauthToken || oauthErr) {
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    }
+
     refreshMe().finally(() => setBooting(false));
   }, [refreshMe]);
 
   // Ensure activeTab remains authorized if user's role changed
   useEffect(() => {
-    if (!user) return;
+    if (!user || user.onboardingStatus === 'pending') return;
     const perms = new Set(user.permissions || []);
+    const canOnboard = perms.has('department.onboard_members') || perms.has('users.manage');
     const canReview = perms.has('requests.review_department') || perms.has('requests.review_all');
     const canAdmin =
       perms.has('roles.manage') ||
@@ -75,6 +93,7 @@ export default function App() {
       perms.has('departments.manage') ||
       perms.has('audit.view');
 
+    if (activeTab === 'onboarding' && !canOnboard) setActiveTab('boards');
     if (activeTab === 'requests' && !canReview) setActiveTab('boards');
     if (activeTab === 'admin' && !canAdmin) setActiveTab('boards');
   }, [user, activeTab]);
@@ -85,7 +104,17 @@ export default function App() {
     setActiveBoardId(null);
     setInitialCardId(null);
     setActiveTab('boards');
-    showToast(`مرحباً ${loggedUser.fullName} — دورك الحالي: ${loggedUser.roleName}`, 'success');
+    if (loggedUser.onboardingStatus === 'pending') {
+      showToast(
+        `أهلاً بك ${loggedUser.fullName} — حسابك جاهز وبانتظار ضم رئيس القسم`,
+        'info'
+      );
+    } else {
+      showToast(
+        `مرحباً ${loggedUser.fullName} — دورك الحالي: ${loggedUser.roleName}`,
+        'success'
+      );
+    }
   }
 
   async function handleQuickSwitchAccount(username, password) {
@@ -100,7 +129,7 @@ export default function App() {
       setInitialCardId(null);
       setActiveTab('boards');
       showToast(
-        `تم التبديل إلى حساب (${res.user.fullName}) — ${res.user.roleName} (${res.user.departmentName})`,
+        `تم التبديل إلى حساب (${res.user.fullName}) — ${res.user.roleName}`,
         'success'
       );
     } catch (err) {
@@ -121,13 +150,8 @@ export default function App() {
 
   function handleSelectTab(tab) {
     setActiveTab(tab);
-    if (tab !== 'boards') {
-      setActiveBoardId(null);
-      setInitialCardId(null);
-    } else {
-      setActiveBoardId(null);
-      setInitialCardId(null);
-    }
+    setActiveBoardId(null);
+    setInitialCardId(null);
   }
 
   function handleOpenBoard(boardId, cardId = null) {
@@ -161,7 +185,26 @@ export default function App() {
   if (!user) {
     return (
       <>
-        <LoginView onLoginSuccess={handleLoginSuccess} />
+        <LoginView
+          onLoginSuccess={handleLoginSuccess}
+          initialOAuthError={oauthError}
+        />
+        <ToastStack toasts={toasts} />
+      </>
+    );
+  }
+
+  // Gate newly registered Google / Facebook employees in the Waiting Room until their Department Head claims them!
+  if (user.onboardingStatus === 'pending') {
+    return (
+      <>
+        <WaitingOnboardingView
+          user={user}
+          onRefreshMe={refreshMe}
+          onQuickSwitchAccount={handleQuickSwitchAccount}
+          onLogout={handleLogout}
+          showToast={showToast}
+        />
         <ToastStack toasts={toasts} />
       </>
     );
@@ -185,6 +228,7 @@ export default function App() {
           user={user}
           onOpenBoard={handleOpenBoard}
           onOpenRequestModal={(ctx) => setRequestModalContext(ctx || {})}
+          onOpenOnboarding={() => handleSelectTab('onboarding')}
           showToast={showToast}
         />
       )}
@@ -199,6 +243,14 @@ export default function App() {
             setInitialCardId(null);
           }}
           onOpenRequestModal={(ctx) => setRequestModalContext(ctx || {})}
+          onRefreshMe={refreshMe}
+          showToast={showToast}
+        />
+      )}
+
+      {activeTab === 'onboarding' && (
+        <DepartmentOnboardingView
+          user={user}
           onRefreshMe={refreshMe}
           showToast={showToast}
         />
@@ -229,13 +281,6 @@ export default function App() {
         />
       )}
 
-      {activeTab === 'security-lab' && (
-        <SecurityTesterView
-          user={user}
-          onOpenRequestModal={(ctx) => setRequestModalContext(ctx || {})}
-        />
-      )}
-
       {requestModalContext !== null && (
         <PermissionRequestModal
           user={user}
@@ -245,7 +290,7 @@ export default function App() {
             setRequestModalContext(null);
             refreshMe();
             showToast(
-              `تم إرسال طلب الصلاحية بنجاح إلى (${res.routedTo}) — ستصلك إشعار فور اعتماده!`,
+              `تم إرسال طلب الصلاحية بنجاح إلى (${res.routedTo}) — سيصلك إشعار فور اعتماده!`,
               'success'
             );
           }}

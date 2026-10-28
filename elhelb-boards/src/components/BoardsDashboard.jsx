@@ -9,6 +9,9 @@ import {
   Layers,
   KeyRound,
   ShieldCheck,
+  Crown,
+  UserPlus,
+  AlertTriangle,
   X,
 } from 'lucide-react';
 import { apiFetch } from '../api';
@@ -18,10 +21,12 @@ export default function BoardsDashboard({
   user,
   onOpenBoard,
   onOpenRequestModal,
+  onOpenOnboarding,
   showToast,
 }) {
   const [boards, setBoards] = useState([]);
   const [departments, setDepartments] = useState([]);
+  const [execSummary, setExecSummary] = useState(null);
   const [selectedDeptFilter, setSelectedDeptFilter] = useState('ALL');
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
@@ -35,6 +40,8 @@ export default function BoardsDashboard({
 
   const permSet = new Set(user.permissions || []);
   const hasViewAll = permSet.has('boards.view_all');
+  const canOnboard =
+    permSet.has('department.onboard_members') || permSet.has('users.manage');
   const canCreateBoardInOwnDept =
     permSet.has('boards.create') ||
     (user.activeGrants || []).some((g) => g.permission_key === 'boards.create');
@@ -42,12 +49,21 @@ export default function BoardsDashboard({
   async function loadWorkspace() {
     setLoading(true);
     try {
-      const [boardsList, deptDir] = await Promise.all([
+      const promises = [
         apiFetch('/api/boards'),
         apiFetch('/api/departments/directory'),
-      ]);
+      ];
+      if (hasViewAll) {
+        promises.push(
+          apiFetch('/api/boards/executive-summary', { suppressPermissionModal: true }).catch(
+            () => null
+          )
+        );
+      }
+      const [boardsList, deptDir, summary] = await Promise.all(promises);
       setBoards(boardsList);
       setDepartments(deptDir);
+      if (summary) setExecSummary(summary);
       if (!newDeptId && deptDir.length > 0) {
         const myD = deptDir.find((d) => d.isMyDepartment) || deptDir[0];
         setNewDeptId(myD.id);
@@ -118,18 +134,60 @@ export default function BoardsDashboard({
 
   const starredBoards = filteredBoards.filter((b) => b.is_starred);
   const lockedDepartments = departments.filter((d) => !d.canViewBoards);
+  const isChairman = user.roleSlug === 'chairman';
 
   return (
     <div className="page-container">
-      {/* Department Isolation Banner */}
-      <div className="isolation-banner">
+      {/* Pending Google/Facebook Employees Alert for Department Heads & IT */}
+      {canOnboard && user.pendingOnboardingCount > 0 && onOpenOnboarding && (
+        <div
+          style={{
+            background: '#ecfdf5',
+            border: '1px solid #6ee7b7',
+            borderRadius: 12,
+            padding: '12px 16px',
+            marginBottom: 16,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 10,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <UserPlus size={20} color="#059669" />
+            <div style={{ fontSize: 13.5, color: '#065f46', fontWeight: 800 }}>
+              يوجد ({user.pendingOnboardingCount}) موظف سجل الدخول عبر Google أو Facebook وينتظر ضمه إلى قسمه!
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            style={{ background: '#059669', borderColor: '#059669' }}
+            onClick={onOpenOnboarding}
+          >
+            <UserPlus size={14} />
+            مراجعة وضم الموظفين للقسم
+          </button>
+        </div>
+      )}
+
+      {/* Department Isolation / Sovereign Executive Banner */}
+      <div
+        className="isolation-banner"
+        style={
+          isChairman
+            ? { borderRight: '5px solid #d97706', background: 'linear-gradient(135deg, #fffbeb 0%, #ffffff 100%)' }
+            : undefined
+        }
+      >
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <div
             style={{
               width: 46,
               height: 46,
               borderRadius: 12,
-              background: '#0a6fa8',
+              background: isChairman ? '#b45309' : '#0a6fa8',
               color: '#fff',
               display: 'flex',
               alignItems: 'center',
@@ -137,17 +195,19 @@ export default function BoardsDashboard({
               flexShrink: 0,
             }}
           >
-            <ShieldCheck size={24} />
+            {isChairman ? <Crown size={24} /> : <ShieldCheck size={24} />}
           </div>
           <div>
             <div style={{ fontWeight: 900, fontSize: 17, color: '#0b2545' }}>
-              {hasViewAll
-                ? 'عرض الإدارة العليا — جميع لوحات أقسام الشركة'
+              {isChairman
+                ? 'المنصة السيادية لرئيس مجلس الإدارة — متابعة كافة قطاعات وأقسام مجموعة الهلب'
+                : hasViewAll
+                ? `عرض الإدارة الشاملة (${user.roleName}) — جميع لوحات أقسام الشركة`
                 : `مساحة عمل (${user.departmentName})`}
             </div>
             <div style={{ fontSize: 13, color: '#475569', marginTop: 2 }}>
               {hasViewAll
-                ? 'بصفتك تملك صلاحية (عرض جميع الأقسام) يمكنك متابعة كافة اللوحات عبر أقسام الشركة.'
+                ? 'لديك صلاحية شاملة لمتابعة وإدارة لوحات التصدير، تسجيل المنتجات، الـ IT، المبيعات، المشتريات، الميديا، وكافة الأقسام.'
                 : 'يطبق السيرفر نظام عزل الأقسام: تظهر لك فقط اللوحات المرتبطة بقسمك أو اللوحات الممنوحة لك بتصريح مؤقت من المدير.'}
             </div>
           </div>
@@ -182,8 +242,88 @@ export default function BoardsDashboard({
         </div>
       </div>
 
-      {/* Department Filter Pills when viewing multiple departments */}
-      {visibleDepartmentsInBoards.length > 1 && (
+      {/* Executive Company-Wide Department Cards (Chairman / GM / IT) */}
+      {hasViewAll && execSummary && Array.isArray(execSummary.departments) && (
+        <div style={{ marginBottom: 24 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 10,
+              flexWrap: 'wrap',
+              gap: 8,
+            }}
+          >
+            <div style={{ fontWeight: 800, fontSize: 14.5, color: '#0b2545' }}>
+              نظرة تنفيذية على أقسام المجموعة ({execSummary.departments.length} أقسام) — اضغط على أي قسم لتصفية لوحاته:
+            </div>
+            {selectedDeptFilter !== 'ALL' && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setSelectedDeptFilter('ALL')}
+              >
+                عرض جميع الأقسام ({boards.length})
+              </button>
+            )}
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(215px, 1fr))',
+              gap: 10,
+            }}
+          >
+            {execSummary.departments.map((d) => {
+              const isSelected = Number(selectedDeptFilter) === Number(d.id);
+              const pct =
+                d.cards_count > 0
+                  ? Math.round((d.completed_cards_count / d.cards_count) * 100)
+                  : 0;
+              return (
+                <button
+                  key={`exec-${d.id}`}
+                  type="button"
+                  onClick={() =>
+                    setSelectedDeptFilter(isSelected ? 'ALL' : d.id)
+                  }
+                  style={{
+                    textAlign: 'right',
+                    background: isSelected ? '#eff6ff' : '#ffffff',
+                    border: isSelected ? `2px solid ${d.color}` : '1px solid #e2e8f0',
+                    borderTop: `4px solid ${d.color}`,
+                    borderRadius: 11,
+                    padding: '10px 12px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div style={{ fontWeight: 900, fontSize: 13, color: '#0f172a', marginBottom: 4 }}>
+                    {d.name}
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: '#64748b', fontWeight: 700 }}>
+                    <span>{d.members_count} موظف</span>
+                    <span>{d.boards_count} لوحة • {d.cards_count} مهمة</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, fontSize: 11 }}>
+                    <span style={{ color: '#059669', fontWeight: 800 }}>إنجاز {pct}%</span>
+                    {d.urgent_cards_count > 0 && (
+                      <span style={{ color: '#dc2626', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                        <AlertTriangle size={11} />
+                        {d.urgent_cards_count} عاجل
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Department Filter Pills when viewing multiple departments without exec grid */}
+      {!hasViewAll && visibleDepartmentsInBoards.length > 1 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 22 }}>
           <button
             type="button"
@@ -266,12 +406,12 @@ export default function BoardsDashboard({
               }}
             >
               <Layers size={18} color="#0a6fa8" />
-              لوحات العمل المتاحة لك ({filteredBoards.length})
+              لوحات العمل المتاحة ({filteredBoards.length})
             </h3>
 
             {filteredBoards.length === 0 ? (
               <div className="card-box" style={{ textAlign: 'center', padding: 40, color: '#64748b' }}>
-                لا توجد لوحات متاحة حالياً في هذا القسم.
+                لا توجد لوحات عمل منشأة في هذا القسم بعد — يمكنك الضغط على (إنشاء لوحة عمل جديدة) بالأعلى لإضافة أول لوحة للقسم.
               </div>
             ) : (
               <div className="boards-grid">
@@ -386,7 +526,7 @@ export default function BoardsDashboard({
                   <input
                     type="text"
                     className="form-input"
-                    placeholder="مثال: متابعة عقود التوريد الربع الأول"
+                    placeholder="مثال: شحنات التصدير للربع الرابع"
                     value={newTitle}
                     onChange={(e) => setNewTitle(e.target.value)}
                     required
