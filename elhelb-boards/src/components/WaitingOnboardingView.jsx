@@ -130,7 +130,7 @@ export default function WaitingOnboardingView({
       setEditingDept(false);
       await onRefreshMe();
       showToast(
-        'تم تسجيل قسمك وإرسال إشعار فوري إلى رئيس القسم وبريد الإدارة!',
+        'تم تسجيل قسمك وإرسال الطلب فوراً إلى إدارة الموارد البشرية (HR) للاعتماد والتسكين!',
         'success'
       );
     } catch (err) {
@@ -145,9 +145,9 @@ export default function WaitingOnboardingView({
     try {
       const updated = await onRefreshMe();
       if (updated && updated.onboardingStatus === 'approved') {
-        showToast(`تم ضمك إلى (${updated.departmentName}) بنجاح!`, 'success');
+        showToast(`تم اعتماد وتسكين حسابك في (${updated.departmentName}) بنجاح!`, 'success');
       } else {
-        showToast('لا يزال حسابك بانتظار اعتماد رئيس القسم', 'info');
+        showToast('لا يزال حسابك بانتظار اعتماد وتسكين الموارد البشرية (HR)', 'info');
       }
     } finally {
       setChecking(false);
@@ -157,7 +157,7 @@ export default function WaitingOnboardingView({
   const providerLabel =
     user.authProvider === 'google'
       ? 'حساب Google'
-      : 'موظف جديد بانتظار الضم';
+      : 'موظف جديد بانتظار التسكين';
 
   return (
     <div className="app-shell">
@@ -205,7 +205,7 @@ export default function WaitingOnboardingView({
           {[
             { num: 1, title: '1. إنشاء اسم وباسورد', done: user.hasCustomCredentials && activeStep > 1 },
             { num: 2, title: '2. تحديد القسم بالشركة', done: user.departmentConfirmed && activeStep > 2 },
-            { num: 3, title: '3. اعتماد رئيس القسم', done: false },
+            { num: 3, title: '3. اعتماد الموارد البشرية (HR)', done: false },
           ].map((st) => {
             const isCurrent = activeStep === st.num;
             return (
@@ -448,9 +448,24 @@ export default function WaitingOnboardingView({
                   اختر القسم الذي تعمل به في مجموعة الهلب
                 </h2>
                 <p style={{ margin: 0, fontSize: 13.5, color: '#475569' }}>
-                  حدد قسمك بالأسفل ليصل إشعار فوري إلى <strong>رئيس القسم</strong> وبريد الإدارة لإضافتك إلى لوحات عمل قسمك.
+                  حدد قسمك بالأسفل ليصل طلبك فوراً إلى <strong>إدارة الموارد البشرية (HR)</strong> والإدارة العليا لاعتماد حسابك وتسكينك في قسمك.
                 </p>
               </div>
+            </div>
+
+            <div
+              style={{
+                background: '#fffbeb',
+                border: '1px solid #fde68a',
+                color: '#92400e',
+                padding: '10px 14px',
+                borderRadius: 10,
+                fontSize: 12.5,
+                fontWeight: 700,
+                marginBottom: 16,
+              }}
+            >
+              💡 إذا كنت من فريق <strong>الموارد البشرية (HR)</strong>، اختر <strong>«قسم الموارد البشرية»</strong> ليقوم رئيس مجلس الإدارة باعتماد صلاحيات الـ HR لحسابك.
             </div>
 
             <form onSubmit={handleSaveDepartment}>
@@ -541,7 +556,7 @@ export default function WaitingOnboardingView({
                   disabled={savingDept}
                 >
                   <Send size={15} />
-                  {savingDept ? 'جاري إرسال الطلب...' : 'تأكيد القسم وإبلاغ رئيس القسم'}
+                  {savingDept ? 'جاري إرسال الطلب...' : 'تأكيد القسم وإرسال الطلب للـ HR'}
                 </button>
               </div>
             </form>
@@ -576,7 +591,7 @@ export default function WaitingOnboardingView({
                   تم إرسال طلبك بنجاح يا {user.fullName}!
                 </h2>
                 <p style={{ margin: 0, fontSize: 14, color: '#475569', lineHeight: 1.75 }}>
-                  تم حفظ بيانات دخولك وإرسال إشعار فوري إلى <strong>رئيس القسم</strong> وبريد الإدارة. بمجرد ضغطة الاعتماد من رئيس القسم ستُفتح لك لوحات عمل قسمك تلقائياً.
+                  تم حفظ بيانات دخولك وإرسال طلب التسكين إلى <strong>إدارة الموارد البشرية (HR)</strong> والإدارة العليا. بمجرد اعتماد حسابك وتسكينك في قسمك ستُفتح لك لوحات العمل تلقائياً.
                 </p>
 
                 <div

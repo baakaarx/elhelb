@@ -3,11 +3,12 @@ const bcrypt = require('bcryptjs');
 const { all, get, run, transaction } = require('../db');
 const { authenticate, userHasPermission, writeAudit } = require('../rbac');
 const { sendElhelbEmail } = require('../mailer');
+const adminRoutes = require('./admin');
 
 const router = express.Router();
 router.use(authenticate);
 
-// Step 1 after Email Verification: Employee creates their own Username & Password!
+// Step 1: Employee creates or updates their own Username & Password
 router.post('/setup-credentials', async (req, res) => {
   try {
     const body = req.body || {};
@@ -78,7 +79,7 @@ router.post('/setup-credentials', async (req, res) => {
   }
 });
 
-// Step 2 after Email Verification: Employee selects their Department & notifies Department Head + Gmail!
+// Step 2: Employee selects their Department -> notifies HR (الموارد البشرية) & Top Management!
 router.patch('/my-preference', async (req, res) => {
   try {
     const { preferredDepartmentId, jobTitle } = req.body || {};
@@ -110,42 +111,47 @@ router.patch('/my-preference', async (req, res) => {
 
     if (req.user.onboarding_status === 'pending') {
       const notifyManagers = all(
-        `SELECT DISTINCT u.id, u.email, u.department_id
+        `SELECT u.id, u.email, u.department_id,
+                MAX(CASE WHEN rp.permission_key = 'users.manage' THEN 1 ELSE 0 END) AS has_global_users_manage
          FROM users u
          JOIN role_permissions rp ON rp.role_id = u.role_id
          WHERE u.is_active = 1
            AND u.onboarding_status = 'approved'
-           AND rp.permission_key IN ('department.onboard_members', 'users.manage')`
+           AND rp.permission_key IN ('department.onboard_members', 'users.manage')
+         GROUP BY u.id`
       );
 
       for (const m of notifyManagers) {
-        const isTargetHeadOrGlobal =
-          !m.department_id || Number(m.department_id) === Number(dept.id);
-        if (isTargetHeadOrGlobal) {
+        const shouldNotify =
+          Boolean(m.has_global_users_manage) ||
+          !m.department_id ||
+          Number(m.department_id) === Number(dept.id);
+
+        if (shouldNotify) {
           run(
             `INSERT INTO notifications (user_id, type, title, message, link_tab)
-             VALUES (?, 'onboarding_pref', 'موظف جديد يطلب الانضمام إلى قسمك', ?, 'onboarding')`,
+             VALUES (?, 'onboarding_pref', 'طلب تسكين موظف جديد بانتظار اعتماد الـ HR', ?, 'onboarding')`,
             [
               m.id,
-              `الموظف (${req.user.full_name} — @${req.user.username}) اختار الانضمام إلى (${dept.name}) وينتظر موافقتك.`,
+              `الموظف (${req.user.full_name} — @${req.user.username}) سجل حسابه وطلب الانضمام إلى (${dept.name}) وبانتظار القبول والتسكين.`,
             ]
           );
           if (m.email) managerEmails.push(m.email);
         }
       }
 
-      // Send Gmail Notification to Department Heads + Admin Gmail
+      // Optional background Gmail notification to HR & Admin
       await sendElhelbEmail({
         to: managerEmails,
         ccAdmin: true,
         eventType: 'onboarding_request',
-        subject: `👤 موظف جديد بانتظار الضم إلى (${dept.name}) — ${req.user.full_name}`,
-        badgeText: 'طلب انضمام موظف جديد',
+        subject: `👤 طلب تسكين موظف جديد في (${dept.name}) — ${req.user.full_name}`,
+        badgeText: 'طلب تسكين موظف جديد (HR)',
         badgeColor: '#d97706',
         heading: `قام (${req.user.full_name}) بالتسجيل وتحديد قسمه في مجموعة الهلب`,
         bodyLines: [
-          `أكد الموظف بريده الإلكتروني وأنشأ اسم المستخدم وكلمة المرور الخاصة به، وحدد أنه تابع لـ (${dept.name}).`,
-          `يرجى الدخول إلى تبويب "ضم الموظفين للقسم" لاعتماده وتحديد دوره الوظيفي.`,
+          `أنشأ الموظف حسابه وحدد أنه تابع لـ (${dept.name}).`,
+          `يرجى الدخول إلى تبويب "تسكين وقبول الموظفين (HR)" لاعتماده وتحديد دوره الوظيفي.`,
         ],
         details: [
           ['الاسم الكامل للموظف', req.user.full_name],
@@ -169,7 +175,7 @@ router.patch('/my-preference', async (req, res) => {
   }
 });
 
-// List pending verified employees + department team roster for Department Heads & IT/Admin
+// List pending employees + company/department team roster for HR, IT & Top Management
 router.get('/pending', (req, res) => {
   const canManageAll = userHasPermission(req.user, 'users.manage');
   const canOnboardDept = userHasPermission(req.user, 'department.onboard_members');
@@ -177,38 +183,56 @@ router.get('/pending', (req, res) => {
   if (!canManageAll && !canOnboardDept) {
     writeAudit({
       user: req.user,
-      action: 'محاولة فتح شاشة ضم الموظفين للأقسام',
-      permissionKey: 'department.onboard_members',
+      action: 'محاولة فتح شاشة تسكين الموظفين بدون صلاحية HR أو إدارة',
+      permissionKey: 'users.manage',
       status: 'DENIED',
       req,
     });
     return res.status(403).json({
       code: 'PERMISSION_DENIED',
-      permissionKey: 'department.onboard_members',
-      error: 'هذه الشاشة مخصصة لرؤساء الأقسام ومسؤولي الـ IT والإدارة العليا فقط',
+      permissionKey: 'users.manage',
+      error: 'هذه الشاشة مخصصة لإدارة الموارد البشرية (HR) ومسؤولي الـ IT والإدارة العليا فقط',
     });
   }
 
   const myDeptId = req.user.department_id || null;
   const callerRank = Number(req.user.roleRank || 0);
 
-  const pendingUsers = all(
-    `SELECT
-       u.id, u.username, u.email, u.full_name, u.job_title,
-       u.avatar_color, u.avatar_url, u.auth_provider,
-       u.has_custom_credentials, u.department_confirmed,
-       u.onboarding_status, u.preferred_department_id, u.created_at,
-       pd.name AS preferred_department_name,
-       pd.color AS preferred_department_color
-     FROM users u
-     LEFT JOIN departments pd ON pd.id = u.preferred_department_id
-     WHERE u.onboarding_status = 'pending' AND u.is_active = 1
-     ORDER BY
-       CASE WHEN u.preferred_department_id = ? THEN 0 ELSE 1 END ASC,
-       u.department_confirmed DESC,
-       u.id DESC`,
-    [myDeptId || -1]
-  );
+  const pendingUsers = canManageAll
+    ? all(
+        `SELECT
+           u.id, u.username, u.email, u.full_name, u.job_title,
+           u.avatar_color, u.avatar_url, u.auth_provider,
+           u.has_custom_credentials, u.department_confirmed,
+           u.onboarding_status, u.preferred_department_id, u.created_at,
+           pd.name AS preferred_department_name,
+           pd.slug AS preferred_department_slug,
+           pd.color AS preferred_department_color
+         FROM users u
+         LEFT JOIN departments pd ON pd.id = u.preferred_department_id
+         WHERE u.onboarding_status = 'pending' AND u.is_active = 1
+         ORDER BY u.department_confirmed DESC, u.id DESC`
+      )
+    : all(
+        `SELECT
+           u.id, u.username, u.email, u.full_name, u.job_title,
+           u.avatar_color, u.avatar_url, u.auth_provider,
+           u.has_custom_credentials, u.department_confirmed,
+           u.onboarding_status, u.preferred_department_id, u.created_at,
+           pd.name AS preferred_department_name,
+           pd.slug AS preferred_department_slug,
+           pd.color AS preferred_department_color
+         FROM users u
+         LEFT JOIN departments pd ON pd.id = u.preferred_department_id
+         WHERE u.onboarding_status = 'pending'
+           AND u.is_active = 1
+           AND (u.preferred_department_id IS NULL OR u.preferred_department_id = ?)
+         ORDER BY
+           CASE WHEN u.preferred_department_id = ? THEN 0 ELSE 1 END ASC,
+           u.department_confirmed DESC,
+           u.id DESC`,
+        [myDeptId || -1, myDeptId || -1]
+      );
 
   const assignableDepartments = canManageAll
     ? all(`SELECT id, slug, name, color FROM departments ORDER BY id ASC`)
@@ -226,13 +250,13 @@ router.get('/pending', (req, res) => {
     [req.user.role_slug === 'chairman' ? 101 : callerRank]
   );
 
-  const teamMembers = canManageAll
+  const rawTeamMembers = canManageAll
     ? all(
         `SELECT
            u.id, u.username, u.email, u.full_name, u.job_title, u.avatar_color,
-           u.auth_provider, u.department_id, u.approved_at,
+           u.auth_provider, u.department_id, u.approved_at, u.is_active,
            d.name AS department_name, d.color AS department_color,
-           r.name AS role_name, r.color AS role_color, r.rank_level,
+           r.slug AS role_slug, r.name AS role_name, r.color AS role_color, r.rank_level,
            approver.full_name AS approved_by_name
          FROM users u
          JOIN roles r ON r.id = u.role_id
@@ -245,9 +269,9 @@ router.get('/pending', (req, res) => {
     ? all(
         `SELECT
            u.id, u.username, u.email, u.full_name, u.job_title, u.avatar_color,
-           u.auth_provider, u.department_id, u.approved_at,
+           u.auth_provider, u.department_id, u.approved_at, u.is_active,
            d.name AS department_name, d.color AS department_color,
-           r.name AS role_name, r.color AS role_color, r.rank_level,
+           r.slug AS role_slug, r.name AS role_name, r.color AS role_color, r.rank_level,
            approver.full_name AS approved_by_name
          FROM users u
          JOIN roles r ON r.id = u.role_id
@@ -261,6 +285,15 @@ router.get('/pending', (req, res) => {
       )
     : [];
 
+  const teamMembers = rawTeamMembers.map((m) => ({
+    ...m,
+    can_caller_delete:
+      canManageAll &&
+      m.id !== req.user.id &&
+      m.role_slug !== 'chairman' &&
+      (req.user.role_slug === 'chairman' || Number(m.rank_level || 0) < callerRank),
+  }));
+
   res.json({
     pendingUsers,
     assignableDepartments,
@@ -270,8 +303,8 @@ router.get('/pending', (req, res) => {
   });
 });
 
-// Department Head (or IT / Admin) claims a pending employee into their department!
-router.post('/:userId/claim', async (req, res) => {
+// HR (or IT / Sovereign Admin) approves & assigns a pending employee into their company department!
+router.post('/:userId(\\d+)/claim', async (req, res) => {
   try {
     const canManageAll = userHasPermission(req.user, 'users.manage');
     const canOnboardDept = userHasPermission(req.user, 'department.onboard_members');
@@ -279,15 +312,15 @@ router.post('/:userId/claim', async (req, res) => {
     if (!canManageAll && !canOnboardDept) {
       writeAudit({
         user: req.user,
-        action: 'محاولة ضم موظف بدون صلاحية رئيس قسم',
-        permissionKey: 'department.onboard_members',
+        action: 'محاولة قبول وتسكين موظف بدون صلاحية الموارد البشرية (HR)',
+        permissionKey: 'users.manage',
         status: 'DENIED',
         req,
       });
       return res.status(403).json({
         code: 'PERMISSION_DENIED',
-        permissionKey: 'department.onboard_members',
-        error: 'ليس لديك صلاحية ضم الموظفين للأقسام',
+        permissionKey: 'users.manage',
+        error: 'صلاحية قبول وتسكين الموظفين مخصصة لإدارة الموارد البشرية (HR) والإدارة العليا',
       });
     }
 
@@ -297,7 +330,7 @@ router.post('/:userId/claim', async (req, res) => {
       return res.status(404).json({ error: 'الموظف المطلوب غير موجود' });
     }
     if (targetUser.onboarding_status !== 'pending') {
-      return res.status(400).json({ error: 'هذا الموظف تم ضمه وتسكينه بالفعل في قسم سابقاً' });
+      return res.status(400).json({ error: 'هذا الموظف تم اعتماده وتسكينه بالفعل سابقاً' });
     }
 
     const body = req.body || {};
@@ -307,7 +340,7 @@ router.post('/:userId/claim', async (req, res) => {
       .trim()
       .slice(0, 100);
 
-    // Enforce strict department scope for Department Heads!
+    // Enforce strict department scope if user only holds department.onboard_members (without users.manage)
     if (!canManageAll) {
       if (!req.user.department_id) {
         return res.status(400).json({ error: 'حسابك غير مرتبط بقسم محدد' });
@@ -315,14 +348,14 @@ router.post('/:userId/claim', async (req, res) => {
       if (requestedDeptId && Number(requestedDeptId) !== Number(req.user.department_id)) {
         writeAudit({
           user: req.user,
-          action: `محاولة ضم موظف إلى قسم آخر غير قسمه`,
+          action: 'محاولة ضم موظف إلى قسم آخر بدون صلاحية HR الشاملة',
           permissionKey: 'users.manage',
           status: 'DENIED',
           req,
         });
         return res.status(403).json({
           code: 'DEPARTMENT_ISOLATION',
-          error: 'يحق لرئيس القسم ضم الموظفين إلى قسمه فقط',
+          error: 'لا تملك صلاحية تسكين موظفين في أقسام أخرى خارج قسمك',
         });
       }
     }
@@ -372,30 +405,29 @@ router.post('/:userId/claim', async (req, res) => {
 
       run(
         `INSERT INTO notifications (user_id, type, title, message, link_tab)
-         VALUES (?, 'onboarding_approved', 'مرحباً بك! تم ضمك رسمياً إلى قسمك 🎉', ?, 'boards')`,
+         VALUES (?, 'onboarding_approved', 'مرحباً بك! تم اعتماد وتسكين حسابك رسمياً 🎉', ?, 'boards')`,
         [
           targetUser.id,
-          `قام (${req.user.full_name}) بضمك إلى (${dept.name}) بصلاحية (${role.name}). يمكنك الآن الدخول إلى لوحات العمل فوراً.`,
+          `قامت إدارة الموارد البشرية / الإدارة (${req.user.full_name}) بتسكينك في (${dept.name}) بدور (${role.name}). يمكنك الآن الدخول إلى لوحات عمل قسمك فوراً.`,
         ]
       );
     });
 
     writeAudit({
       user: req.user,
-      action: `ضم موظف جديد للقسم: ${targetUser.full_name}`,
+      action: `اعتماد وتسكين موظف جديد: ${targetUser.full_name}`,
       permissionKey: canManageAll ? 'users.manage' : 'department.onboard_members',
       status: 'ALLOWED',
       req,
       details: `القسم: ${dept.name} — الدور: ${role.name}`,
     });
 
-    // Send Welcome Gmail Notification to the approved employee (+ Admin CC)
     await sendElhelbEmail({
       to: targetUser.email ? [targetUser.email] : [],
       ccAdmin: true,
       eventType: 'onboarding_approved',
       subject: `🎉 تم اعتماد انضمامك إلى (${dept.name}) — مجموعة الهلب`,
-      badgeText: 'تم اعتماد حسابك بالقسم',
+      badgeText: 'تم اعتماد حسابك وتسكينك',
       badgeColor: '#059669',
       heading: `مرحباً بك يا ${targetUser.full_name} في (${dept.name})!`,
       bodyLines: [
@@ -413,12 +445,62 @@ router.post('/:userId/claim', async (req, res) => {
 
     return res.json({
       ok: true,
-      message: `تم ضم (${targetUser.full_name}) إلى (${dept.name}) بنجاح`,
+      message: `تم قبول وتسكين (${targetUser.full_name}) في (${dept.name}) بنجاح`,
     });
   } catch (err) {
     console.error('Claim user error:', err);
-    return res.status(500).json({ error: 'تعذر إتمام عملية ضم الموظف' });
+    return res.status(500).json({ error: 'تعذر إتمام عملية تسكين الموظف' });
   }
+});
+
+// Reject & permanently delete a pending registration request
+router.delete('/:userId(\\d+)', (req, res) => {
+  const canManageAll = userHasPermission(req.user, 'users.manage');
+  const canOnboardDept = userHasPermission(req.user, 'department.onboard_members');
+
+  if (!canManageAll && !canOnboardDept) {
+    return res.status(403).json({
+      code: 'PERMISSION_DENIED',
+      error: 'ليس لديك صلاحية رفض أو حذف طلبات التسجيل',
+    });
+  }
+
+  const targetUserId = Number(req.params.userId);
+  const targetUser = get(`SELECT * FROM users WHERE id = ?`, [targetUserId]);
+  if (!targetUser) {
+    return res.status(404).json({ error: 'طلب التسجيل غير موجود أو تم حذفه مسبقاً' });
+  }
+  if (targetUser.onboarding_status !== 'pending') {
+    return res.status(400).json({
+      error: 'هذا الحساب معتمد بالفعل؛ لحذف موظف حالي استخدم زر الحذف النهائي من قائمة الموظفين',
+    });
+  }
+
+  if (
+    !canManageAll &&
+    targetUser.preferred_department_id &&
+    Number(targetUser.preferred_department_id) !== Number(req.user.department_id)
+  ) {
+    return res.status(403).json({
+      error: 'لا يمكنك حذف طلب انضمام موجه لقسم آخر',
+    });
+  }
+
+  adminRoutes.deleteUserCompletely(targetUser.id);
+
+  writeAudit({
+    user: req.user,
+    action: 'رفض وحذف طلب تسجيل موظف معلق',
+    permissionKey: canManageAll ? 'users.manage' : 'department.onboard_members',
+    status: 'ALLOWED',
+    req,
+    details: `${targetUser.full_name} (@${targetUser.username})`,
+  });
+
+  return res.json({
+    ok: true,
+    message: `تم رفض وحذف طلب تسجيل (${targetUser.full_name}) نهائياً`,
+  });
 });
 
 module.exports = router;

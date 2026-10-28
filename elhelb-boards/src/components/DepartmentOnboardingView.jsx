@@ -7,6 +7,11 @@ import {
   Clock,
   Sparkles,
   RefreshCw,
+  Trash2,
+  Plus,
+  X,
+  AlertTriangle,
+  Crown,
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { formatSqliteDate, getInitials } from '../constants';
@@ -23,29 +28,67 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
   const [drafts, setDrafts] = useState({});
   const [claimingId, setClaimingId] = useState(null);
 
+  // Direct HR Employee Creation Modal
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [uForm, setUForm] = useState({
+    fullName: '',
+    username: '',
+    password: '',
+    email: '',
+    jobTitle: '',
+    departmentId: '',
+    roleId: '',
+  });
+
+  // Delete / Reject Confirmation Modal
+  const [confirmDelete, setConfirmDelete] = useState(null); // { mode: 'pending' | 'member', target }
+  const [deleting, setDeleting] = useState(false);
+
   async function loadData() {
     setLoading(true);
     try {
       const res = await apiFetch('/api/onboarding/pending');
       setData(res);
 
-      // Initialize per-user assignment defaults
-      const defaultRole =
+      const staffRole =
         res.assignableRoles.find((r) => r.slug === 'staff') || res.assignableRoles[0];
+      const hrRole = res.assignableRoles.find((r) => r.slug === 'hr_manager');
+
+      if (!uForm.roleId && staffRole) {
+        setUForm((p) => ({
+          ...p,
+          roleId: staffRole.id,
+          departmentId: res.assignableDepartments[0]?.id || '',
+        }));
+      }
+
       const nextDrafts = {};
       for (const pu of res.pendingUsers) {
         const defaultDept = res.canManageAll
           ? pu.preferred_department_id || res.assignableDepartments[0]?.id || ''
           : user.departmentId || res.assignableDepartments[0]?.id || '';
+
+        const preferredRole =
+          pu.preferred_department_slug === 'hr' && hrRole
+            ? hrRole
+            : staffRole;
+
         nextDrafts[pu.id] = {
           departmentId: defaultDept,
-          roleId: defaultRole ? defaultRole.id : '',
+          roleId: preferredRole ? preferredRole.id : '',
           jobTitle: pu.job_title || '',
         };
       }
-      setDrafts((prev) => ({ ...nextDrafts, ...prev }));
+      setDrafts((prev) => {
+        const merged = { ...nextDrafts };
+        for (const k of Object.keys(merged)) {
+          if (prev[k]) merged[k] = prev[k];
+        }
+        return merged;
+      });
     } catch (err) {
-      showToast(err.message || 'تعذر تحميل قائمة الموظفين الجدد', 'error');
+      showToast(err.message || 'تعذر تحميل قائمة الموظفين', 'error');
     } finally {
       setLoading(false);
     }
@@ -69,7 +112,7 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
       return;
     }
     if (!draft.roleId) {
-      showToast('يرجى اختيار الدور الوظيفي داخل القسم', 'error');
+      showToast('يرجى اختيار الدور الوظيفي للموظف', 'error');
       return;
     }
 
@@ -83,13 +126,80 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
           jobTitle: draft.jobTitle || pendingUser.job_title || '',
         },
       });
-      showToast(res.message || 'تم ضم الموظف للقسم بنجاح', 'success');
+      setDrafts((prev) => {
+        const copy = { ...prev };
+        delete copy[pendingUser.id];
+        return copy;
+      });
+      showToast(res.message || 'تم قبول وتسكين الموظف بالقسم بنجاح', 'success');
       await loadData();
       onRefreshMe();
     } catch (err) {
-      showToast(err.message || 'تعذر ضم الموظف', 'error');
+      showToast(err.message || 'تعذر تسكين الموظف', 'error');
     } finally {
       setClaimingId(null);
+    }
+  }
+
+  async function handleDirectCreateEmployee(e) {
+    e.preventDefault();
+    setCreating(true);
+    try {
+      await apiFetch('/api/admin/users', {
+        method: 'POST',
+        body: {
+          fullName: uForm.fullName.trim(),
+          username: uForm.username.trim().toLowerCase(),
+          password: uForm.password,
+          email: uForm.email.trim(),
+          jobTitle: uForm.jobTitle.trim(),
+          roleId: Number(uForm.roleId),
+          departmentId: uForm.departmentId ? Number(uForm.departmentId) : null,
+        },
+      });
+      setCreateOpen(false);
+      setUForm((p) => ({
+        ...p,
+        fullName: '',
+        username: '',
+        password: '',
+        email: '',
+        jobTitle: '',
+      }));
+      await loadData();
+      onRefreshMe();
+      showToast('تم تسجيل وتسكين الموظف الجديد بنجاح ويمكنه الدخول فوراً', 'success');
+    } catch (err) {
+      showToast(err.message || 'تعذر تسجيل الموظف الجديد', 'error');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleConfirmDeleteAction() {
+    if (!confirmDelete) return;
+    setDeleting(true);
+    try {
+      const { mode, target } = confirmDelete;
+      const endpoint =
+        mode === 'pending'
+          ? `/api/onboarding/${target.id}`
+          : `/api/admin/users/${target.id}`;
+      const res = await apiFetch(endpoint, { method: 'DELETE' });
+      setConfirmDelete(null);
+      await loadData();
+      onRefreshMe();
+      showToast(
+        res.message ||
+          (mode === 'pending'
+            ? 'تم رفض وحذف طلب التسجيل نهائياً'
+            : 'تم حذف حساب الموظف نهائياً من النظام'),
+        'success'
+      );
+    } catch (err) {
+      showToast(err.message || 'تعذر إتمام عملية الحذف', 'error');
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -116,19 +226,34 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
           <div>
             <div style={{ fontWeight: 900, fontSize: 18, color: '#0b2545' }}>
               {data.canManageAll
-                ? 'بوابة ضم وتسكين الموظفين الجدد عبر كل أقسام الشركة'
-                : `ضم الموظفين الجدد إلى (${user.departmentName})`}
+                ? 'بوابة الموارد البشرية (HR) والإدارة — قبول وتسكين وتسجيل الموظفين'
+                : `تسكين الموظفين الجدد في (${user.departmentName})`}
             </div>
             <div style={{ fontSize: 13, color: '#475569', marginTop: 2 }}>
-              كل موظف جديد ينشئ حسابه ويحدد قسمه يظهر هنا باسمه الحقيقي ليقوم رئيس القسم بإضافته إلى قسمه وتحديد صلاحيته بضغطة واحدة.
+              {data.canManageAll
+                ? 'اعتماد وتسكين المسجلين الجدد في كافة أقسام الشركة، أو تسجيل حساب موظف جديد مباشرةً، أو الحذف النهائي لمن يترك العمل.'
+                : 'مراجعة واعتماد طلبات الانضمام الموجهة إلى قسمك.'}
             </div>
           </div>
         </div>
 
-        <button type="button" className="btn btn-secondary btn-sm" onClick={loadData}>
-          <RefreshCw size={14} />
-          تحديث القائمة
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {data.canManageAll && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              style={{ background: '#059669', borderColor: '#059669' }}
+              onClick={() => setCreateOpen(true)}
+            >
+              <Plus size={15} />
+              تسجيل موظف جديد مباشرةً (HR)
+            </button>
+          )}
+          <button type="button" className="btn btn-secondary btn-sm" onClick={loadData}>
+            <RefreshCw size={14} />
+            تحديث القائمة
+          </button>
+        </div>
       </div>
 
       {/* Pending Signups Section */}
@@ -145,7 +270,7 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
         >
           <h3 style={{ margin: 0, fontSize: 16.5, fontWeight: 900, color: '#071e14', display: 'flex', alignItems: 'center', gap: 8 }}>
             <Clock size={18} color="#d97706" />
-            موظفون جدد بانتظار الضم للأقسام ({data.pendingUsers.length})
+            طلبات تسجيل موظفين جدد بانتظار القبول والتسكين ({data.pendingUsers.length})
           </h3>
         </div>
 
@@ -169,16 +294,14 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
               لا يوجد موظفون في قائمة الانتظار حالياً
             </div>
             <div style={{ fontSize: 13 }}>
-              بمجرد تسجيل أي موظف جديد واختيار قسمه، سيظهر اسمه هنا فوراً لتضمه إلى قسمك.
+              أي موظف يسجل حساباً جديداً يظهر هنا فوراً لاعتماده وتسكينه، أو يمكنك الضغط على «تسجيل موظف جديد مباشرةً (HR)» بالأعلى.
             </div>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {data.pendingUsers.map((pu) => {
               const draft = drafts[pu.id] || {};
-              const isMatchingMyDept =
-                user.departmentId &&
-                Number(pu.preferred_department_id) === Number(user.departmentId);
+              const isHrSignup = pu.preferred_department_slug === 'hr';
 
               const providerBadgeBg =
                 pu.auth_provider === 'google' ? '#ea4335' : '#15803d';
@@ -191,10 +314,8 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                   style={{
                     padding: 16,
                     borderRadius: 12,
-                    border: isMatchingMyDept
-                      ? '2px solid #10b981'
-                      : '1px solid #e2e8f0',
-                    background: isMatchingMyDept ? '#f0fdf4' : '#ffffff',
+                    border: isHrSignup ? '2px solid #d97706' : '1px solid #e2e8f0',
+                    background: isHrSignup ? '#fffbeb' : '#ffffff',
                     display: 'grid',
                     gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
                     gap: 16,
@@ -227,13 +348,13 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                         >
                           {providerLabel}
                         </span>
-                        {isMatchingMyDept && (
+                        {isHrSignup && (
                           <span
                             className="badge"
-                            style={{ background: '#dcfce7', color: '#166534', fontSize: 11 }}
+                            style={{ background: '#fef3c7', color: '#92400e', fontSize: 11 }}
                           >
                             <Sparkles size={11} />
-                            يطلب الانضمام لقسمك
+                            طلب انضمام للموارد البشرية (HR)
                           </span>
                         )}
                       </div>
@@ -279,14 +400,14 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                   <div
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))',
                       gap: 10,
                       alignItems: 'end',
                     }}
                   >
                     <div>
                       <label className="form-label" style={{ fontSize: 11.5 }}>
-                        القسم الذي سينضم إليه
+                        القسم المعتمد
                       </label>
                       <select
                         className="form-select"
@@ -306,7 +427,7 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
 
                     <div>
                       <label className="form-label" style={{ fontSize: 11.5 }}>
-                        الدور والصلاحية بالقسم
+                        الدور الوظيفي والصلاحية
                       </label>
                       <select
                         className="form-select"
@@ -338,20 +459,35 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                       />
                     </div>
 
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      style={{ background: '#059669', borderColor: '#059669', height: 39 }}
-                      disabled={claimingId === pu.id}
-                      onClick={() => handleClaim(pu)}
-                    >
-                      <UserPlus size={15} />
-                      {claimingId === pu.id
-                        ? 'جاري الضم...'
-                        : data.canManageAll
-                        ? 'ضمه للقسم الآن'
-                        : 'ضمه إلى قسمي الآن'}
-                    </button>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        style={{
+                          flex: 1,
+                          background: '#059669',
+                          borderColor: '#059669',
+                          height: 39,
+                        }}
+                        disabled={claimingId === pu.id}
+                        onClick={() => handleClaim(pu)}
+                      >
+                        <UserPlus size={15} />
+                        {claimingId === pu.id ? 'جاري التسكين...' : 'قبول وتسكين'}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="btn btn-danger-soft"
+                        style={{ height: 39, padding: '0 10px' }}
+                        title="رفض وحذف طلب التسجيل نهائياً"
+                        onClick={() =>
+                          setConfirmDelete({ mode: 'pending', target: pu })
+                        }
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -360,12 +496,12 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
         )}
       </div>
 
-      {/* Current Department Team Roster */}
+      {/* Current Company / Department Team Roster */}
       <div className="card-box">
         <h3 style={{ margin: '0 0 14px', fontSize: 16, fontWeight: 800, color: '#0b2545', display: 'flex', alignItems: 'center', gap: 8 }}>
           <Users size={18} color="#0a6fa8" />
           {data.canManageAll
-            ? `أعضاء الأقسام المعتمدون حالياً (${data.teamMembers.length})`
+            ? `سجل موظفي الشركة المعتمدين حالياً (${data.teamMembers.length})`
             : `فريق العمل الحالي في (${user.departmentName}) (${data.teamMembers.length})`}
         </h3>
 
@@ -374,10 +510,11 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
             <thead>
               <tr>
                 <th>اسم الموظف</th>
-                <th>وسيلة الدخول</th>
+                <th>اسم المستخدم</th>
                 <th>المسمى الوظيفي</th>
                 <th>الدور الوظيفي</th>
                 <th>القسم</th>
+                {data.canManageAll && <th>حذف عند ترك العمل</th>}
               </tr>
             </thead>
             <tbody>
@@ -392,7 +529,10 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                         {getInitials(m.full_name)}
                       </span>
                       <div>
-                        <div style={{ fontWeight: 800 }}>{m.full_name}</div>
+                        <div style={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 5 }}>
+                          {m.role_slug === 'chairman' && <Crown size={13} color="#d97706" />}
+                          {m.full_name}
+                        </div>
                         {m.email && (
                           <div style={{ fontSize: 11, color: '#64748b' }} dir="ltr">
                             {m.email}
@@ -401,20 +541,8 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                       </div>
                     </div>
                   </td>
-                  <td>
-                    {m.auth_provider === 'google' ? (
-                      <span className="badge" style={{ background: '#fee2e2', color: '#b91c1c' }}>
-                        Google
-                      </span>
-                    ) : m.auth_provider === 'email' ? (
-                      <span className="badge" style={{ background: '#dcfce7', color: '#166534' }}>
-                        بريد مؤكد ✓
-                      </span>
-                    ) : (
-                      <span className="badge" style={{ background: '#f1f5f9', color: '#334155' }}>
-                        حساب الشركة
-                      </span>
-                    )}
+                  <td dir="ltr" style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: 12 }}>
+                    @{m.username}
                   </td>
                   <td>{m.job_title || '—'}</td>
                   <td>
@@ -427,12 +555,233 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                       {m.department_name || 'الإدارة العليا (عام)'}
                     </span>
                   </td>
+                  {data.canManageAll && (
+                    <td>
+                      {m.can_caller_delete ? (
+                        <button
+                          type="button"
+                          className="btn btn-danger-soft btn-sm"
+                          onClick={() =>
+                            setConfirmDelete({ mode: 'member', target: m })
+                          }
+                        >
+                          <Trash2 size={13} />
+                          حذف نهائي
+                        </button>
+                      ) : (
+                        <span style={{ fontSize: 11.5, color: '#94a3b8' }}>—</span>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Direct HR Employee Registration Modal */}
+      {createOpen && (
+        <div className="modal-backdrop" onClick={() => setCreateOpen(false)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ fontWeight: 800, fontSize: 16 }}>
+                تسجيل وتسكين موظف جديد مباشرةً (HR)
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setCreateOpen(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <form onSubmit={handleDirectCreateEmployee}>
+              <div className="modal-body">
+                <div className="form-group">
+                  <label className="form-label">الاسم الكامل للموظف *</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="مثال: أ. سارة محمود"
+                    value={uForm.fullName}
+                    onChange={(e) => setUForm({ ...uForm, fullName: e.target.value })}
+                    required
+                  />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div className="form-group">
+                    <label className="form-label">اسم المستخدم للدخول (إنجليزي) *</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      dir="ltr"
+                      style={{ textAlign: 'left', fontWeight: 700 }}
+                      placeholder="sara.hr"
+                      value={uForm.username}
+                      onChange={(e) =>
+                        setUForm({
+                          ...uForm,
+                          username: e.target.value.replace(/\s+/g, '').toLowerCase(),
+                        })
+                      }
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">كلمة المرور *</label>
+                    <input
+                      type="password"
+                      className="form-input"
+                      dir="ltr"
+                      style={{ textAlign: 'left' }}
+                      placeholder="4+ أحرف أو أرقام"
+                      value={uForm.password}
+                      onChange={(e) => setUForm({ ...uForm, password: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div className="form-group">
+                    <label className="form-label">القسم التابع له *</label>
+                    <select
+                      className="form-select"
+                      value={uForm.departmentId}
+                      onChange={(e) => setUForm({ ...uForm, departmentId: e.target.value })}
+                      required
+                    >
+                      {data.assignableDepartments.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">الدور الوظيفي والصلاحية *</label>
+                    <select
+                      className="form-select"
+                      value={uForm.roleId}
+                      onChange={(e) => setUForm({ ...uForm, roleId: e.target.value })}
+                      required
+                    >
+                      {data.assignableRoles.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">المسمى الوظيفي</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="مثال: أخصائي موارد بشرية / محاسب"
+                    value={uForm.jobTitle}
+                    onChange={(e) => setUForm({ ...uForm, jobTitle: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">البريد الإلكتروني (اختياري)</label>
+                  <input
+                    type="email"
+                    className="form-input"
+                    dir="ltr"
+                    style={{ textAlign: 'left' }}
+                    placeholder="name@gmail.com"
+                    value={uForm.email}
+                    onChange={(e) => setUForm({ ...uForm, email: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setCreateOpen(false)}
+                >
+                  إلغاء
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={creating}>
+                  <UserPlus size={15} />
+                  {creating ? 'جاري التسجيل...' : 'إنشاء الحساب وتسكينه فوراً'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Delete / Reject Confirmation Modal */}
+      {confirmDelete && (
+        <div className="modal-backdrop" onClick={() => !deleting && setConfirmDelete(null)}>
+          <div className="modal-panel" style={{ maxWidth: 460 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ fontWeight: 900, fontSize: 16, color: '#b91c1c', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <AlertTriangle size={18} color="#dc2626" />
+                {confirmDelete.mode === 'pending'
+                  ? 'رفض وحذف طلب تسجيل موظف'
+                  : 'تأكيد الحذف النهائي لحساب الموظف'}
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setConfirmDelete(null)}
+                disabled={deleting}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <p style={{ margin: '0 0 10px', fontSize: 14, color: '#0f172a', lineHeight: 1.7 }}>
+                هل أنت متأكد من حذف حساب{' '}
+                <strong>{confirmDelete.target.full_name}</strong> (
+                <span dir="ltr" style={{ fontFamily: 'monospace' }}>
+                  @{confirmDelete.target.username}
+                </span>
+                ) نهائياً من النظام؟
+              </p>
+              <div
+                style={{
+                  background: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  borderRadius: 10,
+                  padding: '10px 12px',
+                  fontSize: 12.5,
+                  color: '#991b1b',
+                  lineHeight: 1.65,
+                }}
+              >
+                • سيتم مسح حساب الموظف وإلغاء دخوله فوراً من النظام.
+                <br />• جميع لوحات العمل والكروت والمهام الخاصة بالقسم ستظل محفوظة وآمنة بالكامل دون مسح أي مهام.
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setConfirmDelete(null)}
+                disabled={deleting}
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ background: '#dc2626', borderColor: '#dc2626' }}
+                onClick={handleConfirmDeleteAction}
+                disabled={deleting}
+              >
+                <Trash2 size={15} />
+                {deleting ? 'جاري الحذف...' : 'نعم، حذف نهائي من النظام'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

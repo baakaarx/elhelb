@@ -18,6 +18,7 @@ import {
   Copy,
   Mail,
   Send,
+  AlertTriangle,
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { COLOR_SWATCHES, formatSqliteDate, getInitials } from '../constants';
@@ -609,6 +610,10 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
   const [departments, setDepartments] = useState([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
+  const [deletingUser, setDeletingUser] = useState(null);
+  const [deletingBusy, setDeletingBusy] = useState(false);
+
+  const canAssignGlobalDept = (currentUser.permissions || []).includes('boards.view_all');
 
   const [uForm, setUForm] = useState({
     username: '',
@@ -699,6 +704,25 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
     }
   }
 
+  async function handleConfirmDeleteUser() {
+    if (!deletingUser) return;
+    setDeletingBusy(true);
+    try {
+      const res = await apiFetch(`/api/admin/users/${deletingUser.id}`, {
+        method: 'DELETE',
+      });
+      setDeletingUser(null);
+      setEditingUser(null);
+      await loadAll();
+      onRefreshMe();
+      showToast(res.message || 'تم حذف حساب الموظف نهائياً من النظام', 'success');
+    } catch (err) {
+      showToast(err.message || 'تعذر حذف حساب الموظف', 'error');
+    } finally {
+      setDeletingBusy(false);
+    }
+  }
+
   return (
     <div className="card-box">
       <div
@@ -784,7 +808,7 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                 <td>
                   {u.onboarding_status === 'pending' ? (
                     <span className="badge" style={{ background: '#fef3c7', color: '#92400e' }}>
-                      بانتظار ضم رئيس القسم
+                      بانتظار تسكين الـ HR
                       {u.preferred_department_name ? ` (${u.preferred_department_name})` : ''}
                     </span>
                   ) : (
@@ -810,20 +834,35 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                 </td>
                 <td>
                   {u.can_caller_edit ? (
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() =>
-                        setEditingUser({
-                          ...u,
-                          department_id: u.department_id || '',
-                          newPassword: '',
-                        })
-                      }
-                    >
-                      <Edit3 size={13} />
-                      تعديل الدور/القسم
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() =>
+                          setEditingUser({
+                            ...u,
+                            department_id:
+                              u.department_id ||
+                              (canAssignGlobalDept ? '' : departments[0]?.id || ''),
+                            newPassword: '',
+                          })
+                        }
+                      >
+                        <Edit3 size={13} />
+                        تعديل الدور/القسم
+                      </button>
+                      {u.can_caller_delete && (
+                        <button
+                          type="button"
+                          className="btn btn-danger-soft btn-sm"
+                          title="حذف حساب الموظف نهائياً من النظام (عند ترك العمل)"
+                          onClick={() => setDeletingUser(u)}
+                        >
+                          <Trash2 size={13} />
+                          حذف نهائي
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <span
                       className="badge"
@@ -933,7 +972,9 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                       value={uForm.departmentId}
                       onChange={(e) => setUForm({ ...uForm, departmentId: e.target.value })}
                     >
-                      <option value="">الإدارة العليا (بدون قسم مقيد)</option>
+                      {canAssignGlobalDept && (
+                        <option value="">الإدارة العليا (بدون قسم مقيد)</option>
+                      )}
                       {departments.map((d) => (
                         <option key={d.id} value={d.id}>
                           {d.name}
@@ -1048,7 +1089,9 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                         setEditingUser({ ...editingUser, department_id: e.target.value })
                       }
                     >
-                      <option value="">الإدارة العليا (عام)</option>
+                      {canAssignGlobalDept && (
+                        <option value="">الإدارة العليا (عام)</option>
+                      )}
                       {departments.map((d) => (
                         <option key={d.id} value={d.id}>
                           {d.name}
@@ -1083,19 +1126,99 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                   </label>
                 )}
               </div>
-              <div className="modal-footer">
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => setEditingUser(null)}
-                >
-                  إلغاء
-                </button>
-                <button type="submit" className="btn btn-primary">
-                  حفظ التغييرات
-                </button>
+              <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
+                <div>
+                  {editingUser.can_caller_delete && (
+                    <button
+                      type="button"
+                      className="btn btn-danger-soft"
+                      onClick={() => setDeletingUser(editingUser)}
+                    >
+                      <Trash2 size={14} />
+                      حذف الموظف نهائياً
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setEditingUser(null)}
+                  >
+                    إلغاء
+                  </button>
+                  <button type="submit" className="btn btn-primary">
+                    حفظ التغييرات
+                  </button>
+                </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Delete Employee Confirmation Modal */}
+      {deletingUser && (
+        <div className="modal-backdrop" onClick={() => !deletingBusy && setDeletingUser(null)}>
+          <div className="modal-panel" style={{ maxWidth: 460 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ fontWeight: 900, fontSize: 16, color: '#b91c1c', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <AlertTriangle size={18} color="#dc2626" />
+                تأكيد الحذف النهائي لحساب الموظف
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setDeletingUser(null)}
+                disabled={deletingBusy}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <p style={{ margin: '0 0 10px', fontSize: 14, color: '#0f172a', lineHeight: 1.7 }}>
+                هل أنت متأكد من حذف حساب{' '}
+                <strong>{deletingUser.full_name}</strong> (
+                <span dir="ltr" style={{ fontFamily: 'monospace' }}>
+                  @{deletingUser.username}
+                </span>
+                ) نهائياً من قاعدة البيانات؟
+              </p>
+              <div
+                style={{
+                  background: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  borderRadius: 10,
+                  padding: '10px 12px',
+                  fontSize: 12.5,
+                  color: '#991b1b',
+                  lineHeight: 1.65,
+                }}
+              >
+                • سيتم مسح حساب الموظف وإلغاء جلسته ومنعه من الدخول نهائياً (مخصص للموظفين الذين تركوا العمل).
+                <br />• جميع لوحات العمل والكروت والمهام الخاصة بالقسم ستبقى محفوظة وآمنة بالكامل.
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setDeletingUser(null)}
+                disabled={deletingBusy}
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ background: '#dc2626', borderColor: '#dc2626' }}
+                onClick={handleConfirmDeleteUser}
+                disabled={deletingBusy}
+              >
+                <Trash2 size={15} />
+                {deletingBusy ? 'جاري الحذف النهائي...' : 'نعم، حذف الموظف نهائياً'}
+              </button>
+            </div>
           </div>
         </div>
       )}

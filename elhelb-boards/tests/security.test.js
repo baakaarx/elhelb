@@ -72,9 +72,12 @@ async function main() {
     const chairmanRole = roleBySlug('chairman');
     const superAdminRole = roleBySlug('super_admin');
     const itAdminRole = roleBySlug('it_admin');
+    const hrMgrRole = roleBySlug('hr_manager');
     const deptMgrRole = roleBySlug('dept_manager');
     const staffRole = roleBySlug('staff');
     const viewerRole = roleBySlug('viewer');
+    assert.ok(hrMgrRole, 'Official HR Manager role (hr_manager) must be seeded in DB');
+    assert.equal(hrMgrRole.rank_level, 70);
 
     async function createUser(username, fullName, roleId, departmentId, email = null) {
       const res = await api('POST', '/api/admin/users', chairmanTok, {
@@ -246,8 +249,10 @@ async function main() {
     });
     assert.equal(moveAllowedAgain.status, 200, 'Restoring permission in DB must immediately allow request');
 
-    console.log('6️⃣ Testing Direct Employee Registration (No Email OTP) -> Pick Department -> Department Head Claim...');
+    console.log('6️⃣ Testing HR Self-Registration -> Admin Approves HR -> HR Onboards & Registers Employees Across All Departments...');
     const exportDept = deptBySlug('export');
+    const hrDept = deptBySlug('hr');
+    const regDept = deptBySlug('registration');
 
     // Facebook & email OTP endpoints must NOT exist (404)!
     const fbGone = await api('GET', '/api/auth/oauth/facebook/start', chairmanTok);
@@ -258,7 +263,47 @@ async function main() {
     });
     assert.equal(otpGone.status, 404, 'Email OTP route must be removed');
 
-    // New employee registers directly with fullName + username + password (zero email OTP needed!)
+    // Step A: HR Specialist self-registers -> picks HR Department -> Sovereign Admin approves as HR Manager!
+    const hrSignupRes = await api('POST', '/api/auth/register', null, {
+      fullName: 'أ. منى عبد العزيز (HR)',
+      username: 'mona.hr',
+      password: 'HrPass#2026',
+      email: 'mona.hr@gmail.com',
+    });
+    assert.equal(hrSignupRes.status, 201);
+    const hrTok = hrSignupRes.data.token;
+
+    const hrPickDept = await api('PATCH', '/api/onboarding/my-preference', hrTok, {
+      preferredDepartmentId: hrDept.id,
+      jobTitle: 'مسؤول الموارد البشرية والتعيينات',
+    });
+    assert.equal(hrPickDept.status, 200);
+
+    const hrMeBefore = await api('GET', '/api/auth/me', hrTok);
+    assert.equal(hrMeBefore.data.user.onboardingStatus, 'pending');
+
+    // Admin (Chairman) approves Mona into HR Department with official hr_manager role!
+    const approveHrRes = await api(
+      'POST',
+      `/api/onboarding/${hrMeBefore.data.user.id}/claim`,
+      chairmanTok,
+      {
+        departmentId: hrDept.id,
+        roleId: hrMgrRole.id,
+        jobTitle: 'مسؤول الموارد البشرية (HR)',
+      }
+    );
+    assert.equal(approveHrRes.status, 200);
+
+    // Verify HR strict board isolation: HR ONLY sees HR Department boards (NEVER Export/Sales/Media)!
+    const hrBoards = await api('GET', '/api/boards', hrTok);
+    assert.equal(hrBoards.status, 200);
+    assert.equal(hrBoards.data.length, 1, 'HR Manager must ONLY see HR Department board');
+    assert.equal(hrBoards.data[0].department_slug, 'hr');
+    const hrProbeExport = await api('GET', `/api/boards/${exportBoards.data[0].id}`, hrTok);
+    assert.equal(hrProbeExport.status, 403, 'HR Manager must NOT view Export operational boards');
+
+    // Step B: New Export employee registers directly -> picks Export -> HR accepts & assigns him!
     const regRes = await api('POST', '/api/auth/register', null, {
       fullName: 'محمود سامي الشناوي',
       username: 'mahmoud.export',
@@ -277,7 +322,6 @@ async function main() {
     });
     assert.equal(dupReg.status, 409);
 
-    // Check /me shows hasCustomCredentials: true & departmentConfirmed: false (lands directly on Department Selection!)
     const mePending = await api('GET', '/api/auth/me', newGoogleTok);
     assert.equal(mePending.status, 200);
     assert.equal(mePending.data.user.onboardingStatus, 'pending');
@@ -285,11 +329,9 @@ async function main() {
     assert.equal(mePending.data.user.departmentConfirmed, false);
     assert.equal(mePending.data.user.permissions.length, 0);
 
-    // Verify Mahmoud can ALSO log in directly using his username & password!
     const directLoginTok = await login('mahmoud.export', 'myPassword99');
     assert.ok(directLoginTok);
 
-    // Step 2: Employee chooses their department (Export) -> notifies Department Head!
     const pickDept = await api('PATCH', '/api/onboarding/my-preference', newGoogleTok, {
       preferredDepartmentId: exportDept.id,
       jobTitle: 'منسق شحن بحري',
@@ -297,48 +339,47 @@ async function main() {
     assert.equal(pickDept.status, 200);
     assert.equal(pickDept.data.departmentConfirmed, true);
 
-    // Pending employee sees ZERO company boards until claimed by Department Head!
+    // Pending employee sees ZERO company boards until approved by HR!
     const pendingBoards = await api('GET', '/api/boards', newGoogleTok);
     assert.equal(pendingBoards.status, 200);
-    assert.equal(pendingBoards.data.length, 0, 'Pending social user must see 0 boards before onboarding');
+    assert.equal(pendingBoards.data.length, 0, 'Pending employee must see 0 boards before HR onboarding');
 
-    // Pending employee cannot submit permission elevation requests before onboarding
     const pendingReqAttempt = await api('POST', '/api/requests', newGoogleTok, {
       permissionKey: 'boards.view_department',
       targetDepartmentId: exportDept.id,
-      reason: 'محاولة قبل موافقة رئيس القسم',
+      reason: 'محاولة قبل موافقة الـ HR',
     });
     assert.equal(pendingReqAttempt.status, 403);
 
-    // Sales Manager tries to claim employee into Export department -> BLOCKED!
-    const crossDeptClaim = await api(
+    // Regular Department Managers CANNOT claim pending signups (Onboarding is governed by HR / Admin / IT)!
+    const deptMgrClaimAttempt = await api(
       'POST',
       `/api/onboarding/${mePending.data.user.id}/claim`,
-      salesMgrTok,
+      exportMgrTok,
       {
         departmentId: exportDept.id,
         roleId: staffRole.id,
       }
     );
-    assert.equal(crossDeptClaim.status, 403, 'Department Head must only claim into their own department');
+    assert.equal(deptMgrClaimAttempt.status, 403, 'Onboarding is handled by HR / Admin, not regular Dept Head');
 
-    // Export Manager tries to elevate employee to Chairman -> BLOCKED!
+    // HR tries to elevate employee to Chairman or IT Admin -> BLOCKED!
     const illegalRankClaim = await api(
       'POST',
       `/api/onboarding/${mePending.data.user.id}/claim`,
-      exportMgrTok,
+      hrTok,
       {
         departmentId: exportDept.id,
         roleId: chairmanRole.id,
       }
     );
-    assert.equal(illegalRankClaim.status, 403, 'Department Head cannot grant higher/equal rank role');
+    assert.equal(illegalRankClaim.status, 403, 'HR cannot grant Chairman or equal/higher rank role');
 
-    // Export Manager claims Mahmoud into Export Department as Staff!
+    // HR Manager approves & assigns Mahmoud into Export Department!
     const validClaim = await api(
       'POST',
       `/api/onboarding/${mePending.data.user.id}/claim`,
-      exportMgrTok,
+      hrTok,
       {
         departmentId: exportDept.id,
         roleId: staffRole.id,
@@ -347,7 +388,33 @@ async function main() {
     );
     assert.equal(validClaim.status, 200);
 
-    // Verify Gmail notification settings & email_logs recorded both events cleanly!
+    // Step C: HR ALSO directly registers a new employee account (sara.reg) in Product Registration!
+    const hrDirectCreate = await api('POST', '/api/admin/users', hrTok, {
+      username: 'sara.reg',
+      password: 'Sara#Pass26',
+      fullName: 'م. سارة فؤاد',
+      jobTitle: 'أخصائية تسجيل مبيدات',
+      roleId: staffRole.id,
+      departmentId: regDept.id,
+    });
+    assert.equal(hrDirectCreate.status, 201, 'HR must be able to directly register new employees');
+    const saraTok = await login('sara.reg', 'Sara#Pass26');
+    const saraBoards = await api('GET', '/api/boards', saraTok);
+    assert.equal(saraBoards.data.length, 1);
+    assert.equal(saraBoards.data[0].department_slug, 'registration');
+
+    // Step D: HR rejects & permanently deletes a bogus pending registration!
+    const bogusSignup = await api('POST', '/api/auth/register', null, {
+      fullName: 'حساب بالخطأ',
+      username: 'mistake.signup',
+      password: 'Password123',
+    });
+    assert.equal(bogusSignup.status, 201);
+    const bogusMe = await api('GET', '/api/auth/me', bogusSignup.data.token);
+    const rejectBogus = await api('DELETE', `/api/onboarding/${bogusMe.data.user.id}`, hrTok);
+    assert.equal(rejectBogus.status, 200, 'HR must be able to reject & delete pending signup');
+
+    // Verify Gmail notification settings & email_logs recorded events cleanly!
     const gmailSettingsGet = await api('GET', '/api/admin/gmail-settings', chairmanTok);
     assert.equal(gmailSettingsGet.status, 200);
     assert.ok(gmailSettingsGet.data.emailLogs.length >= 2, 'Email logs should record onboarding & approval events');
@@ -455,7 +522,57 @@ async function main() {
     const viewAfterRevoke = await api('GET', `/api/boards/${mediaBoard.id}`, salesEmpTok);
     assert.equal(viewAfterRevoke.status, 403, 'Revoked grant must immediately cut off access');
 
-    console.log('\n✅ ALL 8 PRODUCTION v4 TESTS (SINGLE ADMIN ACCOUNT, ZERO DEMO ACCOUNTS, RBAC, ONBOARDING & GMAIL) PASSED 100%!');
+    console.log('9️⃣ Testing Permanent Employee Deletion (Offboarding Departed Staff Safely via HR / Admin)...');
+    const mediaEmpMe = await api('GET', '/api/auth/me', mediaEmpTok);
+    const mediaEmpId = mediaEmpMe.data.user.id;
+
+    // Add a comment on createdMediaCard by media_emp before they leave the company
+    const commentBeforeLeave = await api(
+      'POST',
+      `/api/cards/${createdMediaCard.data.id}/comments`,
+      mediaEmpTok,
+      { body: 'تم تسليم ملفات الكتالوج الأولية قبل مغادرة الشركة' }
+    );
+    assert.equal(commentBeforeLeave.status, 201);
+
+    // Regular employee CANNOT delete users
+    const staffTryDelete = await api('DELETE', `/api/admin/users/${mediaEmpId}`, salesEmpTok);
+    assert.equal(staffTryDelete.status, 403);
+
+    // HR CANNOT delete Sovereign Admin (Chairman) or higher-rank IT Admin!
+    const hrTryDeleteAdmin = await api('DELETE', `/api/admin/users/${adminAccount.id}`, hrTok);
+    assert.equal(hrTryDeleteAdmin.status, 403);
+    const itMe = await api('GET', '/api/auth/me', itMgrTok);
+    const hrTryDeleteIt = await api('DELETE', `/api/admin/users/${itMe.data.user.id}`, hrTok);
+    assert.equal(hrTryDeleteIt.status, 403);
+
+    // Admin cannot delete their own logged-in account
+    const adminSelfDelete = await api('DELETE', `/api/admin/users/${adminAccount.id}`, chairmanTok);
+    assert.equal(adminSelfDelete.status, 400);
+
+    // HR permanently deletes departed employee media_emp!
+    const hrDeleteMediaEmp = await api('DELETE', `/api/admin/users/${mediaEmpId}`, hrTok);
+    assert.equal(hrDeleteMediaEmp.status, 200);
+
+    // Deleted employee's existing token is immediately rejected (401) & cannot log in!
+    const deletedMeAttempt = await api('GET', '/api/auth/me', mediaEmpTok);
+    assert.equal(deletedMeAttempt.status, 401);
+    const deletedLoginAttempt = await api('POST', '/api/auth/login', null, {
+      username: 'media_emp',
+      password: 'TestPass#2026',
+    });
+    assert.equal(deletedLoginAttempt.status, 401);
+
+    // Company data integrity: Media board AND the card created by media_emp remain 100% intact!
+    const mediaBoardAfterDelete = await api('GET', `/api/boards/${mediaBoard.id}`, chairmanTok);
+    assert.equal(mediaBoardAfterDelete.status, 200);
+    const preservedCards = mediaBoardAfterDelete.data.cards || [];
+    assert.ok(
+      preservedCards.some((c) => c.id === createdMediaCard.data.id),
+      'Cards created by a deleted employee must remain intact on company boards'
+    );
+
+    console.log('\n✅ ALL 9 PRODUCTION v8 TESTS (SINGLE ADMIN, HR ONBOARDING & REGISTRATION, EMPLOYEE DELETION & RBAC) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}
