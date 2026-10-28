@@ -326,14 +326,7 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
                 />
               </div>
 
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: 8,
-                  marginBottom: 12,
-                }}
-              >
+              <div className="form-grid-2" style={{ marginBottom: 12 }}>
                 <div>
                   <label className="form-label">كلمة المرور *</label>
                   <div style={{ position: 'relative' }}>
@@ -535,15 +528,7 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
             >
               “A brand that brings smiles at harvest time…”
             </div>
-            <h2
-              style={{
-                margin: '0 0 14px',
-                fontSize: 34,
-                fontWeight: 900,
-                lineHeight: 1.32,
-                textShadow: '0 4px 20px rgba(0,0,0,0.45)',
-              }}
-            >
+            <h2 className="farm-hero-heading">
               علامة تجارية ترسم الابتسامة وقت الحصاد
             </h2>
             <p

@@ -11,7 +11,10 @@
     "test": "node --no-warnings tests/security.test.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": "22.x"
+  },
+  "allowScripts": {
+    "esbuild": true
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

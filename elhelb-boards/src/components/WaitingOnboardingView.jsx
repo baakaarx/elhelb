@@ -162,13 +162,11 @@ export default function WaitingOnboardingView({
   return (
     <div className="app-shell">
       <header className="top-navbar">
-        <div className="nav-right">
-          <div className="nav-brand" style={{ cursor: 'default' }}>
-            <img src="/logo.gif" alt="ELHELB GROUP" />
-            <div>
-              <div className="nav-brand-title">ELHELB GROUP</div>
-              <div className="nav-brand-sub">إعداد حساب الموظف وتحديد القسم</div>
-            </div>
+        <div className="nav-brand" style={{ cursor: 'default' }}>
+          <img src="/logo.gif" alt="ELHELB GROUP" />
+          <div>
+            <div className="nav-brand-title">ELHELB GROUP</div>
+            <div className="nav-brand-sub">إعداد حساب الموظف وتحديد القسم</div>
           </div>
         </div>
 
@@ -177,7 +175,7 @@ export default function WaitingOnboardingView({
             <div className="avatar-circle" style={{ background: user.avatarColor }}>
               {getInitials(user.fullName)}
             </div>
-            <div style={{ lineHeight: 1.25 }}>
+            <div className="user-pill-meta" style={{ lineHeight: 1.25 }}>
               <div style={{ fontSize: 12.5, fontWeight: 800 }}>{user.fullName}</div>
               <div style={{ fontSize: 10.5, color: '#fde68a', fontWeight: 700 }}>
                 {providerLabel}
@@ -187,21 +185,14 @@ export default function WaitingOnboardingView({
 
           <button type="button" className="icon-btn-dark" onClick={onLogout}>
             <LogOut size={15} />
-            <span>تسجيل خروج</span>
+            <span className="cta-label-text">تسجيل خروج</span>
           </button>
         </div>
       </header>
 
-      <div className="page-container" style={{ maxWidth: 850, marginTop: 22 }}>
+      <div className="page-container" style={{ maxWidth: 850, marginTop: 14 }}>
         {/* 3-Step Visual Stepper */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
-            gap: 10,
-            marginBottom: 20,
-          }}
-        >
+        <div className="onboarding-stepper">
           {[
             { num: 1, title: '1. إنشاء اسم وباسورد', done: user.hasCustomCredentials && activeStep > 1 },
             { num: 2, title: '2. تحديد القسم بالشركة', done: user.departmentConfirmed && activeStep > 2 },
@@ -263,7 +254,7 @@ export default function WaitingOnboardingView({
             STEP 1: CREATE USERNAME & PASSWORD PAGE
            ============================================================ */}
         {activeStep === 1 && (
-          <div className="card-box" style={{ padding: 28, borderTop: '4px solid #0a6fa8' }}>
+          <div className="card-box onboarding-card" style={{ borderTop: '4px solid #0a6fa8' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18 }}>
               <div
                 style={{
@@ -423,7 +414,7 @@ export default function WaitingOnboardingView({
             STEP 2: CHOOSE YOUR DEPARTMENT PAGE
            ============================================================ */}
         {activeStep === 2 && (
-          <div className="card-box" style={{ padding: 28, borderTop: '4px solid #059669' }}>
+          <div className="card-box onboarding-card" style={{ borderTop: '4px solid #059669' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18 }}>
               <div
                 style={{
@@ -567,7 +558,7 @@ export default function WaitingOnboardingView({
             STEP 3: WAITING FOR DEPARTMENT HEAD APPROVAL
            ============================================================ */}
         {activeStep === 3 && (
-          <div className="card-box" style={{ padding: 28, borderTop: '4px solid #d4a90a' }}>
+          <div className="card-box onboarding-card" style={{ borderTop: '4px solid #d4a90a' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
               <div
                 style={{
@@ -586,7 +577,7 @@ export default function WaitingOnboardingView({
                 <Clock size={28} />
               </div>
 
-              <div style={{ flex: 1, minWidth: 250 }}>
+              <div style={{ flex: 1, minWidth: 'min(100%, 240px)' }}>
                 <h2 style={{ margin: '0 0 6px', fontSize: 21, fontWeight: 900, color: '#0b2545' }}>
                   تم إرسال طلبك بنجاح يا {user.fullName}!
                 </h2>

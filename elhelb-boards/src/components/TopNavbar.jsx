@@ -7,11 +7,11 @@ import {
   Bell,
   Search,
   LogOut,
-  Users,
   UserPlus,
   ChevronDown,
   CheckCheck,
   Crown,
+  X,
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { formatSqliteDate, getInitials } from '../constants';
@@ -27,11 +27,13 @@ export default function TopNavbar({
 }) {
   const [searchQ, setSearchQ] = useState('');
   const [searchResults, setSearchResults] = useState(null);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
 
   const searchRef = useRef(null);
+  const mobileSearchRef = useRef(null);
   const notifRef = useRef(null);
   const accRef = useRef(null);
 
@@ -50,7 +52,10 @@ export default function TopNavbar({
 
   useEffect(() => {
     function onDocClick(e) {
-      if (searchRef.current && !searchRef.current.contains(e.target)) {
+      const insideDesktopSearch = searchRef.current && searchRef.current.contains(e.target);
+      const insideMobileSearch =
+        mobileSearchRef.current && mobileSearchRef.current.contains(e.target);
+      if (!insideDesktopSearch && !insideMobileSearch) {
         setSearchResults(null);
       }
       if (notifRef.current && !notifRef.current.contains(e.target)) {
@@ -80,6 +85,7 @@ export default function TopNavbar({
 
   async function toggleNotifications() {
     const next = !notifOpen;
+    setAccountMenuOpen(false);
     setNotifOpen(next);
     if (next) {
       try {
@@ -98,93 +104,155 @@ export default function TopNavbar({
   }
 
   function openAccountMenu() {
+    setNotifOpen(false);
     setAccountMenuOpen((prev) => !prev);
+  }
+
+  function renderSearchDropdown() {
+    if (!searchResults) return null;
+    return (
+      <div className="search-dropdown">
+        <div style={{ fontSize: 11.5, fontWeight: 800, color: '#64748b', marginBottom: 6 }}>
+          نتائج البحث المصرح لك بها فقط:
+        </div>
+        {searchResults.boards.length === 0 && searchResults.cards.length === 0 ? (
+          <div style={{ padding: '12px 6px', fontSize: 13, color: '#64748b', textAlign: 'center' }}>
+            لا توجد نتائج مطابقة ضمن صلاحياتك
+          </div>
+        ) : (
+          <>
+            {searchResults.boards.map((b) => (
+              <div
+                key={`b-${b.id}`}
+                onClick={() => {
+                  setSearchResults(null);
+                  setSearchQ('');
+                  setMobileSearchOpen(false);
+                  onOpenBoard(b.id);
+                }}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  borderBottom: '1px solid #f1f5f9',
+                }}
+              >
+                <div style={{ fontWeight: 800, fontSize: 13 }}>{b.title}</div>
+                <div style={{ fontSize: 11.5, color: '#64748b' }}>
+                  لوحة عمل — {b.department_name}
+                </div>
+              </div>
+            ))}
+            {searchResults.cards.map((c) => (
+              <div
+                key={`c-${c.id}`}
+                onClick={() => {
+                  setSearchResults(null);
+                  setSearchQ('');
+                  setMobileSearchOpen(false);
+                  onOpenBoard(c.board_id, c.id);
+                }}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  borderBottom: '1px solid #f1f5f9',
+                }}
+              >
+                <div style={{ fontWeight: 700, fontSize: 13 }}>{c.title}</div>
+                <div style={{ fontSize: 11.5, color: '#64748b' }}>
+                  كارت في ({c.list_title}) — {c.board_title}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+    );
   }
 
   return (
     <header className="top-navbar">
-      <div className="nav-right">
-        <div
-          className="nav-brand"
-          onClick={() => onSelectTab('boards')}
-          title="العودة إلى لوحات العمل"
-        >
-          <img src="/logo.gif" alt="ELHELB GROUP" />
-          <div>
-            <div className="nav-brand-title">ELHELB GROUP</div>
-            <div className="nav-brand-sub">إدارة المهام والقطاعات</div>
-          </div>
+      <div
+        className="nav-brand"
+        onClick={() => onSelectTab('boards')}
+        title="العودة إلى لوحات العمل"
+      >
+        <img src="/logo.gif" alt="ELHELB GROUP" />
+        <div>
+          <div className="nav-brand-title">ELHELB GROUP</div>
+          <div className="nav-brand-sub">إدارة المهام والقطاعات</div>
         </div>
+      </div>
 
-        <nav className="nav-tabs">
+      <nav className="nav-tabs">
+        <button
+          type="button"
+          className={`nav-tab ${activeTab === 'boards' ? 'active' : ''}`}
+          onClick={() => onSelectTab('boards')}
+        >
+          <LayoutGrid size={15} />
+          لوحات العمل
+        </button>
+
+        {canOnboardMembers && (
           <button
             type="button"
-            className={`nav-tab ${activeTab === 'boards' ? 'active' : ''}`}
-            onClick={() => onSelectTab('boards')}
+            className={`nav-tab ${activeTab === 'onboarding' ? 'active' : ''}`}
+            onClick={() => onSelectTab('onboarding')}
           >
-            <LayoutGrid size={15} />
-            لوحات العمل
-          </button>
-
-          {canOnboardMembers && (
-            <button
-              type="button"
-              className={`nav-tab ${activeTab === 'onboarding' ? 'active' : ''}`}
-              onClick={() => onSelectTab('onboarding')}
-            >
-              <UserPlus size={15} />
-              تسكين وقبول الموظفين (HR)
-              {user.pendingOnboardingCount > 0 && (
-                <span className="nav-badge" title="موظفون جدد بانتظار التسكين">
-                  {user.pendingOnboardingCount}
-                </span>
-              )}
-            </button>
-          )}
-
-          <button
-            type="button"
-            className={`nav-tab ${activeTab === 'my-requests' ? 'active' : ''}`}
-            onClick={() => onSelectTab('my-requests')}
-          >
-            <KeyRound size={15} />
-            طلباتي وتصاريحي
-            {user.activeGrants && user.activeGrants.length > 0 && (
-              <span className="nav-badge gold" title="تصاريح مؤقتة نشطة">
-                {user.activeGrants.length}
+            <UserPlus size={15} />
+            تسكين وقبول الموظفين (HR)
+            {user.pendingOnboardingCount > 0 && (
+              <span className="nav-badge" title="موظفون جدد بانتظار التسكين">
+                {user.pendingOnboardingCount}
               </span>
             )}
           </button>
+        )}
 
-          {canReviewRequests && (
-            <button
-              type="button"
-              className={`nav-tab ${activeTab === 'requests' ? 'active' : ''}`}
-              onClick={() => onSelectTab('requests')}
-            >
-              <Inbox size={15} />
-              طلبات الصلاحيات
-              {user.reviewableRequestsCount > 0 && (
-                <span className="nav-badge">{user.reviewableRequestsCount}</span>
-              )}
-            </button>
+        <button
+          type="button"
+          className={`nav-tab ${activeTab === 'my-requests' ? 'active' : ''}`}
+          onClick={() => onSelectTab('my-requests')}
+        >
+          <KeyRound size={15} />
+          طلباتي وتصاريحي
+          {user.activeGrants && user.activeGrants.length > 0 && (
+            <span className="nav-badge gold" title="تصاريح مؤقتة نشطة">
+              {user.activeGrants.length}
+            </span>
           )}
+        </button>
 
-          {canAccessAdmin && (
-            <button
-              type="button"
-              className={`nav-tab ${activeTab === 'admin' ? 'active' : ''}`}
-              onClick={() => onSelectTab('admin')}
-            >
-              <Shield size={15} />
-              {permSet.has('roles.manage') ? 'إدارة الصلاحيات والنظام' : 'إدارة الموظفين والحسابات'}
-            </button>
-          )}
-        </nav>
-      </div>
+        {canReviewRequests && (
+          <button
+            type="button"
+            className={`nav-tab ${activeTab === 'requests' ? 'active' : ''}`}
+            onClick={() => onSelectTab('requests')}
+          >
+            <Inbox size={15} />
+            طلبات الصلاحيات
+            {user.reviewableRequestsCount > 0 && (
+              <span className="nav-badge">{user.reviewableRequestsCount}</span>
+            )}
+          </button>
+        )}
+
+        {canAccessAdmin && (
+          <button
+            type="button"
+            className={`nav-tab ${activeTab === 'admin' ? 'active' : ''}`}
+            onClick={() => onSelectTab('admin')}
+          >
+            <Shield size={15} />
+            {permSet.has('roles.manage') ? 'إدارة الصلاحيات والنظام' : 'إدارة الموظفين والحسابات'}
+          </button>
+        )}
+      </nav>
 
       <div className="nav-left">
-        {/* Global Authorized Search */}
+        {/* Desktop Global Authorized Search */}
         <div className="nav-search-wrap" ref={searchRef}>
           <Search
             size={14}
@@ -198,62 +266,22 @@ export default function TopNavbar({
             value={searchQ}
             onChange={(e) => setSearchQ(e.target.value)}
           />
-          {searchResults && (
-            <div className="search-dropdown">
-              <div style={{ fontSize: 11.5, fontWeight: 800, color: '#64748b', marginBottom: 6 }}>
-                نتائج البحث المصرح لك بها فقط:
-              </div>
-              {searchResults.boards.length === 0 && searchResults.cards.length === 0 ? (
-                <div style={{ padding: '12px 6px', fontSize: 13, color: '#64748b', textAlign: 'center' }}>
-                  لا توجد نتائج مطابقة ضمن صلاحياتك
-                </div>
-              ) : (
-                <>
-                  {searchResults.boards.map((b) => (
-                    <div
-                      key={`b-${b.id}`}
-                      onClick={() => {
-                        setSearchResults(null);
-                        setSearchQ('');
-                        onOpenBoard(b.id);
-                      }}
-                      style={{
-                        padding: '8px 10px',
-                        borderRadius: 8,
-                        cursor: 'pointer',
-                        borderBottom: '1px solid #f1f5f9',
-                      }}
-                    >
-                      <div style={{ fontWeight: 800, fontSize: 13 }}>{b.title}</div>
-                      <div style={{ fontSize: 11.5, color: '#64748b' }}>لوحة عمل — {b.department_name}</div>
-                    </div>
-                  ))}
-                  {searchResults.cards.map((c) => (
-                    <div
-                      key={`c-${c.id}`}
-                      onClick={() => {
-                        setSearchResults(null);
-                        setSearchQ('');
-                        onOpenBoard(c.board_id, c.id);
-                      }}
-                      style={{
-                        padding: '8px 10px',
-                        borderRadius: 8,
-                        cursor: 'pointer',
-                        borderBottom: '1px solid #f1f5f9',
-                      }}
-                    >
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>{c.title}</div>
-                      <div style={{ fontSize: 11.5, color: '#64748b' }}>
-                        كارت في ({c.list_title}) — {c.board_title}
-                      </div>
-                    </div>
-                  ))}
-                </>
-              )}
-            </div>
-          )}
+          {!mobileSearchOpen && renderSearchDropdown()}
         </div>
+
+        {/* Mobile Search Toggle Button */}
+        <button
+          type="button"
+          className="icon-btn-dark mobile-search-btn"
+          onClick={() => {
+            setMobileSearchOpen((s) => !s);
+            setNotifOpen(false);
+            setAccountMenuOpen(false);
+          }}
+          title="بحث في اللوحات والمهام"
+        >
+          {mobileSearchOpen ? <X size={15} /> : <Search size={15} />}
+        </button>
 
         {/* Request Elevation Button (hidden for top global executives who already hold all permissions) */}
         {!permSet.has('boards.view_all') && (
@@ -264,7 +292,7 @@ export default function TopNavbar({
             title="طلب صلاحية إضافية أو وصول مؤقت من المدير"
           >
             <KeyRound size={14} />
-            <span>طلب صلاحية</span>
+            <span className="cta-label-text">طلب صلاحية</span>
           </button>
         )}
 
@@ -285,7 +313,7 @@ export default function TopNavbar({
           </button>
 
           {notifOpen && (
-            <div className="popover-menu" style={{ width: 350 }}>
+            <div className="popover-menu">
               <div
                 style={{
                   display: 'flex',
@@ -309,7 +337,15 @@ export default function TopNavbar({
                 )}
               </div>
 
-              <div style={{ maxHeight: 330, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div
+                style={{
+                  maxHeight: 330,
+                  overflowY: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
                 {notifications.length === 0 ? (
                   <div style={{ padding: 18, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
                     لا توجد إشعارات حتى الآن
@@ -331,8 +367,12 @@ export default function TopNavbar({
                         cursor: n.link_board_id || n.link_tab ? 'pointer' : 'default',
                       }}
                     >
-                      <div style={{ fontWeight: 800, fontSize: 12.5, color: '#0f172a' }}>{n.title}</div>
-                      <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>{n.message}</div>
+                      <div style={{ fontWeight: 800, fontSize: 12.5, color: '#0f172a' }}>
+                        {n.title}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>
+                        {n.message}
+                      </div>
                       <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
                         {formatSqliteDate(n.created_at)}
                       </div>
@@ -344,22 +384,33 @@ export default function TopNavbar({
           )}
         </div>
 
-        {/* User Profile & Fast Account Switcher */}
+        {/* User Profile Pill */}
         <div style={{ position: 'relative' }} ref={accRef}>
           <div
             className="user-pill"
             onClick={openAccountMenu}
             style={
               isChairman
-                ? { border: '1px solid rgba(251, 191, 36, 0.65)', background: 'rgba(180, 83, 9, 0.28)' }
+                ? {
+                    border: '1px solid rgba(251, 191, 36, 0.65)',
+                    background: 'rgba(180, 83, 9, 0.28)',
+                  }
                 : undefined
             }
           >
             <div className="avatar-circle" style={{ background: user.avatarColor }}>
               {getInitials(user.fullName)}
             </div>
-            <div style={{ lineHeight: 1.25 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <div className="user-pill-meta" style={{ lineHeight: 1.25 }}>
+              <div
+                style={{
+                  fontSize: 12.5,
+                  fontWeight: 800,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+              >
                 {isChairman && <Crown size={13} color="#fbbf24" />}
                 {user.fullName}
               </div>
@@ -371,7 +422,7 @@ export default function TopNavbar({
           </div>
 
           {accountMenuOpen && (
-            <div className="popover-menu" style={{ width: 350 }}>
+            <div className="popover-menu">
               <div
                 style={{
                   padding: '10px 12px',
@@ -381,7 +432,15 @@ export default function TopNavbar({
                   marginBottom: 10,
                 }}
               >
-                <div style={{ fontWeight: 800, fontSize: 14, display: 'flex', alignItems: 'center', gap: 5 }}>
+                <div
+                  style={{
+                    fontWeight: 800,
+                    fontSize: 14,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 5,
+                  }}
+                >
                   {isChairman && <Crown size={15} color="#d97706" />}
                   {user.fullName}
                 </div>
@@ -423,6 +482,29 @@ export default function TopNavbar({
           )}
         </div>
       </div>
+
+      {/* Expandable Mobile Search Bar */}
+      {mobileSearchOpen && (
+        <div className="mobile-search-drawer" ref={mobileSearchRef}>
+          <div style={{ position: 'relative' }}>
+            <Search
+              size={15}
+              color="#94a3b8"
+              style={{ position: 'absolute', right: 11, top: '50%', transform: 'translateY(-50%)' }}
+            />
+            <input
+              type="text"
+              className="nav-search-input"
+              style={{ padding: '8px 34px 8px 12px' }}
+              autoFocus
+              placeholder="ابحث في لوحاتك ومهامك..."
+              value={searchQ}
+              onChange={(e) => setSearchQ(e.target.value)}
+            />
+          </div>
+          {renderSearchDropdown()}
+        </div>
+      )}
     </header>
   );
 }

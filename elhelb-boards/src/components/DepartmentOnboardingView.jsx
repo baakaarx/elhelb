@@ -317,7 +317,7 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                     border: isHrSignup ? '2px solid #d97706' : '1px solid #e2e8f0',
                     background: isHrSignup ? '#fffbeb' : '#ffffff',
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))',
                     gap: 16,
                     alignItems: 'center',
                   }}
@@ -609,7 +609,7 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                     required
                   />
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div className="form-grid-2">
                   <div className="form-group">
                     <label className="form-label">اسم المستخدم للدخول (إنجليزي) *</label>
                     <input
@@ -642,7 +642,7 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                     />
                   </div>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div className="form-grid-2">
                   <div className="form-group">
                     <label className="form-label">القسم التابع له *</label>
                     <select
