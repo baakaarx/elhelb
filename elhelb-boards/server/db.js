@@ -1,0 +1,283 @@
+const fs = require('fs');
+const path = require('path');
+const { DatabaseSync } = require('node:sqlite');
+
+const defaultDataDir = path.join(__dirname, '..', 'data');
+if (!fs.existsSync(defaultDataDir)) {
+  fs.mkdirSync(defaultDataDir, { recursive: true });
+}
+
+const DB_PATH = process.env.DB_PATH || path.join(defaultDataDir, 'elhelb-boards.db');
+const db = new DatabaseSync(DB_PATH);
+
+db.exec(`
+  PRAGMA journal_mode = WAL;
+  PRAGMA foreign_keys = ON;
+  PRAGMA busy_timeout = 5000;
+`);
+
+function normalizeParam(val) {
+  if (val === undefined) return null;
+  if (typeof val === 'boolean') return val ? 1 : 0;
+  return val;
+}
+
+function get(sql, params = []) {
+  const row = db.prepare(sql).get(...params.map(normalizeParam));
+  return row ? { ...row } : null;
+}
+
+function all(sql, params = []) {
+  const rows = db.prepare(sql).all(...params.map(normalizeParam));
+  return rows.map((r) => ({ ...r }));
+}
+
+function run(sql, params = []) {
+  const res = db.prepare(sql).run(...params.map(normalizeParam));
+  return {
+    lastInsertRowid: Number(res.lastInsertRowid),
+    changes: Number(res.changes),
+  };
+}
+
+let txDepth = 0;
+function transaction(fn) {
+  const sp = `sp_${txDepth}`;
+  if (txDepth === 0) {
+    db.exec('BEGIN IMMEDIATE');
+  } else {
+    db.exec(`SAVEPOINT ${sp}`);
+  }
+  txDepth += 1;
+  try {
+    const result = fn();
+    txDepth -= 1;
+    if (txDepth === 0) {
+      db.exec('COMMIT');
+    } else {
+      db.exec(`RELEASE SAVEPOINT ${sp}`);
+    }
+    return result;
+  } catch (err) {
+    txDepth -= 1;
+    if (txDepth === 0) {
+      try { db.exec('ROLLBACK'); } catch (_) {}
+    } else {
+      try { db.exec(`ROLLBACK TO SAVEPOINT ${sp}`); db.exec(`RELEASE SAVEPOINT ${sp}`); } catch (_) {}
+    }
+    throw err;
+  }
+}
+
+function initSchema() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS departments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT NOT NULL DEFAULT '',
+      color TEXT NOT NULL DEFAULT '#0a6fa8',
+      icon TEXT NOT NULL DEFAULT 'briefcase',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS permissions (
+      key TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      category TEXT NOT NULL,
+      category_label TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS roles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT NOT NULL DEFAULT '',
+      color TEXT NOT NULL DEFAULT '#0a6fa8',
+      is_protected INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS role_permissions (
+      role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+      permission_key TEXT NOT NULL REFERENCES permissions(key) ON DELETE CASCADE,
+      PRIMARY KEY (role_id, permission_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      full_name TEXT NOT NULL,
+      job_title TEXT NOT NULL DEFAULT '',
+      avatar_color TEXT NOT NULL DEFAULT '#0a6fa8',
+      role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE RESTRICT,
+      department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      token_version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS boards (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE RESTRICT,
+      background TEXT NOT NULL DEFAULT 'ocean',
+      is_archived INTEGER NOT NULL DEFAULT 0,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS board_stars (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+      PRIMARY KEY (user_id, board_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS board_labels (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      color TEXT NOT NULL DEFAULT '#0a6fa8'
+    );
+
+    CREATE TABLE IF NOT EXISTS lists (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      color TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS cards (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+      list_id INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      priority TEXT NOT NULL DEFAULT 'medium' CHECK(priority IN ('low', 'medium', 'high', 'urgent')),
+      due_date TEXT DEFAULT NULL,
+      is_completed INTEGER NOT NULL DEFAULT 0,
+      position INTEGER NOT NULL DEFAULT 0,
+      cover_color TEXT DEFAULT NULL,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS card_assignees (
+      card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      PRIMARY KEY (card_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS card_label_links (
+      card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+      label_id INTEGER NOT NULL REFERENCES board_labels(id) ON DELETE CASCADE,
+      PRIMARY KEY (card_id, label_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS checklist_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      is_checked INTEGER NOT NULL DEFAULT 0,
+      position INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS card_comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS permission_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      requester_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      permission_key TEXT NOT NULL REFERENCES permissions(key) ON DELETE CASCADE,
+      scope_type TEXT NOT NULL CHECK(scope_type IN ('department', 'board', 'card')),
+      target_department_id INTEGER REFERENCES departments(id) ON DELETE CASCADE,
+      target_board_id INTEGER REFERENCES boards(id) ON DELETE CASCADE,
+      target_card_id INTEGER REFERENCES cards(id) ON DELETE CASCADE,
+      requested_duration TEXT NOT NULL DEFAULT 'once' CHECK(requested_duration IN ('once', '1h', '8h', '24h', '7d')),
+      reason TEXT NOT NULL,
+      action_summary TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected', 'revoked')),
+      reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      review_note TEXT NOT NULL DEFAULT '',
+      approved_duration TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      reviewed_at TEXT DEFAULT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS permission_grants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id INTEGER REFERENCES permission_requests(id) ON DELETE SET NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      granted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      permission_key TEXT NOT NULL REFERENCES permissions(key) ON DELETE CASCADE,
+      scope_type TEXT NOT NULL CHECK(scope_type IN ('department', 'board', 'card')),
+      target_department_id INTEGER REFERENCES departments(id) ON DELETE CASCADE,
+      target_board_id INTEGER REFERENCES boards(id) ON DELETE CASCADE,
+      target_card_id INTEGER REFERENCES cards(id) ON DELETE CASCADE,
+      uses_remaining INTEGER DEFAULT NULL,
+      expires_at TEXT DEFAULT NULL,
+      is_revoked INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      link_tab TEXT DEFAULT NULL,
+      link_board_id INTEGER DEFAULT NULL,
+      is_read INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      actor_name TEXT NOT NULL,
+      actor_role TEXT NOT NULL DEFAULT '',
+      department_name TEXT NOT NULL DEFAULT '',
+      action TEXT NOT NULL,
+      permission_key TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL CHECK(status IN ('ALLOWED', 'DENIED')),
+      method TEXT NOT NULL DEFAULT '',
+      endpoint TEXT NOT NULL DEFAULT '',
+      details TEXT NOT NULL DEFAULT '',
+      ip TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_boards_dept ON boards(department_id);
+    CREATE INDEX IF NOT EXISTS idx_lists_board ON lists(board_id, position);
+    CREATE INDEX IF NOT EXISTS idx_cards_list ON cards(list_id, position);
+    CREATE INDEX IF NOT EXISTS idx_cards_board ON cards(board_id);
+    CREATE INDEX IF NOT EXISTS idx_grants_user ON permission_grants(user_id, permission_key, is_revoked);
+    CREATE INDEX IF NOT EXISTS idx_requests_status ON permission_requests(status, target_department_id);
+    CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read);
+    CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(id DESC);
+  `);
+}
+
+module.exports = {
+  db,
+  DB_PATH,
+  get,
+  all,
+  run,
+  transaction,
+  initSchema,
+};
