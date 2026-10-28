@@ -10,6 +10,9 @@ import {
   Globe2,
   ArrowRight,
   RefreshCw,
+  Settings,
+  ExternalLink,
+  X,
 } from 'lucide-react';
 import { apiFetch, setStoredToken } from '../api';
 
@@ -78,18 +81,33 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
   const [otpCode, setOtpCode] = useState('');
   const [regLoading, setRegLoading] = useState(false);
   const [regError, setRegError] = useState('');
+  const [regErrorCode, setRegErrorCode] = useState('');
   const [regNotice, setRegNotice] = useState('');
+
+  // Inline 1-Step Admin Gmail Setup Modal (pre-filled with mb9836504@gmail.com)
+  const [gmailModalOpen, setGmailModalOpen] = useState(false);
+  const [setupGmailUser, setSetupGmailUser] = useState('mb9836504@gmail.com');
+  const [setupGmailAppPass, setSetupGmailAppPass] = useState('');
+  const [setupAdminPass, setSetupAdminPass] = useState('');
+  const [setupSaving, setSetupSaving] = useState(false);
+  const [setupError, setSetupError] = useState('');
 
   const [oauthInfo, setOauthInfo] = useState({
     googleConfigured: false,
     gmailConfigured: false,
+    defaultGmailUser: 'mb9836504@gmail.com',
     departments: [],
   });
 
   useEffect(() => {
     apiFetch('/api/auth/oauth/providers')
       .then((info) => {
-        if (info) setOauthInfo(info);
+        if (info) {
+          setOauthInfo(info);
+          if (info.defaultGmailUser) {
+            setSetupGmailUser(info.defaultGmailUser);
+          }
+        }
       })
       .catch(() => {});
   }, []);
@@ -122,6 +140,7 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
   async function handleSendVerificationCode(e) {
     if (e) e.preventDefault();
     setRegError('');
+    setRegErrorCode('');
     setRegNotice('');
     setRegLoading(true);
     try {
@@ -136,9 +155,48 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
       setOtpCode('');
       setRegNotice(res.message || 'تم إرسال كود التأكيد المكون من 6 أرقام إلى بريدك الإلكتروني');
     } catch (err) {
+      const code = err.code || (err.payload && err.payload.code) || '';
+      setRegErrorCode(code);
       setRegError(err.message || 'تعذر إرسال كود التأكيد');
+      if (code === 'GMAIL_NOT_CONFIGURED') {
+        setSetupError('');
+        setGmailModalOpen(true);
+      }
     } finally {
       setRegLoading(false);
+    }
+  }
+
+  async function handleQuickSetupGmailSubmit(e) {
+    e.preventDefault();
+    setSetupError('');
+    setSetupSaving(true);
+    try {
+      const res = await apiFetch('/api/auth/quick-setup-gmail', {
+        method: 'POST',
+        body: {
+          adminPassword: setupAdminPass,
+          gmailUser: setupGmailUser.trim(),
+          gmailAppPassword: setupGmailAppPass,
+          pendingEmail: regEmail.trim(),
+          pendingFullName: regFullName.trim(),
+        },
+      });
+      setOauthInfo((prev) => ({ ...prev, gmailConfigured: true }));
+      setGmailModalOpen(false);
+      setSetupGmailAppPass('');
+      setSetupAdminPass('');
+      setRegError('');
+      setRegErrorCode('');
+      if (res.codeSent) {
+        setRegStep(2);
+        setOtpCode('');
+        setRegNotice(res.message);
+      }
+    } catch (err) {
+      setSetupError(err.message || 'تعذر تفعيل بريد Gmail');
+    } finally {
+      setSetupSaving(false);
     }
   }
 
@@ -371,7 +429,34 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
                     border: '1px solid #fecaca',
                   }}
                 >
-                  {regError}
+                  <div>{regError}</div>
+                  {regErrorCode === 'GMAIL_NOT_CONFIGURED' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSetupError('');
+                        setGmailModalOpen(true);
+                      }}
+                      style={{
+                        marginTop: 8,
+                        width: '100%',
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        border: 'none',
+                        background: '#071e14',
+                        color: '#fde68a',
+                        fontWeight: 800,
+                        fontSize: 12.5,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                      }}
+                    >
+                      <Settings size={14} />
+                      <span>تفعيل بريد Gmail الآن في نفس الشاشة (للمسؤول)</span>
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -701,6 +786,151 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
           </div>
         </div>
       </div>
+
+      {/* Inline 1-Step Admin Gmail Activation Modal (Pre-filled with mb9836504@gmail.com) */}
+      {gmailModalOpen && (
+        <div className="modal-backdrop" onClick={() => setGmailModalOpen(false)}>
+          <div
+            className="modal-panel"
+            style={{ maxWidth: 480 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 900, fontSize: 16 }}>
+                <Mail size={19} color="#15803d" />
+                <span>تفعيل بريد الشركة (Gmail) في خطوة واحدة</span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setGmailModalOpen(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleQuickSetupGmailSubmit}>
+              <div className="modal-body">
+                <div
+                  style={{
+                    background: '#f0fdf4',
+                    border: '1px solid #86efac',
+                    borderRadius: 12,
+                    padding: '12px 14px',
+                    marginBottom: 14,
+                    fontSize: 12.5,
+                    color: '#14532d',
+                    lineHeight: 1.7,
+                  }}
+                >
+                  <div style={{ fontWeight: 900, marginBottom: 6 }}>
+                    تم تجهيز بريدك ({setupGmailUser}) تلقائياً — يتبقى فقط لصق كود Google:
+                  </div>
+                  <a
+                    href="https://myaccount.google.com/apppasswords"
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      background: '#15803d',
+                      color: '#ffffff',
+                      padding: '7px 12px',
+                      borderRadius: 8,
+                      fontWeight: 800,
+                      textDecoration: 'none',
+                      fontSize: 12.5,
+                    }}
+                  >
+                    <ExternalLink size={14} />
+                    <span>اضغط هنا لفتح صفحة استخراج كود Google (16 حرفاً)</span>
+                  </a>
+                  <div style={{ marginTop: 6, fontSize: 11.5, color: '#166534' }}>
+                    اكتب اسم التطبيق <strong>ELHELB</strong> واضغط Create ثم انسخ الـ 16 حرفاً والصقها بالأسفل.
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">بريد الإرسال الرسمي (Gmail) *</label>
+                  <input
+                    type="email"
+                    className="form-input"
+                    dir="ltr"
+                    style={{ textAlign: 'left', fontWeight: 700 }}
+                    value={setupGmailUser}
+                    onChange={(e) => setSetupGmailUser(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">كود تطبيقات Google المكون من 16 حرفاً (App Password) *</label>
+                  <input
+                    type="password"
+                    className="form-input"
+                    dir="ltr"
+                    style={{ textAlign: 'left', fontWeight: 800, letterSpacing: 2 }}
+                    placeholder="xxxx xxxx xxxx xxxx"
+                    value={setupGmailAppPass}
+                    onChange={(e) => setSetupGmailAppPass(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: setupError ? 12 : 4 }}>
+                  <label className="form-label">كلمة مرور المسؤول (admin) لتأكيد الصلاحية *</label>
+                  <input
+                    type="password"
+                    className="form-input"
+                    dir="ltr"
+                    style={{ textAlign: 'left', fontWeight: 700 }}
+                    placeholder="كلمة مرور حساب admin"
+                    value={setupAdminPass}
+                    onChange={(e) => setSetupAdminPass(e.target.value)}
+                    required
+                  />
+                </div>
+
+                {setupError && (
+                  <div
+                    style={{
+                      background: '#fee2e2',
+                      color: '#b91c1c',
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      fontSize: 12.5,
+                      fontWeight: 700,
+                      border: '1px solid #fecaca',
+                    }}
+                  >
+                    {setupError}
+                  </div>
+                )}
+              </div>
+
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setGmailModalOpen(false)}
+                >
+                  إغلاق
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{ background: '#15803d', borderColor: '#15803d' }}
+                  disabled={setupSaving}
+                >
+                  <CheckCircle2 size={16} />
+                  {setupSaving ? 'جاري التحقق والإرسال...' : 'تفعيل البريد وإرسال الكود فوراً'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

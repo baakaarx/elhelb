@@ -359,6 +359,43 @@ async function sendEmailVerificationCode({ toEmail, fullName, code }) {
   }
 }
 
+async function verifyGmailCredentials({ gmailUser, gmailAppPassword }) {
+  const cleanUser = String(gmailUser || '').trim().toLowerCase();
+  const cleanPass = String(gmailAppPassword || '').replace(/\s+/g, '');
+
+  if (!isDeliverableEmail(cleanUser)) {
+    const err = new Error('يرجى إدخال عنوان بريد Gmail صحيح');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (cleanPass.length < 16) {
+    const err = new Error(
+      'كود تطبيقات جوجل (App Password) يجب أن يتكون من 16 حرفاً من صفحة كلمات مرور تطبيقات جوجل (وليس باسورد الإيميل العادي)'
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (process.env.ELHELB_TEST_MODE === '1') {
+    return { cleanUser, cleanPass };
+  }
+
+  try {
+    const transporter = createGmailTransport({
+      gmailUser: cleanUser,
+      gmailAppPassword: cleanPass,
+    });
+    await transporter.verify();
+    return { cleanUser, cleanPass };
+  } catch (smtpErr) {
+    const err = new Error(
+      `رفض Google الاتصال بهذا الكود — تأكد أنك استخرجت (كلمة مرور التطبيقات - 16 حرفاً) من رابط حساب Google بعد تفعيل التحقق بخطوتين، وليس باسورد الإيميل العادي.`
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+}
+
 function getRecentEmailLogs(limit = 50) {
   return all(`SELECT * FROM email_logs ORDER BY id DESC LIMIT ?`, [Number(limit)]);
 }
@@ -366,6 +403,7 @@ function getRecentEmailLogs(limit = 50) {
 module.exports = {
   getGmailConfig,
   isDeliverableEmail,
+  verifyGmailCredentials,
   sendElhelbEmail,
   sendEmailVerificationCode,
   sendTestGmail,
