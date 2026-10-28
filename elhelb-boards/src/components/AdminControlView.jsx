@@ -384,8 +384,8 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
               borderBottom: '1px solid #e2e8f0',
             }}
           >
-            <div style={{ flex: 1, minWidth: 260 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div style={{ flex: 1, minWidth: 'min(100%, 250px)' }}>
+              <div className="form-grid-2">
                 <div>
                   <label className="form-label">اسم الدور الوظيفي</label>
                   <input
@@ -905,7 +905,7 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                     required
                   />
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div className="form-grid-2">
                   <div className="form-group">
                     <label className="form-label">اسم المستخدم (إنجليزي)</label>
                     <input
@@ -950,7 +950,7 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                     onChange={(e) => setUForm({ ...uForm, jobTitle: e.target.value })}
                   />
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div className="form-grid-2">
                   <div className="form-group">
                     <label className="form-label">الدور الوظيفي</label>
                     <select
@@ -1056,7 +1056,7 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                     }
                   />
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div className="form-grid-2">
                   <div className="form-group">
                     <label className="form-label">الدور الوظيفي</label>
                     <select
@@ -1276,7 +1276,7 @@ function DepartmentsManagementPanel({ showToast }) {
   }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))', gap: 20 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 295px), 1fr))', gap: 20 }}>
       <div className="card-box">
         <h3 style={{ margin: '0 0 14px', fontSize: 16, fontWeight: 800 }}>إضافة قسم جديد بالشركة</h3>
         <form onSubmit={handleCreate}>
@@ -1530,7 +1530,7 @@ function GmailSettingsPanel({ showToast }) {
         </div>
 
         <form onSubmit={handleSaveGmail}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 270px), 1fr))', gap: 14 }}>
             <div className="form-group">
               <label className="form-label">إيميل Gmail المرسل (الذي سيرسل منه الموقع) *</label>
               <input
@@ -1639,12 +1639,12 @@ function GmailSettingsPanel({ showToast }) {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', flex: '1 1 280px' }}>
             <input
               type="email"
               className="form-input"
               dir="ltr"
-              style={{ width: 250, textAlign: 'left' }}
+              style={{ flex: '1 1 200px', minWidth: 0, textAlign: 'left' }}
               placeholder="your.email@gmail.com"
               value={testTarget}
               onChange={(e) => setTestTarget(e.target.value)}
@@ -1908,11 +1908,11 @@ function AuditLogsPanel({ showToast }) {
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>
           سجل المراقبة الأمنية ومحاولات الوصول ({logs.length})
         </h3>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', width: '100%' }}>
           <input
             type="text"
             className="form-input"
-            style={{ width: 220, padding: '6px 10px', fontSize: 13 }}
+            style={{ flex: '1 1 200px', minWidth: 0, padding: '6px 10px', fontSize: 13 }}
             placeholder="بحث باسم الموظف أو العملية..."
             value={q}
             onChange={(e) => setQ(e.target.value)}

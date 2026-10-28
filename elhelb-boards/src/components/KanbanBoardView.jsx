@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ArrowRight,
+  ArrowLeft,
   Star,
   Plus,
   Settings,
@@ -250,6 +251,40 @@ export default function KanbanBoardView({
     }
   }
 
+  async function handleQuickTouchMove(e, movingCard, targetList) {
+    e.stopPropagation();
+    if (!targetList) return;
+
+    const canMoveThisCard =
+      capabilities.canMoveCard ||
+      (movingCard.grantedCardPermissions || []).includes('cards.move');
+
+    if (!canMoveThisCard) {
+      onOpenRequestModal({
+        permissionKey: 'cards.move',
+        targetDepartmentId: board.department_id,
+        targetBoardId: board.id,
+        targetBoardTitle: board.title,
+        targetCardId: movingCard.id,
+        targetCardTitle: movingCard.title,
+        actionLabel: `نقل كارت "${movingCard.title}" إلى قائمة "${targetList.title}"`,
+      });
+      return;
+    }
+
+    try {
+      await apiFetch(`/api/cards/${movingCard.id}/move`, {
+        method: 'POST',
+        body: { targetListId: targetList.id, targetIndex: 0 },
+      });
+      await loadBoard(true);
+      onRefreshMe();
+      showToast(`تم نقل المهمة إلى «${targetList.title}»`, 'success');
+    } catch (err) {
+      if (err.status !== 403) showToast(err.message || 'تعذر نقل الكارت', 'error');
+    }
+  }
+
   async function handleSaveBoardSettings(e) {
     e.preventDefault();
     try {
@@ -324,8 +359,8 @@ export default function KanbanBoardView({
           </button>
 
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <h1 style={{ margin: 0, fontSize: 18, fontWeight: 900 }}>{board.title}</h1>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <h1 style={{ margin: 0, fontSize: 17, fontWeight: 900 }}>{board.title}</h1>
               <span
                 className="badge"
                 style={{ background: 'rgba(255,255,255,0.2)', color: '#fff' }}
@@ -393,7 +428,7 @@ export default function KanbanBoardView({
 
       {/* Filter Bar */}
       <div className="kanban-filterbar">
-        <div style={{ position: 'relative', width: 220 }}>
+        <div className="kanban-filter-search" style={{ position: 'relative', width: 220 }}>
           <Search
             size={13}
             color="#cbd5e1"
@@ -410,6 +445,7 @@ export default function KanbanBoardView({
         </div>
 
         <select
+          className="kanban-filter-select"
           value={filterPriority}
           onChange={(e) => setFilterPriority(e.target.value)}
           style={{
@@ -430,6 +466,7 @@ export default function KanbanBoardView({
         </select>
 
         <select
+          className="kanban-filter-select"
           value={filterMember}
           onChange={(e) => setFilterMember(e.target.value)}
           style={{
@@ -464,7 +501,7 @@ export default function KanbanBoardView({
           </button>
         )}
 
-        <div style={{ marginRight: 'auto', fontSize: 12, color: '#e2e8f0' }}>
+        <div className="kanban-desktop-hint" style={{ marginRight: 'auto', fontSize: 12, color: '#e2e8f0' }}>
           {capabilities.canMoveCard
             ? '💡 اسحب الكروت وأفلتها بين القوائم لتحديث المرحلة، أو اضغط على أي كارت للتفاصيل'
             : '🔒 وضع القراءة المقيدة: اضغط على أي إجراء مقفل لطلب صلاحية من المدير'}
@@ -473,7 +510,9 @@ export default function KanbanBoardView({
 
       {/* Horizontal Kanban Lists */}
       <div className="kanban-columns-scroll">
-        {lists.map((list) => {
+        {lists.map((list, listIdx) => {
+          const prevStageList = listIdx > 0 ? lists[listIdx - 1] : null;
+          const nextStageList = listIdx < lists.length - 1 ? lists[listIdx + 1] : null;
           const listCards = filteredCards
             .filter((c) => c.list_id === list.id)
             .sort((a, b) => a.position - b.position || a.id - b.id);
@@ -753,6 +792,35 @@ export default function KanbanBoardView({
                             </div>
                           )}
                         </div>
+
+                        {/* One-Tap Mobile Stage Switcher (visible on phones & touchscreens) */}
+                        {(prevStageList || nextStageList) && (
+                          <div className="kanban-mobile-move-row">
+                            {prevStageList ? (
+                              <button
+                                type="button"
+                                className="kanban-stage-btn"
+                                onClick={(e) => handleQuickTouchMove(e, card, prevStageList)}
+                              >
+                                <ArrowRight size={11} />
+                                <span>السابق</span>
+                              </button>
+                            ) : (
+                              <span />
+                            )}
+
+                            {nextStageList && (
+                              <button
+                                type="button"
+                                className="kanban-stage-btn"
+                                onClick={(e) => handleQuickTouchMove(e, card, nextStageList)}
+                              >
+                                <span>{nextStageList.title}</span>
+                                <ArrowLeft size={11} />
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -971,7 +1039,7 @@ export default function KanbanBoardView({
 
                 <div className="form-group">
                   <label className="form-label">لون ومظهر اللوحة</label>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+                  <div className="theme-picker-grid">
                     {Object.values(BOARD_THEMES).map((th) => (
                       <button
                         key={th.id}

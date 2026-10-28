@@ -41,11 +41,14 @@ body {
   margin: 0;
   padding: 0;
   min-height: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
   background: var(--bg);
   color: var(--text);
   font-family: 'Cairo', 'Segoe UI', Tahoma, Arial, sans-serif;
   direction: rtl;
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
 }
 
 button,
@@ -414,6 +417,7 @@ button:disabled {
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
+  margin-right: auto;
 }
 
 .nav-search-wrap {
@@ -457,7 +461,7 @@ button:disabled {
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
-  width: 360px;
+  width: min(360px, calc(100vw - 24px));
   max-height: 420px;
   overflow-y: auto;
   background: var(--surface);
@@ -528,7 +532,7 @@ button:disabled {
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
-  width: 330px;
+  width: min(350px, calc(100vw - 24px));
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border);
@@ -688,7 +692,7 @@ button:disabled {
 
 .boards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 285px), 1fr));
   gap: 18px;
 }
 
@@ -731,7 +735,7 @@ button:disabled {
 
 .locked-dept-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 275px), 1fr));
   gap: 14px;
 }
 
@@ -1018,7 +1022,7 @@ button:disabled {
 
 .perm-items-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 275px), 1fr));
   gap: 10px;
   padding: 14px;
 }
@@ -1107,3 +1111,412 @@ button:disabled {
 .toast-item.error {
   border-right-color: #ef4444;
 }
+
+/* ==========================================
+   RESPONSIVE & MOBILE-FIRST ENHANCEMENTS
+   ========================================== */
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.theme-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.onboarding-stepper {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.onboarding-card {
+  padding: 28px;
+}
+
+.farm-hero-heading {
+  margin: 0 0 14px;
+  font-size: clamp(22px, 4.5vw, 34px);
+  font-weight: 900;
+  line-height: 1.32;
+  text-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+}
+
+.mobile-search-btn {
+  display: none;
+}
+
+.mobile-search-drawer {
+  display: none;
+}
+
+.kanban-mobile-move-row {
+  display: none;
+}
+
+/* Show touch stage-switcher on touchscreens & mobile viewports */
+@media (pointer: coarse), (max-width: 768px) {
+  .kanban-mobile-move-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-top: 8px;
+    padding-top: 7px;
+    border-top: 1px dashed #e2e8f0;
+  }
+}
+
+.kanban-stage-btn {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #0f172a;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: background 0.15s;
+}
+
+.kanban-stage-btn:active {
+  background: #dcfce7;
+  border-color: #15803d;
+}
+
+/* Tablet & Mobile Sticky 2-Row App Header (<= 920px) */
+@media (max-width: 920px) {
+  .top-navbar {
+    height: auto;
+    min-height: 56px;
+    padding: 8px 12px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .nav-brand {
+    order: 1;
+  }
+
+  .nav-left {
+    order: 2;
+    margin-right: auto;
+    gap: 6px;
+  }
+
+  .nav-search-wrap {
+    display: none;
+  }
+
+  .mobile-search-btn {
+    display: inline-flex;
+  }
+
+  .mobile-search-drawer {
+    display: block;
+    order: 3;
+    width: 100%;
+    position: relative;
+    padding-top: 4px;
+  }
+
+  .nav-tabs {
+    order: 4;
+    width: 100%;
+    flex: none;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 6px 0 2px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    gap: 6px;
+  }
+
+  .nav-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-tab {
+    padding: 6px 11px;
+    font-size: 12.5px;
+    background: rgba(255, 255, 255, 0.05);
+  }
+}
+
+/* Mobile & Phablet Optimizations (<= 768px) */
+@media (max-width: 768px) {
+  /* Prevent iOS Safari & Android Chrome auto-zoom on input focus */
+  .form-input,
+  .form-select,
+  .form-textarea,
+  .nav-search-input {
+    font-size: 16px !important;
+  }
+
+  .page-container {
+    padding: 14px 12px 34px;
+  }
+
+  .card-box {
+    padding: 15px 14px;
+    border-radius: 14px;
+  }
+
+  .kanban-wrapper {
+    min-height: calc(100dvh - 104px);
+  }
+
+  .kanban-topbar {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .kanban-filterbar {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+
+  .kanban-filter-search {
+    width: 100% !important;
+    flex: 1 1 100%;
+  }
+
+  .kanban-filter-select {
+    flex: 1 1 calc(50% - 6px);
+    min-width: 0;
+    font-size: 14px !important;
+  }
+
+  .kanban-desktop-hint {
+    display: none;
+  }
+
+  .kanban-columns-scroll {
+    padding: 12px;
+    gap: 12px;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+  }
+
+  .kanban-list {
+    width: min(85vw, 304px);
+    min-width: min(85vw, 304px);
+    max-height: calc(100dvh - 230px);
+    scroll-snap-align: center;
+  }
+
+  .kanban-add-list-box {
+    width: min(82vw, 285px);
+    min-width: min(82vw, 285px);
+    scroll-snap-align: center;
+  }
+
+  .onboarding-stepper {
+    grid-template-columns: 1fr;
+    gap: 7px;
+  }
+}
+
+/* Smartphone Layout Refinements (<= 640px) */
+@media (max-width: 640px) {
+  /* Login & Direct Employee Registration Mobile Layout */
+  .login-card-panel {
+    padding: 20px 14px 24px;
+    border-left: none;
+    border-bottom: 1px solid rgba(212, 169, 10, 0.28);
+  }
+
+  .prime-logo-crest {
+    width: 96px;
+    height: 96px;
+    border-radius: 18px;
+    margin-bottom: 8px;
+  }
+
+  .login-brand-header {
+    margin-bottom: 16px;
+  }
+
+  .login-brand-header h1 {
+    font-size: 18.5px;
+  }
+
+  .login-brand-header p {
+    font-size: 11.5px;
+  }
+
+  .prime-auth-card {
+    padding: 16px 14px;
+    border-radius: 15px;
+  }
+
+  .prime-mode-tab {
+    padding: 8px 6px;
+    font-size: 12.5px;
+  }
+
+  .login-showcase-panel {
+    padding: 22px 14px 28px;
+    min-height: auto;
+  }
+
+  .farm-hero-content {
+    gap: 18px;
+  }
+
+  .prime-pillar-grid {
+    gap: 10px;
+  }
+
+  .prime-pillar-card {
+    display: flex;
+    align-items: center;
+  }
+
+  .prime-pillar-card:hover,
+  .prime-pillar-card.active {
+    transform: none;
+  }
+
+  .prime-pillar-thumb {
+    width: 92px;
+    height: 88px;
+    flex-shrink: 0;
+  }
+
+  /* Compact Navbar & Viewport-Safe Popovers */
+  .nav-brand img {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+  }
+
+  .nav-brand-title {
+    font-size: 13.5px;
+  }
+
+  .nav-brand-sub {
+    display: none;
+  }
+
+  .user-pill {
+    padding: 3px 5px 3px 8px;
+    gap: 5px;
+  }
+
+  .user-pill-meta {
+    display: none;
+  }
+
+  .icon-btn-dark {
+    height: 34px;
+    padding: 0 8px;
+  }
+
+  .popover-menu,
+  .search-dropdown {
+    position: fixed;
+    top: 58px;
+    left: 10px;
+    right: 10px;
+    width: auto !important;
+    max-width: calc(100vw - 20px);
+    max-height: calc(100dvh - 74px);
+    overflow-y: auto;
+    z-index: 260;
+  }
+
+  /* Stacked Banners & Headers */
+  .isolation-banner {
+    padding: 14px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .isolation-banner .btn {
+    width: 100%;
+  }
+
+  .onboarding-card {
+    padding: 16px 14px;
+  }
+
+  /* Responsive Modals */
+  .modal-backdrop {
+    padding: 12px 8px calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .modal-panel {
+    border-radius: 14px;
+    max-width: 100%;
+  }
+
+  .modal-header {
+    padding: 13px 14px;
+  }
+
+  .modal-body {
+    padding: 14px;
+  }
+
+  .modal-footer {
+    padding: 12px 14px;
+    flex-wrap: wrap;
+  }
+
+  /* Forms, Permissions & Tables */
+  .form-grid-2 {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .perm-items-grid {
+    padding: 10px;
+    gap: 8px;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 9px 10px;
+    font-size: 12.5px;
+  }
+
+  /* Full-Width Safe Toast Notifications */
+  .toast-stack {
+    left: 12px;
+    right: 12px;
+    bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    max-width: none;
+  }
+
+  .toast-item {
+    font-size: 13px;
+    padding: 11px 13px;
+  }
+}
+
+/* Compact Small Phones (<= 480px) */
+@media (max-width: 480px) {
+  .theme-picker-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .gold-cta .cta-label-text {
+    display: none;
+  }
+
+  .btn {
+    white-space: normal;
+    text-align: center;
+    line-height: 1.35;
+  }
+}
+

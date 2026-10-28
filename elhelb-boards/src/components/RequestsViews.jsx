@@ -103,7 +103,7 @@ export function MyRequestsView({
             لا توجد تصاريح استثنائية نشطة حالياً — تعمل الحسابات وفق الصلاحيات الأساسية لدور ({user.roleName}).
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(310px, 1fr))', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 295px), 1fr))', gap: 12 }}>
             {data.activeGrants.map((g) => (
               <div
                 key={g.id}
@@ -321,7 +321,7 @@ export function ManagerInboxView({ user, onRefreshMe, showToast }) {
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button
             type="button"
             className={`btn btn-sm ${filterStatus === 'pending' ? 'btn-primary' : 'btn-secondary'}`}
@@ -379,7 +379,7 @@ export function ManagerInboxView({ user, onRefreshMe, showToast }) {
                     gap: 14,
                   }}
                 >
-                  <div style={{ display: 'flex', gap: 12, flex: 1, minWidth: 260 }}>
+                  <div style={{ display: 'flex', gap: 12, flex: 1, minWidth: 'min(100%, 250px)' }}>
                     <div
                       className="avatar-circle"
                       style={{
@@ -440,7 +440,9 @@ export function ManagerInboxView({ user, onRefreshMe, showToast }) {
                   {reqItem.status === 'pending' && reqItem.canReview && (
                     <div
                       style={{
-                        width: 320,
+                        width: '100%',
+                        maxWidth: 340,
+                        flex: '1 1 280px',
                         background: '#f8fafc',
                         border: '1px solid #cbd5e1',
                         borderRadius: 12,

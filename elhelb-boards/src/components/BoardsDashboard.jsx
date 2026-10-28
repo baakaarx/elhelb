@@ -562,7 +562,7 @@ export default function BoardsDashboard({
 
                 <div className="form-group">
                   <label className="form-label">مظهر وخلفية اللوحة</label>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+                  <div className="theme-picker-grid">
                     {Object.values(BOARD_THEMES).map((th) => (
                       <button
                         key={th.id}
