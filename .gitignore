@@ -5,3 +5,10 @@ node_modules/
 elhelb-boards/data/*.db
 elhelb-boards/data/*.db-shm
 elhelb-boards/data/*.db-wal
+elhelb-llm/data/*.db
+elhelb-llm/data/*.db-shm
+elhelb-llm/data/*.db-wal
+elhelb-llm/data/.vault.key
+elhelb-llm/data/.admin.key
+elhelb-llm/data/tessdata/
+

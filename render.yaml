@@ -14,3 +14,21 @@ services:
         value: production
       - key: JWT_SECRET
         generateValue: true
+
+  - type: web
+    name: elhelb-ai-chatbot
+    runtime: node
+    rootDir: elhelb-llm
+    plan: free
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: ELHELB_VAULT_KEY
+        generateValue: true
+      - key: ELHELB_ADMIN_KEY
+        generateValue: true

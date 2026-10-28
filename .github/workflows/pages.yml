@@ -1,6 +1,5 @@
-# نشر تلقائي لـ ELHELP AI على GitHub Pages
-# كل ما يتعمل push على main، الموقع بيتحدث لوحده
-name: Deploy ELHELP AI to GitHub Pages
+# نشر تلقائي للشات بوت الرسمي لمجموعة الهلب (ELHELB GROUP AI) على GitHub Pages
+name: Deploy ELHELB GROUP AI to GitHub Pages
 
 on:
   push:
@@ -24,11 +23,17 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build ELHELB GROUP AI Chatbot
+        working-directory: elhelb-llm
+        run: npm ci --include=dev && npm run build
       - uses: actions/configure-pages@v5
         with:
           enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: my-agent
+          path: elhelb-llm/public
       - id: deployment
         uses: actions/deploy-pages@v4
