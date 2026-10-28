@@ -104,7 +104,12 @@ export default function App() {
     setActiveBoardId(null);
     setInitialCardId(null);
     setActiveTab('boards');
-    if (loggedUser.onboardingStatus === 'pending') {
+    if (!loggedUser.hasCustomCredentials) {
+      showToast(
+        `أهلاً بك ${loggedUser.fullName} — أنشئ الآن اسم المستخدم وكلمة المرور ثم حدد قسمك`,
+        'info'
+      );
+    } else if (loggedUser.onboardingStatus === 'pending') {
       showToast(
         `أهلاً بك ${loggedUser.fullName} — حسابك جاهز وبانتظار ضم رئيس القسم`,
         'info'
@@ -194,8 +199,8 @@ export default function App() {
     );
   }
 
-  // Gate newly registered Google / Facebook employees in the Waiting Room until their Department Head claims them!
-  if (user.onboardingStatus === 'pending') {
+  // Gate newly registered Google / Facebook employees in the Onboarding Wizard until credentials + department head approval!
+  if (user.onboardingStatus === 'pending' || !user.hasCustomCredentials) {
     return (
       <>
         <WaitingOnboardingView

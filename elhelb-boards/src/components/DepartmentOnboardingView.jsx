@@ -238,20 +238,18 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                         )}
                       </div>
 
-                      {pu.email && (
-                        <div
-                          dir="ltr"
-                          style={{
-                            textAlign: 'right',
-                            fontSize: 12,
-                            color: '#475569',
-                            fontFamily: 'monospace',
-                            marginTop: 2,
-                          }}
-                        >
-                          {pu.email}
-                        </div>
-                      )}
+                      <div
+                        dir="ltr"
+                        style={{
+                          textAlign: 'right',
+                          fontSize: 12,
+                          color: '#475569',
+                          fontFamily: 'monospace',
+                          marginTop: 2,
+                        }}
+                      >
+                        @{pu.username} {pu.email ? `• ${pu.email}` : ''}
+                      </div>
 
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6, fontSize: 12 }}>
                         {pu.preferred_department_name ? (

@@ -131,8 +131,6 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
           provider: socialModalProvider,
           fullName: socialFullName,
           email: socialEmail,
-          preferredDepartmentId: socialDeptId ? Number(socialDeptId) : null,
-          jobTitle: socialJobTitle,
         },
       });
       setStoredToken(res.token);
@@ -521,12 +519,12 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
         </div>
       </div>
 
-      {/* Social Sign-In / Registration Modal */}
+      {/* Social Sign-In Identity Dialog */}
       {socialModalProvider && (
         <div className="modal-backdrop" onClick={() => setSocialModalProvider(null)}>
           <div
             className="modal-panel"
-            style={{ maxWidth: 490 }}
+            style={{ maxWidth: 440 }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-header">
@@ -549,7 +547,7 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
                   </span>
                 )}
                 <span>
-                  المتابعة بحساب {socialModalProvider === 'google' ? 'Google' : 'Facebook'}
+                  تسجيل الدخول بحساب {socialModalProvider === 'google' ? 'Google' : 'Facebook'}
                 </span>
               </div>
               <button
@@ -575,47 +573,11 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
                     lineHeight: 1.65,
                   }}
                 >
-                  سجّل اسمك الحقيقي وبريدك الإلكتروني ليصل إشعار فوري إلى{' '}
-                  <strong>رئيس القسم</strong> فيضيفك إلى قسمك ولوحات العمل الخاصة بك.
-                </div>
-
-                {/* Quick Fill Demo Pending Employee */}
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: 11.5, fontWeight: 700, color: '#64748b', marginBottom: 5 }}>
-                    أو جرّب بموظف جديد جاهز بضغطة واحدة:
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => {
-                        setSocialFullName('أحمد حسام الدين');
-                        setSocialEmail('ahmed.hossam@gmail.com');
-                        setSocialJobTitle('أخصائي تصدير دولي');
-                        const exp = oauthInfo.departments.find((d) => d.name.includes('التصدير'));
-                        if (exp) setSocialDeptId(exp.id);
-                      }}
-                    >
-                      أحمد حسام (التصدير)
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => {
-                        setSocialFullName('د. نهى فؤاد');
-                        setSocialEmail('noha.fouad@facebook.com');
-                        setSocialJobTitle('أخصائية تسجيل مستحضرات');
-                        const reg = oauthInfo.departments.find((d) => d.name.includes('تسجيل'));
-                        if (reg) setSocialDeptId(reg.id);
-                      }}
-                    >
-                      د. نهى فؤاد (تسجيل المنتجات)
-                    </button>
-                  </div>
+                  بعد تسجيل الدخول بحسابك، ستنتقل تلقائياً إلى <strong>صفحة إنشاء اسم المستخدم وكلمة المرور</strong> الخاصة بك ثم <strong>تحديد القسم</strong> الذي تعمل به.
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">الاسم الثلاثي أو الكامل للموظف *</label>
+                  <label className="form-label">الاسم الكامل بحسابك *</label>
                   <input
                     type="text"
                     className="form-input"
@@ -626,52 +588,20 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
                   />
                 </div>
 
-                <div className="form-group">
+                <div className="form-group" style={{ marginBottom: socialError ? 12 : 4 }}>
                   <label className="form-label">
-                    البريد الإلكتروني لحساب {socialModalProvider === 'google' ? 'Google' : 'Facebook'} *
+                    البريد الإلكتروني لحساب {socialModalProvider === 'google' ? 'Google (Gmail)' : 'Facebook'} *
                   </label>
                   <input
                     type="email"
                     className="form-input"
                     dir="ltr"
                     style={{ textAlign: 'left' }}
-                    placeholder={
-                      socialModalProvider === 'google'
-                        ? 'name@gmail.com'
-                        : 'name@facebook.com'
-                    }
+                    placeholder="name@gmail.com"
                     value={socialEmail}
                     onChange={(e) => setSocialEmail(e.target.value)}
                     required
                   />
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <div className="form-group">
-                    <label className="form-label">القسم التابع له بالشركة</label>
-                    <select
-                      className="form-select"
-                      value={socialDeptId}
-                      onChange={(e) => setSocialDeptId(e.target.value)}
-                    >
-                      {oauthInfo.departments.map((d) => (
-                        <option key={d.id} value={d.id}>
-                          {d.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">المسمى الوظيفي (اختياري)</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="مثال: مسؤول تصدير"
-                      value={socialJobTitle}
-                      onChange={(e) => setSocialJobTitle(e.target.value)}
-                    />
-                  </div>
                 </div>
 
                 {socialError && (
@@ -710,8 +640,8 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
                   disabled={socialSubmitting}
                 >
                   {socialSubmitting
-                    ? 'جاري تسجيل الدخول...'
-                    : `تسجيل الدخول عبر ${socialModalProvider === 'google' ? 'Google' : 'Facebook'}`}
+                    ? 'جاري المتابعة...'
+                    : `متابعة بحساب ${socialModalProvider === 'google' ? 'Google' : 'Facebook'}`}
                 </button>
               </div>
             </form>

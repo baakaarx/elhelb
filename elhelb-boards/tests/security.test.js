@@ -189,26 +189,46 @@ async function main() {
     });
     assert.equal(moveAllowedAgain.status, 200, 'Restoring permission in DB must immediately allow request');
 
-    console.log('6️⃣ Testing Google & Facebook Employee Sign-In + Department Head Onboarding Flow...');
+    console.log('6️⃣ Testing Google/Facebook Sign-In -> Create Username/Password -> Pick Department -> Claim + Gmail Logs...');
     const exportDept = itDepts.data.find((d) => d.slug === 'export');
 
-    // New employee signs in via Google with their real name
+    // New employee signs in via Google with ONLY their real name & Gmail
     const googleSign = await api('POST', '/api/auth/social-entry', null, {
       provider: 'google',
       fullName: 'محمود سامي الشناوي',
       email: 'mahmoud.shennawy@gmail.com',
-      preferredDepartmentId: exportDept.id,
-      jobTitle: 'منسق شحن بحري',
     });
     assert.equal(googleSign.status, 200);
     assert.equal(googleSign.data.isNewUser, true);
     const newGoogleTok = googleSign.data.token;
 
-    // Check /me shows pending status and 0 permissions
+    // Check /me shows Step 1 required (hasCustomCredentials: false, departmentConfirmed: false)
     const mePending = await api('GET', '/api/auth/me', newGoogleTok);
     assert.equal(mePending.status, 200);
     assert.equal(mePending.data.user.onboardingStatus, 'pending');
+    assert.equal(mePending.data.user.hasCustomCredentials, false);
+    assert.equal(mePending.data.user.departmentConfirmed, false);
     assert.equal(mePending.data.user.permissions.length, 0);
+
+    // Step 1: Employee creates their own username & password!
+    const setupCreds = await api('POST', '/api/onboarding/setup-credentials', newGoogleTok, {
+      username: 'mahmoud.export',
+      password: 'myPassword99',
+      fullName: 'محمود سامي الشناوي',
+    });
+    assert.equal(setupCreds.status, 200);
+
+    // Verify Mahmoud can ALSO log in directly using his newly created username & password!
+    const directLoginTok = await login('mahmoud.export', 'myPassword99');
+    assert.ok(directLoginTok);
+
+    // Step 2: Employee chooses their department (Export) -> triggers notification + email log!
+    const pickDept = await api('PATCH', '/api/onboarding/my-preference', newGoogleTok, {
+      preferredDepartmentId: exportDept.id,
+      jobTitle: 'منسق شحن بحري',
+    });
+    assert.equal(pickDept.status, 200);
+    assert.equal(pickDept.data.departmentConfirmed, true);
 
     // Pending employee sees ZERO company boards until claimed by Department Head!
     const pendingBoards = await api('GET', '/api/boards', newGoogleTok);
@@ -259,6 +279,20 @@ async function main() {
       }
     );
     assert.equal(validClaim.status, 200);
+
+    // Verify Gmail notification settings & email_logs recorded both events cleanly!
+    const gmailSettingsGet = await api('GET', '/api/admin/gmail-settings', chairmanTok);
+    assert.equal(gmailSettingsGet.status, 200);
+    assert.ok(gmailSettingsGet.data.emailLogs.length >= 2, 'Email logs should record onboarding & approval events');
+
+    const saveGmailRes = await api('PUT', '/api/admin/gmail-settings', itMgrTok, {
+      gmailUser: 'elhelb.notify@gmail.com',
+      gmailAppPassword: 'abcd efgh ijkl mnop',
+      adminNotifyEmail: 'chairman@gmail.com',
+      enabled: true,
+    });
+    assert.equal(saveGmailRes.status, 200);
+    assert.equal(saveGmailRes.data.configured, true);
 
     // Immediately (using the SAME token without re-login!), Mahmoud now sees Export boards ONLY!
     const afterClaimMe = await api('GET', '/api/auth/me', newGoogleTok);

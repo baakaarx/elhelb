@@ -16,6 +16,8 @@ import {
   Lock,
   Globe,
   Copy,
+  Mail,
+  Send,
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { COLOR_SWATCHES, formatSqliteDate, getInitials } from '../constants';
@@ -93,6 +95,16 @@ export default function AdminControlView({ user, onRefreshMe, showToast }) {
           {canRoles && (
             <button
               type="button"
+              className={`btn btn-sm ${subTab === 'gmail' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setSubTab('gmail')}
+            >
+              <Mail size={15} />
+              ربط إشعارات Gmail
+            </button>
+          )}
+          {canRoles && (
+            <button
+              type="button"
               className={`btn btn-sm ${subTab === 'oauth' ? 'btn-primary' : 'btn-secondary'}`}
               onClick={() => setSubTab('oauth')}
             >
@@ -122,6 +134,7 @@ export default function AdminControlView({ user, onRefreshMe, showToast }) {
       {subTab === 'departments' && canDepts && (
         <DepartmentsManagementPanel showToast={showToast} />
       )}
+      {subTab === 'gmail' && canRoles && <GmailSettingsPanel showToast={showToast} />}
       {subTab === 'oauth' && canRoles && <OAuthSettingsPanel showToast={showToast} />}
       {subTab === 'audit' && canAudit && <AuditLogsPanel showToast={showToast} />}
     </div>
@@ -599,6 +612,7 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
 
   const [uForm, setUForm] = useState({
     username: '',
+    email: '',
     password: '',
     fullName: '',
     jobTitle: '',
@@ -653,7 +667,7 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
         },
       });
       setCreateOpen(false);
-      setUForm((p) => ({ ...p, username: '', password: '', fullName: '', jobTitle: '' }));
+      setUForm((p) => ({ ...p, username: '', email: '', password: '', fullName: '', jobTitle: '' }));
       await loadAll();
       showToast('تم إنشاء حساب الموظف وتسكينه بنجاح', 'success');
     } catch (err) {
@@ -668,6 +682,7 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
         method: 'PATCH',
         body: {
           fullName: editingUser.full_name,
+          email: editingUser.email || '',
           jobTitle: editingUser.job_title,
           roleId: Number(editingUser.role_id),
           departmentId: editingUser.department_id ? Number(editingUser.department_id) : null,
@@ -876,6 +891,18 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                   </div>
                 </div>
                 <div className="form-group">
+                  <label className="form-label">البريد الإلكتروني للإشعارات (Gmail — اختياري)</label>
+                  <input
+                    type="email"
+                    className="form-input"
+                    dir="ltr"
+                    style={{ textAlign: 'left' }}
+                    placeholder="name@gmail.com"
+                    value={uForm.email}
+                    onChange={(e) => setUForm({ ...uForm, email: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
                   <label className="form-label">المسمى الوظيفي</label>
                   <input
                     type="text"
@@ -961,6 +988,20 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
                       setEditingUser({ ...editingUser, full_name: e.target.value })
                     }
                     required
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">البريد الإلكتروني لاستقبال إشعارات Gmail</label>
+                  <input
+                    type="email"
+                    className="form-input"
+                    dir="ltr"
+                    style={{ textAlign: 'left' }}
+                    placeholder="name@gmail.com"
+                    value={editingUser.email || ''}
+                    onChange={(e) =>
+                      setEditingUser({ ...editingUser, email: e.target.value })
+                    }
                   />
                 </div>
                 <div className="form-group">
@@ -1214,7 +1255,351 @@ function DepartmentsManagementPanel({ showToast }) {
 }
 
 /* ==========================================
-   4. GOOGLE & FACEBOOK OAUTH SETTINGS (للـ IT والإدارة)
+   4. GMAIL NOTIFICATIONS INTEGRATION (ربط إشعارات الجميل)
+   ========================================== */
+function GmailSettingsPanel({ showToast }) {
+  const [loading, setLoading] = useState(true);
+  const [gmailUser, setGmailUser] = useState('');
+  const [gmailAppPassword, setGmailAppPassword] = useState('');
+  const [appPasswordSaved, setAppPasswordSaved] = useState(false);
+  const [configured, setConfigured] = useState(false);
+  const [enabled, setEnabled] = useState(true);
+  const [senderName, setSenderName] = useState('منصة مجموعة الهلب — ELHELB GROUP');
+  const [adminNotifyEmail, setAdminNotifyEmail] = useState('');
+  const [emailLogs, setEmailLogs] = useState([]);
+
+  const [saving, setSaving] = useState(false);
+  const [testTarget, setTestTarget] = useState('');
+  const [testing, setTesting] = useState(false);
+
+  async function loadGmail() {
+    setLoading(true);
+    try {
+      const res = await apiFetch('/api/admin/gmail-settings');
+      setGmailUser(res.gmailUser || '');
+      setAppPasswordSaved(Boolean(res.appPasswordSaved));
+      setConfigured(Boolean(res.configured));
+      setEnabled(Boolean(res.enabled));
+      setSenderName(res.senderName || 'منصة مجموعة الهلب — ELHELB GROUP');
+      setAdminNotifyEmail(res.adminNotifyEmail || '');
+      setEmailLogs(Array.isArray(res.emailLogs) ? res.emailLogs : []);
+      if (!testTarget && (res.adminNotifyEmail || res.gmailUser)) {
+        setTestTarget(res.adminNotifyEmail || res.gmailUser);
+      }
+    } catch (err) {
+      showToast(err.message || 'تعذر تحميل إعدادات Gmail', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadGmail();
+  }, []);
+
+  async function handleSaveGmail(e) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await apiFetch('/api/admin/gmail-settings', {
+        method: 'PUT',
+        body: {
+          gmailUser,
+          gmailAppPassword,
+          senderName,
+          adminNotifyEmail,
+          enabled,
+        },
+      });
+      setGmailAppPassword('');
+      await loadGmail();
+      showToast('تم حفظ إعدادات ربط Gmail في النظام بنجاح ✅', 'success');
+    } catch (err) {
+      showToast(err.message || 'تعذر حفظ الإعدادات', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSendTestEmail() {
+    setTesting(true);
+    try {
+      const res = await apiFetch('/api/admin/gmail-settings/test', {
+        method: 'POST',
+        body: { targetEmail: testTarget || adminNotifyEmail || gmailUser },
+      });
+      await loadGmail();
+      showToast(`تم إرسال الرسالة التجريبية بنجاح إلى (${res.to})! تفقد صندوق الوارد في Gmail الآن.`, 'success');
+    } catch (err) {
+      await loadGmail();
+      showToast(err.message || 'تعذر إرسال الرسالة التجريبية', 'error');
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="card-box" style={{ padding: 30, textAlign: 'center', color: '#64748b' }}>
+        جاري تحميل إعدادات إشعارات Gmail...
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div className="card-box">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
+          <h3 style={{ margin: 0, fontSize: 17.5, fontWeight: 900, color: '#0b2545', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Mail size={20} color="#ea4335" />
+            ربط حساب Gmail لإرسال الإشعارات الفورية تلقائياً
+          </h3>
+          <span
+            className="badge"
+            style={{
+              background: configured && enabled ? '#dcfce7' : '#fef3c7',
+              color: configured && enabled ? '#166534' : '#92400e',
+              fontSize: 12,
+            }}
+          >
+            {configured && enabled
+              ? 'مربوط وجاهز للإرسال عبر Gmail ✅'
+              : 'بانتظار إدخال بريد Gmail وكلمة مرور التطبيقات'}
+          </span>
+        </div>
+
+        {/* 30-second Setup Guide */}
+        <div
+          style={{
+            background: '#eff6ff',
+            border: '1px solid #bfdbfe',
+            borderRadius: 12,
+            padding: '14px 16px',
+            marginBottom: 18,
+            fontSize: 13,
+            color: '#1e3a8a',
+            lineHeight: 1.75,
+          }}
+        >
+          <div style={{ fontWeight: 900, marginBottom: 4 }}>
+            طريقة الربط المجانية مع Gmail في 3 خطوات سريعة (بدون أي رسوم):
+          </div>
+          <div>
+            1. افتح صفحة كلمات مرور التطبيقات في حساب جوجل الخاص بك:{' '}
+            <a
+              href="https://myaccount.google.com/apppasswords"
+              target="_blank"
+              rel="noreferrer"
+              dir="ltr"
+              style={{ fontWeight: 800, color: '#0a6fa8', textDecoration: 'underline' }}
+            >
+              https://myaccount.google.com/apppasswords
+            </a>
+          </div>
+          <div>
+            2. اكتب اسم التطبيق <strong>ELHELB</strong> واضغط إنشاء، فسيعطيك جوجل كوداً مكوناً من{' '}
+            <strong>16 حرفاً</strong>.
+          </div>
+          <div>
+            3. الصق إيميلك الـ Gmail والكود المكون من 16 حرفاً بالأسفل واضغط <strong>حفظ</strong> ثم جرب زر{' '}
+            <strong>إرسال رسالة تجريبية</strong>!
+          </div>
+        </div>
+
+        <form onSubmit={handleSaveGmail}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+            <div className="form-group">
+              <label className="form-label">إيميل Gmail المرسل (الذي سيرسل منه الموقع) *</label>
+              <input
+                type="email"
+                className="form-input"
+                dir="ltr"
+                style={{ textAlign: 'left' }}
+                placeholder="company.elhelb@gmail.com"
+                value={gmailUser}
+                onChange={(e) => setGmailUser(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">
+                كلمة مرور التطبيق من جوجل (App Password — 16 حرفاً){' '}
+                {appPasswordSaved ? '(محفوظة مسبقاً ✅)' : '*'}
+              </label>
+              <input
+                type="password"
+                className="form-input"
+                dir="ltr"
+                style={{ textAlign: 'left' }}
+                placeholder={appPasswordSaved ? '•••••••••••••••• (اتركها فارغة للإبقاء عليها)' : 'xxxx xxxx xxxx xxxx'}
+                value={gmailAppPassword}
+                onChange={(e) => setGmailAppPassword(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">اسم المرسل الذي يظهر في رسائل Gmail</label>
+              <input
+                type="text"
+                className="form-input"
+                value={senderName}
+                onChange={(e) => setSenderName(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">
+                إيميل الإدارة / رئيس مجلس الإدارة لاستلام نسخة من كل الإشعارات (اختياري)
+              </label>
+              <input
+                type="email"
+                className="form-input"
+                dir="ltr"
+                style={{ textAlign: 'left' }}
+                placeholder="chairman@gmail.com"
+                value={adminNotifyEmail}
+                onChange={(e) => setAdminNotifyEmail(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: 12,
+              marginTop: 8,
+              paddingTop: 14,
+              borderTop: '1px solid #e2e8f0',
+            }}
+          >
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 800, fontSize: 13.5 }}>
+              <input
+                type="checkbox"
+                checked={enabled}
+                onChange={(e) => setEnabled(e.target.checked)}
+              />
+              تفعيل إرسال الإشعارات تلقائياً (انضمام الموظفين، اعتماد الأقسام، طلبات الصلاحيات، والمهام)
+            </label>
+
+            <button type="submit" className="btn btn-primary" disabled={saving}>
+              <Save size={16} />
+              {saving ? 'جاري الحفظ...' : 'حفظ إعدادات Gmail'}
+            </button>
+          </div>
+        </form>
+
+        {/* Live Test Sender */}
+        <div
+          style={{
+            marginTop: 20,
+            padding: 16,
+            borderRadius: 12,
+            background: '#f8fafc',
+            border: '1px solid #e2e8f0',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 12,
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontWeight: 800, fontSize: 14, color: '#0b2545' }}>
+              فحص الإرسال الفوري إلى بريدك الآن:
+            </div>
+            <div style={{ fontSize: 12, color: '#64748b' }}>
+              اكتب أي إيميل Gmail واضغط إرسال للتأكد من وصول الإشعارات لصندوق الوارد فوراً.
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input
+              type="email"
+              className="form-input"
+              dir="ltr"
+              style={{ width: 250, textAlign: 'left' }}
+              placeholder="your.email@gmail.com"
+              value={testTarget}
+              onChange={(e) => setTestTarget(e.target.value)}
+            />
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ background: '#059669', borderColor: '#059669' }}
+              disabled={testing}
+              onClick={handleSendTestEmail}
+            >
+              <Send size={15} />
+              {testing ? 'جاري الإرسال...' : 'إرسال رسالة تجريبية الآن'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Email Logs Table */}
+      <div className="card-box">
+        <h3 style={{ margin: '0 0 12px', fontSize: 15.5, fontWeight: 800, color: '#0b2545' }}>
+          سجل رسائل وإشعارات البريد الإلكتروني الأخيرة ({emailLogs.length})
+        </h3>
+        {emailLogs.length === 0 ? (
+          <div style={{ padding: 22, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
+            لا توجد رسائل مسجلة بعد.
+          </div>
+        ) : (
+          <div className="data-table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>الحالة</th>
+                  <th>المستلم</th>
+                  <th>عنوان الإشعار</th>
+                  <th>ملاحظات</th>
+                  <th>التوقيت</th>
+                </tr>
+              </thead>
+              <tbody>
+                {emailLogs.map((log) => (
+                  <tr key={log.id}>
+                    <td>
+                      {log.status === 'SENT' ? (
+                        <span className="badge" style={{ background: '#dcfce7', color: '#166534' }}>
+                          تم الإرسال ✅
+                        </span>
+                      ) : log.status === 'SKIPPED_NOT_CONFIGURED' ? (
+                        <span className="badge" style={{ background: '#fef3c7', color: '#92400e' }}>
+                          بانتظار ربط Gmail
+                        </span>
+                      ) : (
+                        <span className="badge" style={{ background: '#fee2e2', color: '#991b1b' }}>
+                          خطأ إرسال
+                        </span>
+                      )}
+                    </td>
+                    <td dir="ltr" style={{ textAlign: 'right', fontFamily: 'monospace', fontSize: 12 }}>
+                      {log.to_email}
+                    </td>
+                    <td style={{ fontWeight: 700, fontSize: 13 }}>{log.subject}</td>
+                    <td style={{ fontSize: 12, color: '#64748b' }}>{log.error_message || 'تم التوصيل بنجاح'}</td>
+                    <td style={{ fontSize: 12, color: '#64748b', whiteSpace: 'nowrap' }}>
+                      {formatSqliteDate(log.created_at)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ==========================================
+   5. GOOGLE & FACEBOOK OAUTH SETTINGS (للـ IT والإدارة)
    ========================================== */
 function OAuthSettingsPanel({ showToast }) {
   const [settings, setSettings] = useState(null);

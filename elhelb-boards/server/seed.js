@@ -554,11 +554,13 @@ function seedIfNeeded() {
     run(
       `INSERT INTO users (
         username, email, password_hash, full_name, job_title, avatar_color,
-        auth_provider, oauth_id, onboarding_status, preferred_department_id, role_id, department_id
-      ) VALUES (?, ?, '', ?, ?, '#ea4335', 'google', 'google-demo-101', 'pending', ?, ?, NULL)`,
+        auth_provider, oauth_id, has_custom_credentials, department_confirmed,
+        onboarding_status, preferred_department_id, role_id, department_id
+      ) VALUES (?, ?, ?, ?, ?, '#ea4335', 'google', 'google-demo-101', 1, 1, 'pending', ?, ?, NULL)`,
       [
         'ahmed.hossam',
         'ahmed.hossam@gmail.com',
+        defaultHash,
         'أحمد حسام الدين',
         'مسؤول شحن وتصدير دولي',
         exportDept,
@@ -569,14 +571,13 @@ function seedIfNeeded() {
     run(
       `INSERT INTO users (
         username, email, password_hash, full_name, job_title, avatar_color,
-        auth_provider, oauth_id, onboarding_status, preferred_department_id, role_id, department_id
-      ) VALUES (?, ?, '', ?, ?, '#1877f2', 'facebook', 'fb-demo-202', 'pending', ?, ?, NULL)`,
+        auth_provider, oauth_id, has_custom_credentials, department_confirmed,
+        onboarding_status, preferred_department_id, role_id, department_id
+      ) VALUES (?, ?, '', ?, '', '#1877f2', 'facebook', 'fb-demo-202', 0, 0, 'pending', NULL, ?, NULL)`,
       [
         'noha.fouad',
-        'noha.fouad@facebook.com',
+        'noha.fouad@gmail.com',
         'د. نهى فؤاد',
-        'أخصائي ملفات تسجيل منتجات',
-        regDept,
         pendingRole,
       ]
     );

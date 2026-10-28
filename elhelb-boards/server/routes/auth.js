@@ -90,6 +90,8 @@ function serializeCurrentUser(user) {
     avatarColor: user.avatar_color,
     avatarUrl: user.avatar_url || null,
     authProvider: user.auth_provider || 'local',
+    hasCustomCredentials: Boolean(user.has_custom_credentials),
+    departmentConfirmed: Boolean(user.department_confirmed),
     onboardingStatus: user.onboarding_status || 'approved',
     preferredDepartmentId: user.preferred_department_id || null,
     preferredDepartmentName: user.preferred_department_name || null,

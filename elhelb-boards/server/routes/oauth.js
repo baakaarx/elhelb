@@ -130,14 +130,16 @@ function findOrCreateSocialUser({
 
   const username = generateUniqueUsername(cleanEmail || cleanName, provider);
   const avatarColor = provider === 'facebook' ? '#1877f2' : '#ea4335';
+  const deptConfirmed = validPrefDept ? 1 : 0;
 
   const newUserId = transaction(() => {
     const uid = run(
       `INSERT INTO users (
         username, email, password_hash, full_name, job_title,
         avatar_color, avatar_url, auth_provider, oauth_id,
+        has_custom_credentials, department_confirmed,
         onboarding_status, preferred_department_id, role_id, department_id
-      ) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NULL)`,
+      ) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, 0, ?, 'pending', ?, ?, NULL)`,
       [
         username,
         cleanEmail || null,
@@ -147,41 +149,11 @@ function findOrCreateSocialUser({
         avatarUrl || null,
         provider,
         oauthId ? String(oauthId) : `${provider}-${crypto.randomUUID()}`,
+        deptConfirmed,
         validPrefDept ? validPrefDept.id : null,
         pendingRole.id,
       ]
     ).lastInsertRowid;
-
-    // Notify relevant Department Heads + IT + Leadership
-    const notifyTargets = all(
-      `SELECT DISTINCT u.id, u.department_id
-       FROM users u
-       JOIN role_permissions rp ON rp.role_id = u.role_id
-       WHERE u.is_active = 1
-         AND u.onboarding_status = 'approved'
-         AND rp.permission_key IN ('department.onboard_members', 'users.manage')`
-    );
-
-    const providerLabel = provider === 'facebook' ? 'Facebook' : 'Google';
-    for (const mgr of notifyTargets) {
-      // Notify all global admins/IT + the preferred department head (or all dept heads if no dept selected)
-      const isGlobalOrMatching =
-        !mgr.department_id ||
-        !validPrefDept ||
-        Number(mgr.department_id) === Number(validPrefDept.id);
-      if (isGlobalOrMatching) {
-        run(
-          `INSERT INTO notifications (user_id, type, title, message, link_tab)
-           VALUES (?, 'onboarding_new', 'موظف جديد بانتظار الضم إلى القسم', ?, 'onboarding')`,
-          [
-            mgr.id,
-            `سجّل (${cleanName}) الدخول عبر ${providerLabel}${
-              validPrefDept ? ` ويطلب الانضمام إلى (${validPrefDept.name})` : ''
-            }. اضغط لضمه وتحديد صلاحياته.`,
-          ]
-        );
-      }
-    }
 
     return uid;
   });

@@ -8,6 +8,11 @@ const {
   denyPermission,
 } = require('../rbac');
 const { getOAuthCredentials, getBaseOrigin } = require('./oauth');
+const {
+  getGmailConfig,
+  sendTestGmail,
+  getRecentEmailLogs,
+} = require('../mailer');
 
 const router = express.Router();
 router.use(authenticate);
@@ -474,6 +479,10 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
   const body = req.body || {};
   const fullName =
     body.fullName !== undefined ? String(body.fullName).trim() : existing.full_name;
+  const email =
+    body.email !== undefined
+      ? String(body.email || '').trim().toLowerCase() || null
+      : existing.email;
   const jobTitle =
     body.jobTitle !== undefined ? String(body.jobTitle).trim().slice(0, 100) : existing.job_title;
   const roleId = body.roleId !== undefined ? Number(body.roleId) : existing.role_id;
@@ -553,7 +562,7 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
 
   run(
     `UPDATE users
-     SET full_name = ?, job_title = ?, role_id = ?, department_id = ?,
+     SET full_name = ?, email = ?, job_title = ?, role_id = ?, department_id = ?,
          onboarding_status = ?,
          approved_by = COALESCE(approved_by, ?),
          approved_at = COALESCE(approved_at, datetime('now')),
@@ -561,6 +570,7 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
      WHERE id = ?`,
     [
       fullName,
+      email,
       jobTitle,
       role.id,
       departmentId,
@@ -806,6 +816,115 @@ router.put('/oauth-settings', (req, res) => {
     googleConfigured: Boolean(creds.googleClientId && creds.googleClientSecret),
     facebookConfigured: Boolean(creds.facebookAppId && creds.facebookAppSecret),
   });
+});
+
+// ==========================================
+// GMAIL NOTIFICATIONS INTEGRATION (ربط إشعارات Gmail)
+// ==========================================
+
+router.get('/gmail-settings', (req, res) => {
+  if (
+    !evaluatePermission(req.user, 'roles.manage').allowed &&
+    !evaluatePermission(req.user, 'users.manage').allowed
+  ) {
+    return denyPermission(req, res, {
+      permissionKey: 'roles.manage',
+      actionLabel: 'عرض إعدادات ربط إشعارات Gmail',
+      canRequestElevation: false,
+    });
+  }
+
+  const cfg = getGmailConfig();
+  res.json({
+    gmailUser: cfg.gmailUser,
+    appPasswordSaved: Boolean(cfg.gmailAppPassword),
+    configured: cfg.configured,
+    enabled: cfg.enabled,
+    senderName: cfg.senderName,
+    adminNotifyEmail: cfg.adminNotifyEmail,
+    emailLogs: getRecentEmailLogs(40),
+  });
+});
+
+router.put('/gmail-settings', (req, res) => {
+  if (!evaluatePermission(req.user, 'roles.manage').allowed) {
+    return denyPermission(req, res, {
+      permissionKey: 'roles.manage',
+      actionLabel: 'تحديث إعدادات ربط إشعارات Gmail',
+      canRequestElevation: false,
+    });
+  }
+
+  const body = req.body || {};
+  if (body.gmailUser !== undefined) {
+    setSetting('gmail_user', String(body.gmailUser || '').trim().toLowerCase());
+  }
+  if (
+    body.gmailAppPassword !== undefined &&
+    String(body.gmailAppPassword).replace(/\s+/g, '') !== ''
+  ) {
+    setSetting(
+      'gmail_app_password',
+      String(body.gmailAppPassword).replace(/\s+/g, '')
+    );
+  }
+  if (body.clearAppPassword) {
+    setSetting('gmail_app_password', '');
+  }
+  if (body.senderName !== undefined) {
+    setSetting('gmail_sender_name', String(body.senderName || '').trim());
+  }
+  if (body.adminNotifyEmail !== undefined) {
+    setSetting(
+      'gmail_admin_cc',
+      String(body.adminNotifyEmail || '').trim().toLowerCase()
+    );
+  }
+  if (body.enabled !== undefined) {
+    setSetting('gmail_enabled', body.enabled ? '1' : '0');
+  }
+
+  writeAudit({
+    user: req.user,
+    action: 'تحديث إعدادات ربط إشعارات Gmail',
+    permissionKey: 'roles.manage',
+    status: 'ALLOWED',
+    req,
+  });
+
+  const cfg = getGmailConfig();
+  res.json({
+    ok: true,
+    configured: cfg.configured,
+    enabled: cfg.enabled,
+  });
+});
+
+router.post('/gmail-settings/test', async (req, res) => {
+  if (!evaluatePermission(req.user, 'roles.manage').allowed) {
+    return denyPermission(req, res, {
+      permissionKey: 'roles.manage',
+      actionLabel: 'إرسال بريد اختباري عبر Gmail',
+      canRequestElevation: false,
+    });
+  }
+
+  try {
+    const targetEmail = req.body && req.body.targetEmail;
+    const result = await sendTestGmail(targetEmail);
+    writeAudit({
+      user: req.user,
+      action: 'إرسال إيميل تجريبي عبر Gmail بنجاح',
+      permissionKey: 'roles.manage',
+      status: 'ALLOWED',
+      req,
+      details: `إلى: ${result.to}`,
+    });
+    res.json(result);
+  } catch (err) {
+    const code = err.statusCode || 500;
+    res.status(code).json({ error: err.message || 'تعذر إرسال الرسالة التجريبية' });
+  }
 });
 
 // ==========================================
