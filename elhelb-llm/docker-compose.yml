@@ -1,0 +1,28 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: elhelb-ollama-local
+    restart: unless-stopped
+    # معزول على الشبكة الداخلية فقط ولا يُكشف للإنترنت الخارجي
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+
+  elhelb-private-ai:
+    build: .
+    container_name: elhelb-private-ai
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - HOST=0.0.0.0
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - ollama
+
+volumes:
+  ollama_models:

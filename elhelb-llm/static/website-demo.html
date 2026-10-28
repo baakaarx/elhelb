@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <title>معاينة تركيب الشات بوت على موقع elhelbgroup.com</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: 'Cairo', sans-serif;
+        background: #f4f7f9;
+        color: #0f172a;
+      }
+      .site-nav {
+        background: #04060b;
+        border-bottom: 2px solid #d4a90a;
+        color: #fff;
+        padding: 14px 28px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .site-brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .site-brand img {
+        width: 48px;
+        height: 48px;
+        object-fit: contain;
+      }
+      .hero {
+        background: linear-gradient(135deg, #05080f 0%, #0d1d2f 100%);
+        color: #fff;
+        padding: 46px 24px;
+        text-align: center;
+      }
+      .hero h1 {
+        margin: 0 0 10px;
+        font-size: 1.75rem;
+        color: #f6d86b;
+      }
+      .hero p {
+        margin: 0 auto;
+        max-width: 680px;
+        color: #cbd5e1;
+        line-height: 1.8;
+      }
+      .container {
+        max-width: 920px;
+        margin: 28px auto 110px;
+        padding: 0 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #e2e8f0;
+        border-radius: 18px;
+        padding: 22px 24px;
+        box-shadow: 0 6px 20px rgba(15, 23, 42, 0.04);
+      }
+      .card h2 {
+        margin: 0 0 10px;
+        font-size: 1.15rem;
+        color: #0f172a;
+      }
+      pre {
+        background: #060a12;
+        color: #f8fafc;
+        border: 1px solid rgba(212, 169, 10, 0.4);
+        padding: 14px 16px;
+        border-radius: 12px;
+        direction: ltr;
+        text-align: left;
+        overflow-x: auto;
+        font-size: 0.88rem;
+        line-height: 1.6;
+      }
+      .copy-btn {
+        background: linear-gradient(135deg, #f6d86b 0%, #d4a90a 100%);
+        color: #05080e;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 10px;
+        font-family: inherit;
+        font-weight: 800;
+        cursor: pointer;
+        margin-top: 8px;
+      }
+      .steps li {
+        margin-bottom: 8px;
+        line-height: 1.75;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="site-nav">
+      <div class="site-brand">
+        <img src="/logo.png" alt="ELHELB GROUP" />
+        <div>
+          <div style="font-weight: 800">ELHELB GROUP — elhelbgroup.com</div>
+          <div style="font-size: 0.76rem; color: #94a3b8">معاينة حية لزر الشات بوت العائم أسفل الشاشة</div>
+        </div>
+      </div>
+      <a href="/" style="color: #f6d86b; font-weight: 700; text-decoration: none; font-size: 0.88rem">
+        العودة لصفحة الشات الكاملة ←
+      </a>
+    </header>
+
+    <section class="hero">
+      <h1>معاينة الشات بوت مدمجاً على موقع elhelbgroup.com</h1>
+      <p>
+        بص تحت على اليمين 👇 هتلاقي أيقونة <strong>ELHELB GROUP</strong> الذهبية العائمة شغالة فعلياً! اضغط عليها وجرّب الشات والمايكروفون ورفع الصور كما ستظهر لزوار موقع الشركة الأساسي.
+      </p>
+    </section>
+
+    <main class="container">
+      <div class="card">
+        <h2>1️⃣ كود السطر الواحد لإضافته في موقع الشركة الأساسي (WordPress — elhelbgroup.com)</h2>
+        <p style="color: #475569; font-size: 0.92rem">
+          انسخ هذا السطر الواحد فقط وضعه قبل إغلاق <code>&lt;/body&gt;</code> في موقع ووردبريس، وسيظهر زر المساعد الذكي العائم في كل صفحات الموقع تلقائياً (يدعم الموبايل والكمبيوتر والصوت والصور):
+        </p>
+        <pre id="embed-snippet">&lt;script src="https://ai.elhelbgroup.com/widget.js" defer&gt;&lt;/script&gt;</pre>
+        <button class="copy-btn" onclick="copyCode('embed-snippet', this)">نسخ كود الويدجت العائم</button>
+      </div>
+
+      <div class="card">
+        <h2>2️⃣ خطوات التركيب في لوحة ووردبريس (WordPress Admin) في أقل من دقيقة</h2>
+        <ol class="steps">
+          <li>ارفع هذا المشروع (<code>elhelb-llm</code>) على سيرفر أو دومين فرعي للشركة مثل <code>https://ai.elhelbgroup.com</code> (أو أي VPS خاص بكم).</li>
+          <li>افتح لوحة تحكم موقع الشركة <code>elhelbgroup.com/wp-admin</code>.</li>
+          <li>من إضافة <strong>WPCode (Insert Headers and Footers)</strong> أو إعدادات القالب <strong>Footer Scripts</strong> (أو عنصر HTML في الفوتر بـ Elementor)، الصق سطر الـ <code>&lt;script&gt;</code> أعلاه ثم اضغط <strong>Save</strong>.</li>
+        </ol>
+      </div>
+
+      <div class="card">
+        <h2>3️⃣ (اختياري) لو حبيت تخصص صفحة كاملة للشات داخل موقع الشركة</h2>
+        <p style="color: #475569; font-size: 0.92rem">
+          لو حبيت كمان تعمل صفحة مستقلة في موقعك مثل <code>elhelbgroup.com/agri-ai</code>، ضع بداخلها كود HTML التالي:
+        </p>
+        <pre id="iframe-snippet">&lt;iframe
+  src="https://ai.elhelbgroup.com/"
+  allow="microphone; clipboard-read; clipboard-write"
+  style="width:100%; height:82vh; min-height:600px; border:1px solid #e2e8f0; border-radius:18px;"
+  title="ELHELB GROUP AI"&gt;
+&lt;/iframe&gt;</pre>
+        <button class="copy-btn" onclick="copyCode('iframe-snippet', this)">نسخ كود الصفحة الكاملة</button>
+      </div>
+    </main>
+
+    <script>
+      // تحديث الرابط تلقائياً باسم الدومين الحالي للتجربة الفورية
+      var origin = window.location.origin;
+      document.getElementById('embed-snippet').textContent =
+        '<script src="' + origin + '/widget.js" defer><\/script>';
+      document.getElementById('iframe-snippet').textContent =
+        '<iframe src="' + origin + '/" allow="microphone; clipboard-read; clipboard-write" style="width:100%; height:82vh; min-height:600px; border:1px solid #e2e8f0; border-radius:18px;" title="ELHELB GROUP AI"></iframe>';
+
+      function copyCode(id, btn) {
+        navigator.clipboard.writeText(document.getElementById(id).textContent);
+        var old = btn.textContent;
+        btn.textContent = 'تم النسخ بنجاح ✓';
+        setTimeout(function () {
+          btn.textContent = old;
+        }, 2000);
+      }
+    </script>
+
+    <!-- تشغيل الويدجت العائم الفعلي في هذه الصفحة للمعاينة -->
+    <script src="/widget.js" defer></script>
+  </body>
+</html>
