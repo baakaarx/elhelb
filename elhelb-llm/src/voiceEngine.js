@@ -66,6 +66,20 @@ export function isVoiceOutputSupported() {
   return typeof window !== 'undefined' && Boolean(window.speechSynthesis && window.SpeechSynthesisUtterance);
 }
 
+export function getVoiceDiagnostics() {
+  if (typeof window === 'undefined') {
+    return { secureContext: false, recognition: false, synthesis: false, arabicVoice: false, voices: [] };
+  }
+  const voices = window.speechSynthesis?.getVoices?.() || [];
+  return {
+    secureContext: Boolean(window.isSecureContext),
+    recognition: Boolean(window.SpeechRecognition || window.webkitSpeechRecognition),
+    synthesis: isVoiceOutputSupported(),
+    arabicVoice: voices.some((voice) => /^ar(?:[-_]|$)/i.test(voice.lang)),
+    voices: voices.filter((voice) => /^ar(?:[-_]|$)/i.test(voice.lang)).map((voice) => `${voice.name} (${voice.lang})`),
+  };
+}
+
 export function cleanTextForClientSpeech(text = '') {
   let clean = String(text || '')
     .replace(/```[\s\S]*?```/g, ' تم استخراج النص من الصورة بنجاح. ')
@@ -212,6 +226,7 @@ export function speakArabic(text, { onStart, onEnd, onError } = {}) {
     utterance.lang = voice?.lang || 'ar-EG';
     utterance.rate = 0.9;
     utterance.pitch = 1.04;
+    utterance.volume = 1;
     if (voice) utterance.voice = voice;
     utterance.onstart = () => {
       clearTimeout(startWatchdog);
@@ -234,13 +249,19 @@ export function speakArabic(text, { onStart, onEnd, onError } = {}) {
   waitForVoices().finally(() => setTimeout(speakNext, 60));
 }
 
-export function startArabicRecognition({ onInterim, onFinal, onError, onEnd } = {}) {
+export function startArabicRecognition({ onInterim, onFinal, onError, onEnd, onStatus } = {}) {
   const SpeechRec = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
   if (!SpeechRec) {
-    onError?.('تحويل الصوت إلى نص غير مدعوم في هذا المتصفح. افتح الموقع في Chrome أو Safari، واسمح باستخدام الميكروفون.');
+    onError?.('المتصفح لا يدعم الاستماع المباشر. افتح الموقع في Chrome المحدّث، واسمح بالميكروفون.', 'unsupported');
     return null;
   }
-  const recognition = new SpeechRec();
+  let recognition;
+  try {
+    recognition = new SpeechRec();
+  } catch {
+    onError?.('تعذر تهيئة خدمة الميكروفون في المتصفح. جرّب Chrome المحدّث وافحص إذن الميكروفون.', 'init-failed');
+    return null;
+  }
   recognition.lang = 'ar-EG';
   recognition.continuous = true;
   recognition.interimResults = true;
@@ -248,7 +269,18 @@ export function startArabicRecognition({ onInterim, onFinal, onError, onEnd } = 
   const finals = new Map();
   let latest = '';
   let delivered = false;
+  let ended = false;
   let pauseTimer = null;
+  let startTimer = null;
+  const clearTimers = () => {
+    clearTimeout(pauseTimer);
+    clearTimeout(startTimer);
+  };
+  recognition.onstart = () => {
+    clearTimeout(startTimer);
+    onStatus?.('listening');
+  };
+  recognition.onaudiostart = () => onStatus?.('audio');
   recognition.onresult = (event) => {
     let interim = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -260,25 +292,65 @@ export function startArabicRecognition({ onInterim, onFinal, onError, onEnd } = 
     latest = [...finals.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value).concat(interim.trim() ? [interim.trim()] : []).join(' ').trim();
     onInterim?.(latest);
     clearTimeout(pauseTimer);
-    if (latest) pauseTimer = setTimeout(() => { try { recognition.stop(); } catch {} }, 3200);
+    if (latest) pauseTimer = setTimeout(() => {
+      onStatus?.('processing');
+      try { recognition.stop(); } catch { finish(); }
+    }, 2400);
   };
-  recognition.onerror = (event) => {
-    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') onError?.('يرجى السماح للمتصفح باستخدام الميكروفون، وتأكد من فتح الموقع عبر HTTPS.');
-    else if (event.error === 'no-speech') onError?.('لم أسمع كلاماً واضحاً؛ اضغط الميكروفون وتحدث مرة أخرى.');
-    else if (event.error === 'network') onError?.('خدمة التفريغ الصوتي غير متاحة من هذا المتصفح أو الشبكة. افتح الموقع في Chrome أو Safari واتصل بالإنترنت ثم حاول مجدداً.');
-    else if (event.error !== 'aborted') onError?.('تعذر التقاط الصوت؛ حاول مجدداً أو اكتب سؤالك.');
-  };
-  recognition.onend = () => {
-    clearTimeout(pauseTimer);
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    clearTimers();
     const text = [...finals.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value).join(' ').trim() || latest;
-    if (!delivered && text) { delivered = true; onFinal?.(text); }
+    if (!delivered && text) {
+      delivered = true;
+      onFinal?.(text);
+    }
+    onStatus?.('ended');
     onEnd?.(text);
   };
-  try { recognition.start(); }
-  catch { onError?.('تعذر تشغيل الميكروفون. تحقق من الإذن وأغلق أي تطبيق آخر يستخدمه.'); return null; }
+  recognition.onerror = (event) => {
+    clearTimeout(startTimer);
+    const code = event?.error || 'unknown';
+    const messages = {
+      'not-allowed': 'إذن الميكروفون مرفوض. من إعدادات الموقع في Chrome فعّل الميكروفون، ثم أعد المحاولة.',
+      'service-not-allowed': 'خدمة التعرف على الكلام محظورة. اسمح لـ Chrome باستخدام الميكروفون وخدمات الصوت.',
+      'no-speech': 'ما وصلنيش كلام واضح؛ هحاول أفتح الميكروفون تاني.',
+      network: 'المتصفح لم يتمكن من تشغيل خدمة تحويل الكلام إلى نص. تأكد من الإنترنت وإعدادات «الكتابة بالصوت» في الجهاز، ثم جرّب Chrome.',
+      'audio-capture': 'لم أجد ميكروفوناً متاحاً. افصل سماعة البلوتوث أو أغلق التطبيق الذي يستخدم الميكروفون.',
+      'language-not-supported': 'التعرف على العربية غير متاح في خدمة الصوت على هذا الجهاز.',
+    };
+    if (code !== 'aborted') {
+      onStatus?.('error');
+      onError?.(messages[code] || `تعذر التقاط الصوت (${code}). افحص إذن الميكروفون ثم أعد المحاولة.`, code);
+    }
+  };
+  recognition.onend = finish;
+  onStatus?.('starting');
+  try {
+    recognition.start();
+    startTimer = setTimeout(() => {
+      if (!ended) {
+        onError?.('المتصفح لم يبدأ الاستماع. تأكد أن إذن الميكروفون مسموح وأن «الكتابة بالصوت» مفعلة في الجهاز.', 'start-timeout');
+        try { recognition.abort(); } catch {}
+      }
+    }, 9000);
+  } catch {
+    clearTimers();
+    onError?.('تعذر بدء الميكروفون. أعد تحميل الصفحة، واسمح بالميكروفون، ثم حاول مرة واحدة أخرى.', 'start-failed');
+    return null;
+  }
   return {
-    stop: () => { try { recognition.stop(); } catch {} },
-    abort: () => { delivered = true; clearTimeout(pauseTimer); try { recognition.abort(); } catch {} },
+    stop: () => {
+      if (ended) return;
+      onStatus?.('processing');
+      try { recognition.stop(); } catch { finish(); }
+    },
+    abort: () => {
+      delivered = true;
+      clearTimers();
+      try { recognition.abort(); } catch {}
+    },
   };
 }
 
