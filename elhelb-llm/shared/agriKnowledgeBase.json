@@ -121,6 +121,28 @@
       "packs": "500 مل"
     }
   ],
+  "fertilizers": [
+    {"name":"New Fruity","arabic":"نيو فروتي","formula":"10-10-40"},
+    {"name":"New Fruit Star","arabic":"نيو فروت ستار","formula":"10-55-10"},
+    {"name":"Super Plant Care","arabic":"سوبر بلانت كير","formula":"20-20-20"},
+    {"name":"Fine","arabic":"فاين","formula":"19-19-19"},
+    {"name":"Leader","arabic":"ليدر","formula":"15-42-9"},
+    {"name":"Right","arabic":"رايت","formula":"12-5-43"},
+    {"name":"Super Boost","arabic":"سوبر بوست","formula":"10-5-8"},
+    {"name":"Gruna","arabic":"جرونا","formula":"12-4-4"},
+    {"name":"Zanden","arabic":"زاندن","formula":"زنك 14%"},
+    {"name":"Mertan","arabic":"ميرتان","formula":"منجنيز 14%"},
+    {"name":"New Vertac","arabic":"نيو فيرتاك","formula":"حديد 14%"},
+    {"name":"Super Vertac","arabic":"سوبر فيرتاك","formula":"حديد 6%"},
+    {"name":"New Catro","arabic":"نيو كاترو","formula":"كالسيوم 10%"},
+    {"name":"Bloom Ca-B","arabic":"بلوم كالسيوم بورون","formula":"Ca-B"},
+    {"name":"Super Potassium","arabic":"سوبر بوتاسيوم","formula":"بوتاسيوم 36.5%"},
+    {"name":"Petunia","arabic":"بيتُونيا","formula":"بوتاسيوم 33%"},
+    {"name":"Built-up","arabic":"بيلت أب","formula":"فوسفور وبوتاسيوم 30/40"},
+    {"name":"Alpha Green","arabic":"ألفا جرين","formula":"مستخلص طحالب"},
+    {"name":"Besiege","arabic":"بيسيج","formula":"بورون 10%"},
+    {"name":"Top Film","arabic":"توب فيلم","formula":"مادة ناشرة"}
+  ],
   "protocols": [
     {
       "issue": "الندوة المبكرة والمتأخرة في البطاطس والطماطم",

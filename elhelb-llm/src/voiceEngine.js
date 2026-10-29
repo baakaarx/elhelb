@@ -18,8 +18,45 @@ const BRAND_SPEECH_ALIASES = [
   ['Prince', 'برنس'], ['Solano', 'سولانو'], ['Diver', 'دايفر'],
   ['Tiger', 'تايجر'], ['New Fruity', 'نيو فروتي'], ['New Fruit Star', 'نيو فروت ستار'],
   ['Super Plant Care', 'سوبر بلانت كير'], ['Super Boost', 'سوبر بوست'],
-  ['Alpha Green', 'ألفا جرين'], ['Top Film', 'توب فيلم'], ['ELHELB GROUP', 'مجموعة الهلب'],
+  ['Alpha Green', 'ألفا جرين'], ['Top Film', 'توب فيلم'], ['Fine', 'فاين'], ['Leader', 'ليدر'],
+  ['Right', 'رايت'], ['Gruna', 'جرونا'], ['Zanden', 'زاندن'], ['Mertan', 'ميرتان'],
+  ['New Vertac', 'نيو فيرتاك'], ['Super Vertac', 'سوبر فيرتاك'], ['New Catro', 'نيو كاترو'],
+  ['Bloom Ca-B', 'بلوم كا بي'], ['Super Potassium', 'سوبر بوتاسيوم'], ['Petunia', 'بيتونيا'],
+  ['Built-up', 'بيلت أب'], ['Besiege', 'بيسيج'], ['ELHELB GROUP', 'مجموعة الهلب'],
 ];
+
+const EGYPTIAN_NUMBERS = ['صفر', 'واحد', 'اتنين', 'تلاتة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'تمانية', 'تسعة'];
+const EGYPTIAN_TEENS = { 10: 'عشرة', 11: 'حداشر', 12: 'اتناشر', 13: 'تلتاشر', 14: 'أربعتاشر', 15: 'خمستاشر', 16: 'ستاشر', 17: 'سبعتاشر', 18: 'تمنتاشر', 19: 'تسعتاشر' };
+const EGYPTIAN_TENS = ['', '', 'عشرين', 'تلاتين', 'أربعين', 'خمسين', 'ستين', 'سبعين', 'تمانين', 'تسعين'];
+const EGYPTIAN_HUNDREDS = ['', 'مية', 'ميتين', 'تلتمية', 'أربعمية', 'خمسمية', 'ستمِية', 'سبعمية', 'تمنمية', 'تسعمية'];
+
+function numberToEgyptianArabic(raw) {
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return raw;
+  if (raw.includes('.')) {
+    const [whole, fraction] = raw.split('.');
+    const decimals = fraction.split('').map((digit) => EGYPTIAN_NUMBERS[Number(digit)]).join(' ');
+    return `${numberToEgyptianArabic(whole)} فاصلة ${decimals}`;
+  }
+  if (value < 10) return EGYPTIAN_NUMBERS[value];
+  if (value < 20) return EGYPTIAN_TEENS[value];
+  if (value < 100) {
+    const tens = Math.floor(value / 10);
+    const ones = value % 10;
+    return ones ? `${EGYPTIAN_NUMBERS[ones]} و${EGYPTIAN_TENS[tens]}` : EGYPTIAN_TENS[tens];
+  }
+  if (value < 1000) {
+    const hundreds = Math.floor(value / 100);
+    const rest = value % 100;
+    return rest ? `${EGYPTIAN_HUNDREDS[hundreds]} و${numberToEgyptianArabic(String(rest))}` : EGYPTIAN_HUNDREDS[hundreds];
+  }
+  if (value < 1000000) {
+    const thousands = Math.floor(value / 1000);
+    const rest = value % 1000;
+    return rest ? `${numberToEgyptianArabic(String(thousands))} ألف و${numberToEgyptianArabic(String(rest))}` : `${numberToEgyptianArabic(String(thousands))} ألف`;
+  }
+  return raw.split('').map((digit) => EGYPTIAN_NUMBERS[Number(digit)]).join(' ');
+}
 
 export function isVoiceInputSupported() {
   return typeof window !== 'undefined' && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition || window.MediaRecorder);
@@ -48,8 +85,12 @@ export function cleanTextForClientSpeech(text = '') {
     .replace(/(\d+(?:\.\d+)?)\s*%/g, '$1 في المية')
     .replace(/(\d)\s*\/\s*(?=\d|[\u0600-\u06FF])/g, '$1 لكل ')
     .replace(/\s*\/\s*(?=[\u0600-\u06FF])/g, ' لكل ')
+    .replace(/\s*\/\s*/g, ' لكل ')
     .replace(/(?<=\d)\.(?=\d)/g, ' فاصلة ')
+    .replace(/(?<=\d)\s*[–—]\s*(?=\d)/g, ' لحد ')
+    .replace(/(?<=\d)\s*-\s*(?=\d)/g, '، ')
     .replace(/\b[A-Za-z][A-Za-z0-9+._%-]*\b/g, ' ')
+    .replace(/(?<![\p{L}\p{N}])(\d+(?:\.\d+)?)(?![\p{L}\p{N}])/gu, (_match, number) => numberToEgyptianArabic(number))
     .replace(/[|#*_~<>]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -165,6 +206,8 @@ export function speakArabic(text, { onStart, onEnd, onError } = {}) {
     if (index >= chunks.length) { finish(); return; }
     const utterance = new window.SpeechSynthesisUtterance(chunks[index++]);
     const voice = pickBestArabicVoice();
+    // لا نختار صوتاً إنجليزياً صراحةً؛ نترك المحرك يختار أفضل صوت متاح مع تعيين ar-EG.
+    // الأرقام والاختصارات حُوّلت إلى ألفاظ عربية قبل الوصول إلى المحرك.
     startWatchdog = setTimeout(() => finish(new Error('لم يبدأ الصوت العربي. فعّل صوت العربية في إعدادات الجهاز ثم حاول مرة أخرى.')), 8000);
     utterance.lang = voice?.lang || 'ar-EG';
     utterance.rate = 0.9;
