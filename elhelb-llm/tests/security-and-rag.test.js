@@ -55,12 +55,21 @@ async function testBrowserVoiceEngineWiring() {
   assert.ok(recHandle && recognition.started);
   assert.equal(recognition.lang, 'ar-EG');
   recognition.onstart();
-  const result = [{ transcript: 'ازيك يا هندسة' }];
-  result.isFinal = true;
-  recognition.onresult({ resultIndex: 0, results: [result] });
+  const makeResult = (value, isFinal = true) => {
+    const item = [{ transcript: value }];
+    item.isFinal = isFinal;
+    return item;
+  };
+  recognition.onresult({ resultIndex: 0, results: [makeResult('ازيك')] });
+  recognition.onresult({ resultIndex: 1, results: [makeResult('ازيك'), makeResult('ازيك يا هندسة')] });
   recognition.onend();
-  assert.ok(transcript.includes('final:ازيك يا هندسة'));
+  assert.ok(transcript.includes('final:ازيك يا هندسة'), 'يجب دمج نتائج التعرف التراكمية بدون تكرار الكلام');
+  assert.equal(voiceModule.exports.deduplicateSpeechTranscript('عندي عندي عندي مشكلة عندي مشكلة عندي مشكلة'), 'عندي مشكلة');
+  assert.equal(voiceModule.exports.deduplicateSpeechTranscript('عندي مشكلة عايزك عندي مشكلة'), 'عندي مشكلة عايزك');
   assert.ok(statuses.includes('listening'));
+  const alternateRecognition = voiceModule.exports.startArabicRecognition({ lang: 'ar-SA' });
+  assert.equal(recognitionInstances[1].lang, 'ar-SA', 'يجب تمرير اختيار اللغة العربية إلى محرك الميكروفون');
+  alternateRecognition.abort();
 
   const utterances = [];
   const synth = {
