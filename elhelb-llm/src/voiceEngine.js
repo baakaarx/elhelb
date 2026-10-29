@@ -1,3 +1,26 @@
+const BRAND_SPEECH_ALIASES = [
+  ['Bromo Plus', 'برومو بلس'], ['H-Sulphur', 'إتش سلفر'], ['Soli-Sulphur', 'سولي سلفر'],
+  ['Super-Alpha', 'سوبر ألفا'], ['HelbStar', 'هلب ستار'], ['Nemaprobe', 'نيما بروب'],
+  ['Pyriban', 'بيريبان'], ['Tafaban', 'تافابان'], ['Helban', 'هلبان'],
+  ['Tazolen', 'تازولين'], ['Anadol', 'أنادول'], ['Capitol', 'كابيتول'],
+  ['Developer', 'ديفيلوبر'], ['Dimetox', 'ديميتوكس'], ['Malatox', 'مالاتوكس'],
+  ['Roksan', 'روكسان'], ['Tornado', 'تورنادو'], ['Resolve', 'ريزولف'],
+  ['Solibal', 'سوليبال'], ['Arsenol', 'أرسينول'], ['Avoid', 'أفويد'],
+  ['Diamond', 'دايموند'], ['Fenox', 'فينوكس'], ['Aldo', 'ألدو'],
+  ['Pasha', 'باشا'], ['Ferari', 'فيراري'], ['Caprice', 'كابريس'],
+  ['Keynot', 'كي نوت'], ['Crown', 'كراون'], ['Copral', 'كوبـرال'],
+  ['Hesta', 'هيستا'], ['Mouler', 'مولر'], ['Peak', 'بيك'], ['Dodjo', 'دودجو'],
+  ['Turbo', 'توربو'], ['Rolex', 'رولكس'], ['Index', 'إندكس'],
+  ['Best', 'بيست'], ['Gold', 'جولد'], ['Fabyan', 'فابيان'],
+  ['Outlock', 'أوتلوك'], ['Venol', 'فينول'], ['Imopk', 'إيموبك'],
+  ['Grendo', 'جريندو'], ['Novo', 'نوفو'], ['Cord', 'كورد'],
+  ['Master', 'ماستر'], ['Smart', 'سمارت'], ['Ragno', 'راجنو'],
+  ['Prince', 'برنس'], ['Solano', 'سولانو'], ['Diver', 'دايفر'],
+  ['Tiger', 'تايجر'], ['New Fruity', 'نيو فروتي'], ['New Fruit Star', 'نيو فروت ستار'],
+  ['Super Plant Care', 'سوبر بلانت كير'], ['Super Boost', 'سوبر بوست'],
+  ['Alpha Green', 'ألفا جرين'], ['Top Film', 'توب فيلم'], ['ELHELB GROUP', 'مجموعة الهلب'],
+];
+
 export function isVoiceInputSupported() {
   return typeof window !== 'undefined' && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition || window.MediaRecorder);
 }
@@ -7,13 +30,29 @@ export function isVoiceOutputSupported() {
 }
 
 export function cleanTextForClientSpeech(text = '') {
-  return String(text || '')
-    .replace(/```[\s\S]*?```/g, ' تم قراءة النص من الصورة. ')
-    .replace(/\*\*([^*]+)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1')
-    .replace(/[#>*_~|•]/g, ' ')
-    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '')
-    .replace(/(\d+(?:\.\d+)?)\s*%/g, '$1 في المائة')
-    .replace(/\s+/g, ' ').trim();
+  let clean = String(text || '')
+    .replace(/```[\s\S]*?```/g, ' تم استخراج النص من الصورة بنجاح. ')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/https?:\/\/\S+/gi, ' رابط الموقع الرسمي ')
+    .replace(/[\u{1F300}-\u{1FAFF}\u2600-\u27BF]/gu, ' ');
+
+  for (const [english, arabic] of BRAND_SPEECH_ALIASES) {
+    clean = clean.replace(new RegExp(`\\b${english.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), arabic);
+  }
+
+  return clean
+    .replace(/\b(?:ELHELB|EC|WP|SC|SL|WG|GR|UL|DP|NPK|K2O|USD|EGP)\b/gi, ' ')
+    .replace(/\b[A-Z][A-Z0-9+.-]{2,}\b/g, ' ')
+    .replace(/(\d+(?:\.\d+)?)\s*%/g, '$1 في المية')
+    .replace(/(\d)\s*\/\s*(?=\d|[\u0600-\u06FF])/g, '$1 لكل ')
+    .replace(/\s*\/\s*(?=[\u0600-\u06FF])/g, ' لكل ')
+    .replace(/(?<=\d)\.(?=\d)/g, ' فاصلة ')
+    .replace(/\b[A-Za-z][A-Za-z0-9+._%-]*\b/g, ' ')
+    .replace(/[|#*_~<>]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function pickBestArabicVoice() {
@@ -24,6 +63,37 @@ function pickBestArabicVoice() {
 }
 
 let activeSpeechCleanup = null;
+let voicesReadyPromise = null;
+
+function waitForVoices() {
+  if (!isVoiceOutputSupported()) return Promise.resolve([]);
+  const synth = window.speechSynthesis;
+  const current = synth.getVoices() || [];
+  if (current.length) return Promise.resolve(current);
+  if (!voicesReadyPromise) {
+    voicesReadyPromise = new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        const voices = synth.getVoices() || [];
+        if (voices.length) {
+          done = true;
+          clearTimeout(timer);
+          synth.removeEventListener?.('voiceschanged', finish);
+          resolve(voices);
+        }
+      };
+      const timer = setTimeout(() => {
+        done = true;
+        synth.removeEventListener?.('voiceschanged', finish);
+        resolve(synth.getVoices() || []);
+      }, 1200);
+      synth.addEventListener?.('voiceschanged', finish);
+      finish();
+    });
+  }
+  return voicesReadyPromise;
+}
 
 export function stopSpeaking() {
   if (activeSpeechCleanup) {
@@ -95,10 +165,10 @@ export function speakArabic(text, { onStart, onEnd, onError } = {}) {
     if (index >= chunks.length) { finish(); return; }
     const utterance = new window.SpeechSynthesisUtterance(chunks[index++]);
     const voice = pickBestArabicVoice();
-    startWatchdog = setTimeout(() => finish(new Error('لم يبدأ الصوت في المتصفح. تحقق من مستوى الصوت أو جرّب متصفحاً آخر.')), 8000);
+    startWatchdog = setTimeout(() => finish(new Error('لم يبدأ الصوت العربي. فعّل صوت العربية في إعدادات الجهاز ثم حاول مرة أخرى.')), 8000);
     utterance.lang = voice?.lang || 'ar-EG';
-    utterance.rate = 0.94;
-    utterance.pitch = 1;
+    utterance.rate = 0.9;
+    utterance.pitch = 1.04;
     if (voice) utterance.voice = voice;
     utterance.onstart = () => {
       clearTimeout(startWatchdog);
@@ -111,21 +181,20 @@ export function speakArabic(text, { onStart, onEnd, onError } = {}) {
       clearTimeout(startWatchdog);
       if (event.error === 'canceled' || event.error === 'interrupted') return;
       if (event.error === 'language-unavailable' || event.error === 'voice-unavailable') {
-        finish(new Error('لا يوجد صوت عربي مفعّل على الجهاز. فعّل/نزّل صوت العربية من إعدادات تحويل النص إلى كلام، ثم أعد المحاولة.'));
+        finish(new Error('لا يوجد صوت عربي مفعّل على الجهاز. نزّل صوت العربية من إعدادات تحويل النص إلى كلام.'));
         return;
       }
       finish(event);
     };
     try { synth.speak(utterance); } catch (err) { finish(err); }
   };
-  // Chromium may cancel a new utterance if cancel() and speak() occur in the same task.
-  setTimeout(speakNext, 60);
+  waitForVoices().finally(() => setTimeout(speakNext, 60));
 }
 
 export function startArabicRecognition({ onInterim, onFinal, onError, onEnd } = {}) {
   const SpeechRec = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
   if (!SpeechRec) {
-    onError?.('التفريغ الصوتي غير مدعوم في هذا المتصفح. جرّب Safari أو Chrome مع السماح بالميكروفون، أو اكتب الشكوى.');
+    onError?.('تحويل الصوت إلى نص غير مدعوم في هذا المتصفح. افتح الموقع في Chrome أو Safari، واسمح باستخدام الميكروفون.');
     return null;
   }
   const recognition = new SpeechRec();
@@ -147,14 +216,14 @@ export function startArabicRecognition({ onInterim, onFinal, onError, onEnd } = 
     }
     latest = [...finals.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value).concat(interim.trim() ? [interim.trim()] : []).join(' ').trim();
     onInterim?.(latest);
-    // أرسل التفريغ تلقائياً بعد وقفة كلام قصيرة؛ ويمكن للمستخدم الإيقاف فوراً بالزر.
     clearTimeout(pauseTimer);
     if (latest) pauseTimer = setTimeout(() => { try { recognition.stop(); } catch {} }, 3200);
   };
   recognition.onerror = (event) => {
-    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') onError?.('يرجى السماح للمتصفح باستخدام الميكروفون. تأكد من فتح الموقع عبر HTTPS.');
+    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') onError?.('يرجى السماح للمتصفح باستخدام الميكروفون، وتأكد من فتح الموقع عبر HTTPS.');
     else if (event.error === 'no-speech') onError?.('لم أسمع كلاماً واضحاً؛ اضغط الميكروفون وتحدث مرة أخرى.');
-    else if (!['aborted', 'network'].includes(event.error)) onError?.('تعذر التقاط الصوت؛ حاول مجدداً أو اكتب سؤالك.');
+    else if (event.error === 'network') onError?.('خدمة التفريغ الصوتي غير متاحة من هذا المتصفح أو الشبكة. افتح الموقع في Chrome أو Safari واتصل بالإنترنت ثم حاول مجدداً.');
+    else if (event.error !== 'aborted') onError?.('تعذر التقاط الصوت؛ حاول مجدداً أو اكتب سؤالك.');
   };
   recognition.onend = () => {
     clearTimeout(pauseTimer);
@@ -163,7 +232,7 @@ export function startArabicRecognition({ onInterim, onFinal, onError, onEnd } = 
     onEnd?.(text);
   };
   try { recognition.start(); }
-  catch (err) { onError?.('تعذر تشغيل الميكروفون. تحقق من إذن الميكروفون وأغلق أي تطبيق آخر يستخدمه.'); return null; }
+  catch { onError?.('تعذر تشغيل الميكروفون. تحقق من الإذن وأغلق أي تطبيق آخر يستخدمه.'); return null; }
   return {
     stop: () => { try { recognition.stop(); } catch {} },
     abort: () => { delivered = true; clearTimeout(pauseTimer); try { recognition.abort(); } catch {} },

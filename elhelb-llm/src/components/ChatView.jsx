@@ -255,7 +255,7 @@ export default function ChatView({
         setIsRecordingVoice(false);
         return;
       }
-      setError('جاري تسجيل الملاحظة الصوتية. بعد الإيقاف استمع للتسجيل واكتب ملخص الشكوى لإرسالها للتحليل.');
+      setError('المتصفح الحالي لا يوفّر تفريغ الكلام العربي. افتح الموقع في Chrome أو Safari واسمح بالميكروفون؛ التسجيل الاحتياطي يُحفظ للاستماع فقط ولا يتحول لنص.');
       startVoiceRecorder({
         onReady: (blob) => {
           setVoiceNoteUrl((previous) => { if (previous) URL.revokeObjectURL(previous); return URL.createObjectURL(blob); });
