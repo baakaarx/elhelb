@@ -395,6 +395,12 @@ function getStandaloneKnowledgeReply(rawText) {
     }
     return `🌱 **مبيدات الحشائش بمجموعة الهلب:**\n${items.map((item) => `• **${item.name}** (${item.active}) — ${item.target}. المعدل والتوقيت: ${item.rate}.`).join('\n')}\n\n⚠️ اتبع ملصق العبوة، فاختيار مبيد الحشائش يتوقف على المحصول ونوع الحشيشة ومرحلة النمو.`;
   }
+  const asksForFertilizerCatalog = /(?:سماد|اسمده|الاسمده|السماد|مغذيات)/.test(norm) &&
+    /(?:الشركه|الهلب|عندكم|المتوفر|المتاح|منتجات|انواع|ايه|ما هي|قائمه|كتالوج)/.test(norm);
+  if (asksForFertilizerCatalog && Array.isArray(agriKnowledge.fertilizers)) {
+    const names = agriKnowledge.fertilizers.map((item) => item.arabic || item.name);
+    return `🌱 منتجات الأسمدة والمغذيات المسجلة لدى مجموعة الهلب (${names.length} منتج): ${names.join('، ')}. قولي اسم المحصول ومرحلة نموه أو المشكلة اللي عندك، وأساعدك تختار من غير ما أخمّن جرعة؛ الجرعة تتحدد من ملصق المنتج.`;
+  }
   if (/(?:محاصيل|المحاصيل|محصولات)/.test(norm)) return `🌾 المحاصيل الموجودة في دليل العيادة: ${agriKnowledge.crops.join('، ')}.`;
   const symptomWords = /(?:بقع|اصفرار|حشر|دوده|ذبول|عنكبوت|ندوه|بياض|توتا|حفار|تعقد|رش|مبيد|مرض)/;
   if (norm.split(/\s+/).length <= 6 && !symptomWords.test(norm)) {

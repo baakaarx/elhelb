@@ -1,11 +1,38 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const http = require('node:http');
+const esbuild = require('esbuild');
 const sharp = require('sharp');
 const app = require('../server/index');
 const { all } = require('../server/db');
 const { getAdminKey } = require('../server/adminAuth');
 const { analyzePlantPathologyPixels } = require('../server/visionEngine');
 const agriKnowledge = require('../shared/agriKnowledgeBase.json');
+
+const voiceSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'voiceEngine.js'), 'utf8');
+const voiceCommonJs = esbuild.transformSync(voiceSource, { format: 'cjs' }).code;
+const voiceModule = { exports: {} };
+new Function('module', 'exports', voiceCommonJs)(voiceModule, voiceModule.exports);
+const speechFixture = voiceModule.exports.cleanTextForClientSpeech('استخدم Tazolen 72% WP بمعدل 1.5 لتر/فدان.');
+assert.match(speechFixture, /تازولين اتنين وسبعين في المية/);
+assert.match(speechFixture, /واحد فاصلة خمسة لتر لكل فدان/);
+assert.doesNotMatch(speechFixture, /[A-Za-z/]/, 'يجب ألا يقرأ الصوت اختصارات لاتينية أو slash في نص عربي');
+const fertilizerSpeechFixture = voiceModule.exports.cleanTextForClientSpeech('New Fruity 10-10-40، بمعدل 250 جم/100 لتر.');
+assert.match(fertilizerSpeechFixture, /نيو فروتي عشرة، عشرة، أربعين/);
+assert.match(fertilizerSpeechFixture, /لكل مية لتر/);
+assert.doesNotMatch(fertilizerSpeechFixture, /[A-Za-z/]/);
+const offlineBundle = esbuild.buildSync({
+  entryPoints: [path.join(__dirname, '..', 'src', 'offlineStaticBrain.js')],
+  bundle: true,
+  format: 'cjs',
+  platform: 'node',
+  write: false,
+  loader: { '.json': 'json' },
+}).outputFiles[0].text;
+const offlineModule = { exports: {} };
+new Function('module', 'exports', offlineBundle)(offlineModule, offlineModule.exports);
+global.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 
 function request(baseUrl, path, { method = 'GET', body, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
@@ -224,6 +251,19 @@ async function runTests() {
     assert.ok(cropsTurn.data.reply.includes('البسلة') && cropsTurn.data.reply.includes('الفول السوداني'));
     assert.ok(agriKnowledge.crops.length >= 21);
 
+    const fertilizersTurn = await request(baseUrl, '/api/chat/ask', {
+      method: 'POST',
+      body: { sessionId: 'vis_fertilizers_test_session_0001', message: 'إيه الأسمدة المتاحة عندكم في شركة الهلب؟' },
+    });
+    assert.equal(fertilizersTurn.status, 200);
+    assert.ok(fertilizersTurn.data.reply.includes('نيو فروتي') && fertilizersTurn.data.reply.includes('توب فيلم'));
+    assert.equal(agriKnowledge.fertilizers.length, 20, 'يجب أن يتضمن الدليل جميع منتجات الأسمدة والمغذيات العشرين');
+    const offlineFertilizers = await offlineModule.exports.runStandaloneClientTurn({
+      sessionId: 'offline_fertilizer_test',
+      message: 'إيه الأسمدة المتاحة عندكم في شركة الهلب؟',
+    });
+    assert.ok(offlineFertilizers.reply.includes('نيو فروتي') && offlineFertilizers.reply.includes('توب فيلم'));
+
     const mitesTurn = await request(baseUrl, '/api/chat/ask', {
       method: 'POST',
       body: { sessionId: 'vis_protocol_test_session_001', message: 'ما بدائل العنكبوت الأحمر؟' },
@@ -236,10 +276,10 @@ async function runTests() {
     const soilCheck = await analyzePlantPathologyPixels(soilLeaf);
     assert.ok(soilCheck.isPlantPhoto);
     assert.notEqual(soilCheck.plantCondition, 'blight_or_leaf_spot', 'يجب ألا تُصنّف التربة البنية حول ورقة سليمة كندوة/لفحة');
-    console.log('✅ [6/6] الصوت واللهجة + 12 مبيد حشائش + 21 محصولاً + بدائل الآفات + منع تصنيف التربة كمرض');
+    console.log('✅ [6/6] تجهيز نص النطق (اختبار نصي فقط) + 20 سماداً + 12 مبيد حشائش + 21 محصولاً + منع تصنيف التربة كمرض');
     console.log('');
 
-    console.log('🎉 اجتازت جميع اختبارات الشات بوت ونظام التحدث والأمان بنجاح 100%!');
+    console.log('🎉 اجتازت جميع اختبارات الشات بوت والأمان وتجهيز النص الصوتي. النطق الفعلي يحتاج تجربة على جهاز حقيقي.');
   } finally {
     server.close();
   }

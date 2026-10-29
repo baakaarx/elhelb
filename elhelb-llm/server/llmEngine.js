@@ -330,6 +330,22 @@ function runBuiltInCompanyBrain({
     };
   }
 
+  // قائمة الأسمدة تعرض فقط عند السؤال عن منتجات الشركة، لا عند طلب تشخيص نقص عنصر بعينه.
+  const fertilizerQuestion = String(originalUserText || trimmedQ)
+    .toLowerCase()
+    .replace(/[أإآٱ]/g, 'ا')
+    .replace(/ة/g, 'ه');
+  const asksForFertilizerCatalog = /(?:سماد|اسمده|الاسمده|السماد|مغذيات)/i.test(fertilizerQuestion) &&
+    /(?:الشركه|الهلب|عندكم|المتوفر|المتاح|منتجات|انواع|ايه|ما هي|قائمة|كتالوج)/i.test(fertilizerQuestion);
+  if (asksForFertilizerCatalog && Array.isArray(agriKnowledge.fertilizers)) {
+    const productNames = agriKnowledge.fertilizers.map((item) => item.arabic || item.name);
+    return {
+      answer: `🌱 منتجات الأسمدة والمغذيات المسجلة لدى مجموعة الهلب (${productNames.length} منتج):\n${productNames.map((name) => `• ${name}`).join('، ')}.\n\nقولي اسم المحصول ومرحلة نموه أو المشكلة اللي عندك، وأساعدك تختار من غير ما أخمّن جرعة؛ الجرعة تتحدد من ملصق المنتج.`,
+      engineUsed: 'elhelb-fertilizer-catalog',
+      confidence: 0.99,
+    };
+  }
+
   // 2.5) إذا وصف المستخدم المشكلة باللهجة اليومية ("كلام الناس") نرد عليه بأسلوب حواري بشري مباشر وواضح
   if (colloquialRule) {
     return {
