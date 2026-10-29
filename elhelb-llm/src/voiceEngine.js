@@ -20,8 +20,7 @@ function pickBestArabicVoice() {
   if (!isVoiceOutputSupported()) return null;
   const voices = window.speechSynthesis.getVoices() || [];
   return voices.find((v) => /^ar[-_]eg/i.test(v.lang)) ||
-    voices.find((v) => /^ar(?:[-_]|$)/i.test(v.lang)) ||
-    voices.find((v) => v.default) || voices[0] || null;
+    voices.find((v) => /^ar(?:[-_]|$)/i.test(v.lang)) || null;
 }
 
 let activeSpeechCleanup = null;
@@ -111,6 +110,10 @@ export function speakArabic(text, { onStart, onEnd, onError } = {}) {
     utterance.onerror = (event) => {
       clearTimeout(startWatchdog);
       if (event.error === 'canceled' || event.error === 'interrupted') return;
+      if (event.error === 'language-unavailable' || event.error === 'voice-unavailable') {
+        finish(new Error('لا يوجد صوت عربي مفعّل على الجهاز. فعّل/نزّل صوت العربية من إعدادات تحويل النص إلى كلام، ثم أعد المحاولة.'));
+        return;
+      }
       finish(event);
     };
     try { synth.speak(utterance); } catch (err) { finish(err); }
@@ -133,6 +136,7 @@ export function startArabicRecognition({ onInterim, onFinal, onError, onEnd } = 
   const finals = new Map();
   let latest = '';
   let delivered = false;
+  let pauseTimer = null;
   recognition.onresult = (event) => {
     let interim = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -143,6 +147,9 @@ export function startArabicRecognition({ onInterim, onFinal, onError, onEnd } = 
     }
     latest = [...finals.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value).concat(interim.trim() ? [interim.trim()] : []).join(' ').trim();
     onInterim?.(latest);
+    // أرسل التفريغ تلقائياً بعد وقفة كلام قصيرة؛ ويمكن للمستخدم الإيقاف فوراً بالزر.
+    clearTimeout(pauseTimer);
+    if (latest) pauseTimer = setTimeout(() => { try { recognition.stop(); } catch {} }, 3200);
   };
   recognition.onerror = (event) => {
     if (event.error === 'not-allowed' || event.error === 'service-not-allowed') onError?.('يرجى السماح للمتصفح باستخدام الميكروفون. تأكد من فتح الموقع عبر HTTPS.');
@@ -150,6 +157,7 @@ export function startArabicRecognition({ onInterim, onFinal, onError, onEnd } = 
     else if (!['aborted', 'network'].includes(event.error)) onError?.('تعذر التقاط الصوت؛ حاول مجدداً أو اكتب سؤالك.');
   };
   recognition.onend = () => {
+    clearTimeout(pauseTimer);
     const text = [...finals.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value).join(' ').trim() || latest;
     if (!delivered && text) { delivered = true; onFinal?.(text); }
     onEnd?.(text);
@@ -158,7 +166,7 @@ export function startArabicRecognition({ onInterim, onFinal, onError, onEnd } = 
   catch (err) { onError?.('تعذر تشغيل الميكروفون. تحقق من إذن الميكروفون وأغلق أي تطبيق آخر يستخدمه.'); return null; }
   return {
     stop: () => { try { recognition.stop(); } catch {} },
-    abort: () => { delivered = true; try { recognition.abort(); } catch {} },
+    abort: () => { delivered = true; clearTimeout(pauseTimer); try { recognition.abort(); } catch {} },
   };
 }
 
