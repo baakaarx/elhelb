@@ -34,6 +34,62 @@ const offlineModule = { exports: {} };
 new Function('module', 'exports', offlineBundle)(offlineModule, offlineModule.exports);
 global.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 
+async function testBrowserVoiceEngineWiring() {
+  const previousWindow = global.window;
+  const recognitionInstances = [];
+  class MockRecognition {
+    constructor() { recognitionInstances.push(this); }
+    start() { this.started = true; }
+    stop() { this.stopped = true; }
+    abort() { this.aborted = true; }
+  }
+  global.window = { SpeechRecognition: MockRecognition, isSecureContext: true };
+  const transcript = [];
+  const statuses = [];
+  const recHandle = voiceModule.exports.startArabicRecognition({
+    onInterim: (value) => transcript.push(value),
+    onFinal: (value) => transcript.push(`final:${value}`),
+    onStatus: (value) => statuses.push(value),
+  });
+  const recognition = recognitionInstances[0];
+  assert.ok(recHandle && recognition.started);
+  assert.equal(recognition.lang, 'ar-EG');
+  recognition.onstart();
+  const result = [{ transcript: 'ازيك يا هندسة' }];
+  result.isFinal = true;
+  recognition.onresult({ resultIndex: 0, results: [result] });
+  recognition.onend();
+  assert.ok(transcript.includes('final:ازيك يا هندسة'));
+  assert.ok(statuses.includes('listening'));
+
+  const utterances = [];
+  const synth = {
+    speaking: false,
+    paused: false,
+    cancel() {},
+    getVoices: () => [{ name: 'Arabic', lang: 'ar-EG' }],
+    speak(utterance) {
+      utterances.push(utterance);
+      this.speaking = true;
+      utterance.onstart?.();
+      queueMicrotask(() => { this.speaking = false; utterance.onend?.(); });
+    },
+    resume() {},
+  };
+  function MockUtterance(text) { this.text = text; }
+  global.window = { speechSynthesis: synth, SpeechSynthesisUtterance: MockUtterance, isSecureContext: true };
+  await new Promise((resolve, reject) => {
+    voiceModule.exports.speakArabic('رد صوتي عربي 72%', {
+      onStart: () => {},
+      onError: reject,
+      onEnd: resolve,
+    });
+  });
+  assert.equal(utterances.length, 1);
+  assert.match(utterances[0].text, /اتنين وسبعين في المية/);
+  global.window = previousWindow;
+}
+
 function request(baseUrl, path, { method = 'GET', body, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, baseUrl);
@@ -91,6 +147,7 @@ async function generateTestProductLabelPngBuffer() {
 }
 
 async function runTests() {
+  await testBrowserVoiceEngineWiring();
   console.log('🧪 بدء اختبار الشات بوت العام لمجموعة الهلب (حماية الجمهور + عزل الجلسات + العيادة الزراعية + تحليل الصور + Mobile API)...\n');
 
   const server = app.listen(0, '127.0.0.1');

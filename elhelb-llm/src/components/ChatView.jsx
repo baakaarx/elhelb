@@ -18,6 +18,7 @@ import {
 import { apiRequest } from '../api';
 import {
   isVoiceOutputSupported,
+  getVoiceDiagnostics,
   speakArabic,
   stopSpeaking,
   startArabicRecognition,
@@ -132,6 +133,9 @@ export default function ChatView({
   const [callError, setCallError] = useState('');
   const callActiveRef = useRef(false);
   const callRecRef = useRef(null);
+  const callRetryTimerRef = useRef(null);
+  const callGenerationRef = useRef(0);
+  const callFatalErrorRef = useRef(false);
 
   const bottomRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -166,17 +170,19 @@ export default function ChatView({
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
-  // إدارة دورة حياة وضع التحدث الصوتي المباشر (Hands-Free Voice Assistant)
+  // إدارة دورة حياة وضع المكالمة: استمع، أرسل بعد الوقفة، انطق الرد، ثم استأنف الاستماع.
   useEffect(() => {
     if (voiceCallOpen) {
       callActiveRef.current = true;
       setCallError('');
-      setLastBotSubtitle('أهلاً بيك! اتفضل اتكلم بكلامك العادي واحكيلي مشكلة زرعك أو سؤالك وأنا سامعك...');
-      // يبدأ التعرف مباشرة من نقرة المستخدم عبر openVoiceCall، لتفادي رفض الإذن على Safari/iOS.
+      setLastBotSubtitle('أهلاً بيك! اتفضل اتكلم بكلامك العادي؛ هبعت كلامك بعد ما تسكت لحظة، وبعدها هرد عليك بصوت.');
       if (!voiceCallStartedRef.current) setCallStage('ready');
     } else {
       callActiveRef.current = false;
       voiceCallStartedRef.current = false;
+      callGenerationRef.current += 1;
+      clearTimeout(callRetryTimerRef.current);
+      callRetryTimerRef.current = null;
       callRecRef.current?.abort();
       callRecRef.current = null;
       stopSpeaking();
@@ -184,11 +190,24 @@ export default function ChatView({
       setLiveTranscript('');
     }
 
-    return () => {
-      callActiveRef.current = false;
-      callRecRef.current?.abort();
-    };
   }, [voiceCallOpen]);
+
+  useEffect(() => () => {
+    callActiveRef.current = false;
+    callGenerationRef.current += 1;
+    clearTimeout(callRetryTimerRef.current);
+    callRetryTimerRef.current = null;
+    callRecRef.current?.abort();
+    stopSpeaking();
+  }, []);
+
+  function scheduleCallRetry(delay = 700) {
+    if (!callActiveRef.current || callRetryTimerRef.current) return;
+    callRetryTimerRef.current = window.setTimeout(() => {
+      callRetryTimerRef.current = null;
+      if (callActiveRef.current) startCallListeningCycle();
+    }, delay);
+  }
 
   function openVoiceCall() {
     voiceCallStartedRef.current = true;
@@ -198,53 +217,109 @@ export default function ChatView({
     startCallListeningCycle();
   }
 
-  function startCallListeningCycle() {
+  function startCallListeningCycle({ preserveError = false } = {}) {
     if (!callActiveRef.current) return;
-    setCallError('');
+    clearTimeout(callRetryTimerRef.current);
+    callRetryTimerRef.current = null;
+    const generation = ++callGenerationRef.current;
+    callRecRef.current?.abort();
+    callRecRef.current = null;
+    stopSpeaking();
+    callFatalErrorRef.current = false;
+    if (!preserveError) setCallError('');
     setLiveTranscript('');
-    setCallStage('listening');
+    setCallStage('starting');
 
     const handle = startArabicRecognition({
+      onStatus: (status) => {
+        if (!callActiveRef.current || generation !== callGenerationRef.current) return;
+        if (status === 'starting') setCallStage('starting');
+        if (status === 'listening' || status === 'audio') setCallStage('listening');
+        if (status === 'processing') setCallStage('thinking');
+      },
       onInterim: (txt) => {
-        if (callActiveRef.current) setLiveTranscript(txt);
+        if (callActiveRef.current && generation === callGenerationRef.current) setLiveTranscript(txt);
       },
       onFinal: async (finalText) => {
-        if (!callActiveRef.current) return;
+        if (!callActiveRef.current || generation !== callGenerationRef.current) return;
         setLiveTranscript(finalText);
         setCallStage('thinking');
         const replyData = await sendTurn(finalText, { fromVoiceCall: true });
-        if (!callActiveRef.current) return;
+        if (!callActiveRef.current || generation !== callGenerationRef.current) return;
 
         if (replyData?.assistantMessage) {
           const toSpeak = replyData.speechText || replyData.assistantMessage.content;
           setLastBotSubtitle(replyData.assistantMessage.content);
           setCallStage('speaking');
+          let speechFailed = false;
           speakArabic(toSpeak, {
-            onError: (err) => setCallError(err?.message || 'تعذر تشغيل الرد الصوتي؛ يمكنك قراءة الرد على الشاشة.'),
+            onStart: () => {
+              if (callActiveRef.current && generation === callGenerationRef.current) setCallStage('speaking');
+            },
+            onError: (err) => {
+              speechFailed = true;
+              if (callActiveRef.current && generation === callGenerationRef.current) {
+                setCallError(err?.message || 'تعذر تشغيل الرد الصوتي. اضغط «اختبار الصوت» لمعرفة السبب.');
+              }
+            },
             onEnd: () => {
-              if (callActiveRef.current) {
-                startCallListeningCycle();
+              if (callActiveRef.current && generation === callGenerationRef.current) {
+                startCallListeningCycle({ preserveError: speechFailed });
               }
             },
           });
         } else {
           setCallStage('ready');
+          if (callActiveRef.current && !callFatalErrorRef.current) scheduleCallRetry(900);
         }
       },
-      onError: (errMsg) => {
-        if (!callActiveRef.current) return;
+      onError: (errMsg, code) => {
+        if (!callActiveRef.current || generation !== callGenerationRef.current) return;
         setCallError(errMsg);
-        setCallStage('ready');
+        if (code === 'no-speech') {
+          // بعض هواتف أندرويد توقف جلسة التعرف بعد الصمت؛ أعد فتح الميكروفون تلقائياً.
+          scheduleCallRetry(800);
+        } else {
+          callFatalErrorRef.current = true;
+          setCallStage('ready');
+        }
       },
       onEnd: (resolvedText) => {
-        if (!callActiveRef.current) return;
-        if (!resolvedText) {
-          setCallStage((prev) => (prev === 'listening' ? 'ready' : prev));
-        }
+        if (!callActiveRef.current || generation !== callGenerationRef.current) return;
+        if (!resolvedText && !callFatalErrorRef.current) scheduleCallRetry(500);
       },
     });
 
     callRecRef.current = handle;
+  }
+
+  function testCallSpeaker() {
+    if (!callActiveRef.current) return;
+    const generation = ++callGenerationRef.current;
+    callRecRef.current?.abort();
+    callRecRef.current = null;
+    callFatalErrorRef.current = false;
+    setCallError('');
+    setLastBotSubtitle('ده اختبار للصوت. لو سامعني، اتكلم بعد ما أخلص.');
+    setCallStage('speaking');
+    let speechFailed = false;
+    speakArabic('ده اختبار للصوت. لو سامعني، اتكلم بعد ما أخلص.', {
+      onStart: () => {
+        if (callActiveRef.current && generation === callGenerationRef.current) setCallStage('speaking');
+      },
+      onError: (err) => {
+        speechFailed = true;
+        if (callActiveRef.current && generation === callGenerationRef.current) {
+          setCallError(err?.message || 'تعذر تشغيل صوت الجهاز. تأكد من رفع صوت الوسائط وتفعيل صوت عربي.');
+          setCallStage('ready');
+        }
+      },
+      onEnd: () => {
+        if (callActiveRef.current && generation === callGenerationRef.current) {
+          startCallListeningCycle({ preserveError: speechFailed });
+        }
+      },
+    });
   }
 
   function toggleInlineMic() {
@@ -670,6 +745,9 @@ export default function ChatView({
               <span className="voice-live-badge">
                 <span className="online-dot" /> محادثة صوتية مباشرة — ELHELB AI
               </span>
+              <div className="voice-privacy-note">
+                تحويل كلامك لنص يعتمد على المتصفح والجهاز، وقد يستخدم خدمة النظام؛ تجنّب ذكر بيانات سرية.
+              </div>
             </div>
 
             <div className={`voice-orb-container ${callStage}`}>
@@ -681,17 +759,28 @@ export default function ChatView({
             </div>
 
             <div className="voice-stage-label">
-              {callStage === 'listening' && '🎙️ أنا سامعك... اتفضل اتكلم براحتك'}
-              {callStage === 'thinking' && '⏳ ثواني، بحلل كلامك وبجهز التوصية...'}
-              {callStage === 'speaking' && '🔊 المساعد الذكي يرد عليك الآن...'}
-              {callStage === 'ready' && 'اضغط «تحدث الآن» للتكلم مرة أخرى'}
+              {callStage === 'starting' && '⏳ بفتح الميكروفون... اسمح للمتصفح لو طلب الإذن'}
+              {callStage === 'listening' && '🎙️ سامعك... اتكلم براحتك، وهبعت كلامك بعد الوقفة'}
+              {callStage === 'thinking' && '⏳ ثواني، بحلل كلامك وبجهز الرد...'}
+              {callStage === 'speaking' && '🔊 المساعد بيرد عليك بصوت'}
+              {callStage === 'ready' && 'اضغط «تحدث الآن» علشان أسمعك'}
             </div>
 
             {liveTranscript && (
               <div className="voice-user-transcript">«{liveTranscript}»</div>
             )}
 
-            {callError && <div className="voice-error-box">{callError}</div>}
+            {callError && (
+              <div className="voice-error-box">
+                <div>{callError}</div>
+                <div className="voice-device-check">
+                  حالة الجهاز: {getVoiceDiagnostics().secureContext ? 'اتصال آمن' : 'افتح الرابط عبر HTTPS'}،{' '}
+                  {getVoiceDiagnostics().recognition ? 'التعرف على الكلام متاح' : 'التعرف على الكلام غير مدعوم'}،{' '}
+                  {getVoiceDiagnostics().synthesis ? 'النطق متاح' : 'النطق غير متاح'}،{' '}
+                  {getVoiceDiagnostics().arabicVoice ? 'صوت عربي موجود' : 'لم يظهر صوت عربي مثبت'}.
+                </div>
+              </div>
+            )}
 
             {!callError && lastBotSubtitle && (
               <div className="voice-bot-subtitle">
@@ -700,11 +789,14 @@ export default function ChatView({
             )}
 
             <div className="voice-call-controls">
-              {callStage === 'speaking' && (
+              {(callStage === 'speaking' || callStage === 'thinking') && (
                 <button
                   type="button"
                   className="voice-action-btn secondary"
-                  onClick={startCallListeningCycle}
+                  onClick={() => {
+                    stopSpeaking();
+                    startCallListeningCycle();
+                  }}
                 >
                   <Mic size={18} /> مقاطعة والتحدث الآن
                 </button>
@@ -719,6 +811,14 @@ export default function ChatView({
                   <Mic size={18} /> تحدث الآن
                 </button>
               )}
+
+              <button
+                type="button"
+                className="voice-action-btn secondary"
+                onClick={testCallSpeaker}
+              >
+                <Volume2 size={18} /> اختبار الصوت
+              </button>
 
               <button
                 type="button"
