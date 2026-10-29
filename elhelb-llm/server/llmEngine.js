@@ -125,7 +125,8 @@ ${visionReport.ocr.text || '(صورة بصرية بدون نصوص مطبوعة 
   }
 
   const clinicBlock = `\n\n=== قاعدة المعرفة الزراعية المعتمدة (21 محصولاً + مبيدات الحشائش والتوصيات) ===\nالمحاصيل: ${agriKnowledge.crops.join('، ')}\nمبيدات الحشائش: ${agriKnowledge.herbicides.map((h) => `${h.name} — ${h.active} — ${h.target} — ${h.rate}`).join('\n')}\nتوصيات الآفات: ${agriKnowledge.protocols.map((p) => `${p.issue}: ${p.products}; ${p.rate}`).join('\n')}`;
-  return `${base}\n\n=== وثائق ومعرفة الشركة ===\n${docsBlock}${clinicBlock}${analyticsBlock}${visionBlock}`;
+  const voiceStyle = '\n\n=== أسلوب الإجابة الصوتية والحوار ===\nخاطب المستخدم باللهجة المصرية الطبيعية والمهذبة كمهندس زراعي متعاون. استخدم جملاً قصيرة وسهلة النطق، واشرح المصطلح الإنجليزي بالعربية ولا تنطق الاختصارات أو الشرطات المائلة حرفياً. لا تخترع جرعات، واسأل سؤالاً توضيحياً واحداً عند نقص بيانات المحصول أو الإصابة.';
+  return `${base}${voiceStyle}\n\n=== وثائق ومعرفة الشركة ===\n${docsBlock}${clinicBlock}${analyticsBlock}${visionBlock}`;
 }
 
 /**
