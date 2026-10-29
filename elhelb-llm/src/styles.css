@@ -847,6 +847,27 @@ button {
   line-height: 1.5;
 }
 
+.voice-language-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.voice-language-control select {
+  max-width: 190px;
+  padding: 6px 10px;
+  border: 1px solid rgba(212, 169, 10, 0.55);
+  border-radius: 10px;
+  background: #0b1220;
+  color: #f8fafc;
+  font: inherit;
+}
+
 .voice-orb-container {
   position: relative;
   width: 150px;

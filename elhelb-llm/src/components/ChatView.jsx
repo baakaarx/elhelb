@@ -131,6 +131,16 @@ export default function ChatView({
   const [liveTranscript, setLiveTranscript] = useState('');
   const [lastBotSubtitle, setLastBotSubtitle] = useState('');
   const [callError, setCallError] = useState('');
+  const [voiceLanguage, setVoiceLanguage] = useState(() => {
+    try {
+      return ['ar-EG', 'ar-SA'].includes(localStorage.getItem('elhelb_voice_language'))
+        ? localStorage.getItem('elhelb_voice_language')
+        : 'ar-EG';
+    } catch {
+      return 'ar-EG';
+    }
+  });
+  const voiceLanguageRef = useRef(voiceLanguage);
   const callActiveRef = useRef(false);
   const callRecRef = useRef(null);
   const callRetryTimerRef = useRef(null);
@@ -154,6 +164,11 @@ export default function ChatView({
     const timer = window.setInterval(() => setVoiceSeconds((value) => value + 1), 1000);
     return () => window.clearInterval(timer);
   }, [isMicListening, isRecordingVoice]);
+
+  useEffect(() => {
+    voiceLanguageRef.current = voiceLanguage;
+    try { localStorage.setItem('elhelb_voice_language', voiceLanguage); } catch {}
+  }, [voiceLanguage]);
 
   useEffect(() => {
     apiRequest(`/api/chat/history?sessionId=${encodeURIComponent(sessionId)}`)
@@ -231,6 +246,7 @@ export default function ChatView({
     setCallStage('starting');
 
     const handle = startArabicRecognition({
+      lang: voiceLanguageRef.current,
       onStatus: (status) => {
         if (!callActiveRef.current || generation !== callGenerationRef.current) return;
         if (status === 'starting') setCallStage('starting');
@@ -253,6 +269,7 @@ export default function ChatView({
           setCallStage('speaking');
           let speechFailed = false;
           speakArabic(toSpeak, {
+            lang: voiceLanguageRef.current,
             onStart: () => {
               if (callActiveRef.current && generation === callGenerationRef.current) setCallStage('speaking');
             },
@@ -304,6 +321,7 @@ export default function ChatView({
     setCallStage('speaking');
     let speechFailed = false;
     speakArabic('ده اختبار للصوت. لو سامعني، اتكلم بعد ما أخلص.', {
+      lang: voiceLanguageRef.current,
       onStart: () => {
         if (callActiveRef.current && generation === callGenerationRef.current) setCallStage('speaking');
       },
@@ -353,6 +371,7 @@ export default function ChatView({
     setError('');
     setIsMicListening(true);
     const handle = startArabicRecognition({
+      lang: voiceLanguageRef.current,
       onInterim: (txt) => {
         setInput(txt);
       },
@@ -748,6 +767,21 @@ export default function ChatView({
               <div className="voice-privacy-note">
                 تحويل كلامك لنص يعتمد على المتصفح والجهاز، وقد يستخدم خدمة النظام؛ تجنّب ذكر بيانات سرية.
               </div>
+              <label className="voice-language-control">
+                لغة المحادثة
+                <select
+                  value={voiceLanguage}
+                  onChange={(event) => {
+                    const nextLanguage = event.target.value === 'ar-SA' ? 'ar-SA' : 'ar-EG';
+                    voiceLanguageRef.current = nextLanguage;
+                    setVoiceLanguage(nextLanguage);
+                    if (callActiveRef.current && callStage === 'listening') startCallListeningCycle();
+                  }}
+                >
+                  <option value="ar-EG">العربية المصرية</option>
+                  <option value="ar-SA">العربية — بديل للجهاز</option>
+                </select>
+              </label>
             </div>
 
             <div className={`voice-orb-container ${callStage}`}>
