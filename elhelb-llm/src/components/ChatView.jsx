@@ -283,8 +283,8 @@ export default function ChatView({
       },
       onFinal: (finalText) => {
         setIsMicListening(false);
-        setInput('');
-        sendTurn(finalText, { autoSpeakReply: true });
+        setInput(finalText);
+        sendTurn(finalText, { autoSpeakReply: true, fromVoiceInput: true });
       },
       onError: (errMsg) => {
         setIsMicListening(false);
@@ -350,7 +350,7 @@ export default function ChatView({
   }
 
   async function sendTurn(customPrompt, opts = {}) {
-    const { autoSpeakReply = false, fromVoiceCall = false } = opts;
+    const { autoSpeakReply = false, fromVoiceCall = false, fromVoiceInput = false } = opts;
     const textToSend = customPrompt !== undefined ? customPrompt : input.trim();
     const hasImg = Boolean(pendingImageFile || pendingImagePreview);
     if ((!textToSend && !hasImg) || loading) return null;
@@ -370,7 +370,7 @@ export default function ChatView({
 
     setError('');
     setLoading(true);
-    if (customPrompt === undefined) setInput('');
+    if (customPrompt === undefined || fromVoiceInput) setInput('');
     clearPendingImage();
     setMessages((prev) => [...prev, optimisticUser]);
 
@@ -411,6 +411,7 @@ export default function ChatView({
     } catch (err) {
       setMessages((prev) => prev.filter((m) => m.id !== optimisticUser.id));
       const msg = err.message || 'تعذر إرسال الرسالة، يرجى المحاولة مرة أخرى.';
+      if (fromVoiceInput) setInput(textToSend);
       if (fromVoiceCall) {
         setCallError(msg);
       } else {
