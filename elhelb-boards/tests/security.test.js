@@ -2285,71 +2285,91 @@ async function main() {
       'docker-compose.yml must bind to 127.0.0.1 by default'
     );
 
-    console.log('2️⃣2️⃣ Testing v19 Zero-Env-Var Vercel Serverless Auto-Provisioning (VERCEL=1 Production Boot Without Manual Dashboard Env Vars + Redacted Internal JWT Secret)...');
-    const vercelSimDb = path.join(os.tmpdir(), `elhelb-vercel-sim-${Date.now()}.db`);
+    console.log('2️⃣2️⃣ Testing v19.1 Multi-Lambda Zero-Env-Var Vercel Serverless Consistency (Container 1 Signs Token -> Container 2 Verifies Across Separate /tmp DBs Without 401)...');
+    const vercelSimDb1 = path.join(os.tmpdir(), `elhelb-vercel-sim1-${Date.now()}.db`);
+    const vercelSimDb2 = path.join(os.tmpdir(), `elhelb-vercel-sim2-${Date.now()}.db`);
     try {
-      const { stdout: vercelSimOut } = await execFileAsync(
+      const sharedVercelEnv = {
+        PATH: process.env.PATH,
+        NODE_ENV: 'production',
+        VERCEL: '1',
+        VERCEL_PROJECT_ID: 'prj_test_elhelb_multi_lambda',
+        VERCEL_PROJECT_PRODUCTION_URL: 'elhelb.vercel.app',
+        JWT_SECRET: '',
+        ADMIN_INIT_PASSWORD: '',
+      };
+
+      // Lambda Container #1 signs a Chairman JWT (simulating POST /api/auth/login on Container 1)
+      const { stdout: vercelC1Out } = await execFileAsync(
+        process.execPath,
+        [
+          '--no-warnings',
+          '-e',
+          `
+          require('./server/index.js');
+          const { get } = require('./server/db.js');
+          const { signUserToken } = require('./server/rbac.js');
+          const ch = get("SELECT * FROM users WHERE username = 'admin'");
+          console.log(JSON.stringify({ token: signUserToken(ch) }));
+          process.exit(0);
+          `,
+        ],
+        {
+          cwd: path.join(__dirname, '..'),
+          env: { ...sharedVercelEnv, DB_PATH: vercelSimDb1 },
+          encoding: 'utf8',
+        }
+      );
+      const { token: container1Token } = JSON.parse(vercelC1Out.trim().split('\n').pop());
+
+      // Lambda Container #2 (with a completely separate /tmp SQLite DB!) receives parallel GETs right after login
+      const { stdout: vercelC2Out } = await execFileAsync(
         process.execPath,
         [
           '--no-warnings',
           '-e',
           `
           const app = require('./server/index.js');
-          const { exportDatabaseSnapshot } = require('./server/db.js');
+          const tok = process.argv[1];
           const srv = app.listen(0, '127.0.0.1', async () => {
             const p = srv.address().port;
-            const hRes = await fetch('http://127.0.0.1:' + p + '/api/health');
-            const regRes = await fetch('http://127.0.0.1:' + p + '/api/auth/register', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                fullName: 'موظف اختبار النشر السحابي التلقائي',
-                username: 'vercel.autoconfig',
-                password: 'VercelAuto#2026!'
-              })
-            });
-            const regJson = await regRes.json();
-            const meRes = await fetch('http://127.0.0.1:' + p + '/api/auth/me', {
-              headers: { Authorization: 'Bearer ' + regJson.token }
-            });
-            const snapStr = JSON.stringify(exportDatabaseSnapshot());
+            const hdrs = { Authorization: 'Bearer ' + tok };
+            const [bRes, nRes, rRes] = await Promise.all([
+              fetch('http://127.0.0.1:' + p + '/api/boards', { headers: hdrs }),
+              fetch('http://127.0.0.1:' + p + '/api/auth/notifications', { headers: hdrs }),
+              fetch('http://127.0.0.1:' + p + '/api/requests/inbox', { headers: hdrs }),
+            ]);
             srv.close(() => {
               console.log(JSON.stringify({
-                health: hRes.status,
-                reg: regRes.status,
-                me: meRes.status,
-                redactedJwtKey: !snapStr.includes('internal_jwt_secret_v19')
+                boards: bRes.status,
+                notifications: nRes.status,
+                requests: rRes.status,
               }));
               process.exit(0);
             });
           });
           `,
+          container1Token,
         ],
         {
           cwd: path.join(__dirname, '..'),
-          env: {
-            PATH: process.env.PATH,
-            NODE_ENV: 'production',
-            VERCEL: '1',
-            DB_PATH: vercelSimDb,
-            JWT_SECRET: '',
-            ADMIN_INIT_PASSWORD: '',
-          },
+          env: { ...sharedVercelEnv, DB_PATH: vercelSimDb2 },
           encoding: 'utf8',
         }
       );
-      const parsedVercel = JSON.parse(vercelSimOut.trim().split('\n').pop());
-      assert.equal(parsedVercel.health, 200, 'Vercel zero-env boot /api/health must return 200');
-      assert.equal(parsedVercel.reg, 201, 'Vercel zero-env boot registration + JWT signing must return 201');
-      assert.equal(parsedVercel.me, 200, 'Vercel zero-env boot /api/auth/me JWT verification must return 200');
-      assert.equal(parsedVercel.redactedJwtKey, true, 'Exported human backups must redact internal_jwt_secret_v19');
+      const parsedC2 = JSON.parse(vercelC2Out.trim().split('\n').pop());
+      assert.equal(parsedC2.boards, 200, 'Lambda Container #2 GET /api/boards must return 200 (never 401)');
+      assert.equal(parsedC2.notifications, 200, 'Lambda Container #2 GET /api/auth/notifications must return 200');
+      assert.equal(parsedC2.requests, 200, 'Lambda Container #2 GET /api/requests must return 200');
     } finally {
-      for (const ext of ['', '-wal', '-shm']) {
-        try { fs.unlinkSync(`${vercelSimDb}${ext}`); } catch (_) {}
+      for (const dbFile of [vercelSimDb1, vercelSimDb2]) {
+        for (const ext of ['', '-wal', '-shm']) {
+          try { fs.unlinkSync(`${dbFile}${ext}`); } catch (_) {}
+        }
       }
     }
 
-    console.log('\n✅ ALL 22 PRODUCTION v19 TESTS (100% ZERO-CONFIG VERCEL BOOT + EXTERNAL AUDITOR + RED-TEAM SUITE) PASSED 100%!');
+    console.log('\n✅ ALL 22 PRODUCTION v19.1 TESTS (100% MULTI-LAMBDA VERCEL + EXTERNAL AUDITOR + RED-TEAM SUITE) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}
