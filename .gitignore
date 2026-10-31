@@ -2,6 +2,13 @@
 my-agent/config.js
 
 node_modules/
+my-agent/public/
+my-agent/data/*.db
+my-agent/data/*.db-shm
+my-agent/data/*.db-wal
+my-agent/data/.vault.key
+my-agent/data/.admin.key
+my-agent/data/tessdata/
 elhelb-boards/data/*.db
 elhelb-boards/data/*.db-shm
 elhelb-boards/data/*.db-wal
