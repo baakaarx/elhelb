@@ -1,5 +1,5 @@
 export function isVoiceInputSupported() {
-  return typeof window !== 'undefined' && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition || window.MediaRecorder);
+  return typeof window !== 'undefined' && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
 }
 
 function speechTokenKey(token) {
@@ -94,7 +94,7 @@ export function mergeTranscriptParts(parts = []) {
 export function startArabicRecognition({ onInterim, onFinal, onError, onEnd, onStatus, lang = 'ar-SA' } = {}) {
   const SpeechRec = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
   if (!SpeechRec) {
-    onError?.('المتصفح لا يدعم الاستماع المباشر. افتح الموقع في Chrome المحدّث، واسمح بالميكروفون.', 'unsupported');
+    onError?.('المتصفح لا يدعم التعرف على الكلام. استخدم ميكروفون لوحة مفاتيح الهاتف لإملاء النص في خانة الكتابة.', 'unsupported');
     return null;
   }
   let recognition;
@@ -161,7 +161,7 @@ export function startArabicRecognition({ onInterim, onFinal, onError, onEnd, onS
       'not-allowed': 'إذن الميكروفون مرفوض. من إعدادات الموقع في Chrome فعّل الميكروفون، ثم أعد المحاولة.',
       'service-not-allowed': 'خدمة التعرف على الكلام محظورة. اسمح لـ Chrome باستخدام الميكروفون وخدمات الصوت.',
       'no-speech': 'ما وصلنيش كلام واضح؛ هحاول أفتح الميكروفون تاني.',
-      network: 'المتصفح لم يتمكن من تشغيل خدمة تحويل الكلام إلى نص. تأكد من الإنترنت وإعدادات «الكتابة بالصوت» في الجهاز، ثم جرّب Chrome.',
+      network: 'المتصفح لم يتمكن من تشغيل خدمة تحويل الكلام إلى نص. تأكد من الإنترنت، أو استخدم ميكروفون لوحة مفاتيح الهاتف لإملاء النص.',
       'audio-capture': 'لم أجد ميكروفوناً متاحاً. افصل سماعة البلوتوث أو أغلق التطبيق الذي يستخدم الميكروفون.',
       'language-not-supported': 'التعرف على العربية غير متاح في خدمة الصوت على هذا الجهاز.',
     };
@@ -197,31 +197,4 @@ export function startArabicRecognition({ onInterim, onFinal, onError, onEnd, onS
       try { recognition.abort(); } catch {}
     },
   };
-}
-
-export async function startVoiceRecorder({ onReady, onError, onStop } = {}) {
-  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    onError?.('تسجيل الصوت غير متاح هنا. افتح الصفحة عبر HTTPS واستخدم متصفحاً حديثاً.');
-    return null;
-  }
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mimeType = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm'].find((type) => MediaRecorder.isTypeSupported(type));
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    const chunks = [];
-    recorder.ondataavailable = (event) => { if (event.data?.size) chunks.push(event.data); };
-    recorder.onstop = () => {
-      const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
-      onReady?.(blob);
-      stream.getTracks().forEach((track) => track.stop());
-      onStop?.();
-    };
-    recorder.start(250);
-    return { stop: () => { if (recorder.state !== 'inactive') recorder.stop(); }, cancel: () => { if (recorder.state !== 'inactive') recorder.stop(); stream.getTracks().forEach((track) => track.stop()); } };
-  } catch {
-    stream?.getTracks().forEach((track) => track.stop());
-    onError?.('لم أستطع فتح الميكروفون. اسمح بالوصول إليه من إعدادات المتصفح ثم حاول مجدداً.');
-    return null;
-  }
 }
