@@ -3,7 +3,7 @@ const fs = require('fs');
 const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
-const { initSchema, runUntracked, getWriteCounters } = require('./db');
+const { initSchema, runUntracked, getWriteCounters, checkpointDatabase } = require('./db');
 const { seedIfNeeded } = require('./seed');
 const cloudSync = require('./cloudSync');
 
@@ -198,9 +198,27 @@ app.use((err, req, res, next) => {
 if (require.main === module) {
   const PORT = Number(process.env.PORT || 3000);
   const HOST = process.env.HOST || '0.0.0.0';
-  app.listen(PORT, HOST, () => {
+  const server = app.listen(PORT, HOST, () => {
     console.log(`ELHELB Boards RBAC Server listening on http://${HOST}:${PORT}`);
   });
+
+  let shuttingDown = false;
+  const gracefulShutdown = (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[ELHELB] Received ${signal} — flushing SQLite WAL & closing HTTP server cleanly...`);
+    server.close(() => {
+      checkpointDatabase();
+      process.exit(0);
+    });
+    setTimeout(() => {
+      checkpointDatabase();
+      process.exit(0);
+    }, 5000).unref();
+  };
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 }
 
 module.exports = app;

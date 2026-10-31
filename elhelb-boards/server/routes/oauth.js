@@ -120,7 +120,19 @@ function findOrCreateGoogleEmployee({
     );
   }
   if (!existing && cleanEmail) {
-    existing = get(`SELECT * FROM users WHERE LOWER(email) = LOWER(?)`, [cleanEmail]);
+    existing = get(
+      `SELECT u.*, r.slug AS role_slug
+       FROM users u
+       JOIN roles r ON r.id = u.role_id
+       WHERE LOWER(u.email) = LOWER(?)`,
+      [cleanEmail]
+    );
+    // Sovereign protection: never auto-link external OAuth into Chairman account
+    if (existing && existing.role_slug === 'chairman') {
+      const err = new Error('حساب رئيس مجلس الإدارة محمي بالدخول المباشر فقط ولا يقبل الربط التلقائي الخارجي');
+      err.statusCode = 403;
+      throw err;
+    }
   }
 
   if (existing) {
@@ -274,7 +286,7 @@ router.post('/register', registerLimiter, async (req, res) => {
       cleanEmail = rawEmail;
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(password, 12);
     const pendingRole = getOrCreatePendingRole();
 
     const newUserId = transaction(() =>
@@ -403,10 +415,15 @@ router.get('/oauth/google/callback', async (req, res) => {
       return res.redirect('/?oauth_error=google_profile_failed');
     }
 
+    const verifiedGoogleEmail =
+      profile.email_verified === true || profile.email_verified === 'true'
+        ? profile.email || ''
+        : '';
+
     const { user } = findOrCreateGoogleEmployee({
       oauthId: profile.sub,
-      fullName: profile.name || profile.email || 'موظف Google',
-      email: profile.email || '',
+      fullName: profile.name || verifiedGoogleEmail || 'موظف Google',
+      email: verifiedGoogleEmail,
       avatarUrl: profile.picture || null,
       preferredDepartmentId: decodedState.d || null,
       req,
@@ -424,7 +441,8 @@ router.get('/oauth/google/callback', async (req, res) => {
       maxAge: 12 * 3600 * 1000,
     });
 
-    return res.redirect(`/?oauth_token=${encodeURIComponent(token)}`);
+    // Deliver token in URL fragment (#) so it is never sent in HTTP GET requests or access logs
+    return res.redirect(`/#oauth_token=${encodeURIComponent(token)}`);
   } catch (err) {
     console.error('Google OAuth callback error:', err);
     return res.redirect('/?oauth_error=google_exception');

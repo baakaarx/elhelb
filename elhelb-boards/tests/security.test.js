@@ -1196,7 +1196,154 @@ async function main() {
     const setupScriptContent = fs.readFileSync(path.join(__dirname, '..', 'setup-from-zip.sh'), 'utf8');
     assert.ok(setupScriptContent.includes('User=$SERVICE_USER') && setupScriptContent.includes('NoNewPrivileges=true'));
 
-    console.log('\n✅ ALL 15 PRODUCTION v15 TESTS (DEEP WHITE-BOX SECURITY, SOVEREIGN AUDIT ISOLATION, CSRF, DOS, 14 DEPTS & RBAC) PASSED 100%!');
+    console.log('1️⃣6️⃣ Testing v15.1 Zero-Defect Audit (Sovereign Assignee/Request/Grant/Email-Log Isolation, Pending User Block & Linux/Windows Installer Hardening)...');
+    // 16a. Sovereign AI card assignment isolation + atomic create-with-assignees + pending user block
+    const gmMe16 = await api('GET', '/api/auth/me', gmTok);
+    const itMe16 = await api('GET', '/api/auth/me', itMgrTok);
+    const gmId16 = gmMe16.data.user.id;
+    const itId16 = itMe16.data.user.id;
+
+    // Even Chairman calling POST /cards/:id/assignees on an AI board MUST NOT assign GM or IT Admin!
+    const assignGmToAi = await api('POST', `/api/cards/${chTask.data.id}/assignees`, activeChairmanTok, {
+      userId: gmId16,
+    });
+    assert.equal(assignGmToAi.status, 403, 'Assigning General Manager to sovereign AI card must be blocked');
+    const assignItToAi = await api('POST', `/api/cards/${chTask.data.id}/assignees`, activeChairmanTok, {
+      userId: itId16,
+    });
+    assert.equal(assignItToAi.status, 403, 'Assigning IT Admin to sovereign AI card must be blocked');
+
+    // Register a pending (unapproved) user and verify they cannot be assigned to any card before onboarding approval
+    const regUnapproved = await api('POST', '/api/auth/register', null, {
+      fullName: 'متقدم بانتظار التسكين',
+      username: 'pending.probe',
+      password: 'PendingUser#2026',
+    });
+    assert.equal(regUnapproved.status, 201);
+    const assignPendingRes = await api(
+      'POST',
+      `/api/cards/${chTask.data.id}/assignees`,
+      activeChairmanTok,
+      { userId: regUnapproved.data.user.id }
+    );
+    assert.equal(assignPendingRes.status, 404, 'Unapproved pending user must never be assignable to cards');
+
+    // Atomic card creation with assigneeIds works cleanly in one request
+    const atomicAiCard = await api(
+      'POST',
+      `/api/lists/${openAiBoard.data.lists[0].id}/cards`,
+      activeChairmanTok,
+      {
+        title: 'أتمتة مطابقة شهادات التحليل بالذكاء الاصطناعي',
+        priority: 'high',
+        assigneeIds: [aiEmpId],
+      }
+    );
+    assert.equal(atomicAiCard.status, 201);
+    assert.ok(
+      Array.isArray(atomicAiCard.data.assignees) &&
+        atomicAiCard.data.assignees.some((a) => a.id === aiEmpId),
+      'POST /lists/:id/cards must atomically attach validated assigneeIds'
+    );
+
+    // 16b. Sovereign AI employee permission request, notifications, email_logs & grant revocation isolation
+    // Register a regular employee inside ai_systems (approved by Chairman) who lacks board.delete
+    const rolesRes16 = await api('GET', '/api/admin/roles', activeChairmanTok);
+    const empRoleRow = rolesRes16.data.roles.find((r) => r.slug === 'staff');
+    const regAiJunior = await api('POST', '/api/auth/register', null, {
+      fullName: 'باحث ذكاء اصطناعي',
+      username: 'ai.researcher',
+      email: 'ai.researcher@elhelbgroup.com',
+      password: 'AiResearcher#2026',
+    });
+    assert.equal(regAiJunior.status, 201);
+    const aiJuniorTok = regAiJunior.data.token;
+    const aiJuniorId = regAiJunior.data.user.id;
+    assert.equal(
+      (
+        await api('POST', `/api/onboarding/${aiJuniorId}/claim`, activeChairmanTok, {
+          departmentId: aiDept.id,
+          roleId: empRoleRow.id,
+          jobTitle: 'باحث تعلم عميق',
+        })
+      ).status,
+      200
+    );
+
+    // AI researcher submits a permission request for cards.delete on the sovereign AI card
+    const aiPermReq = await api('POST', '/api/requests', aiJuniorTok, {
+      permissionKey: 'cards.delete',
+      targetCardId: atomicAiCard.data.id,
+      requestedDuration: '8h',
+      reason: 'أحتاج صلاحية حذف المسودة التجريبية السرية بعد دمج النموذج النهائي',
+    });
+    assert.equal(aiPermReq.status, 201);
+
+    // GM and IT Admin MUST NOT receive any notification about this sovereign AI permission request!
+    const gmNotifs = await api('GET', '/api/auth/notifications', gmTok);
+    const itNotifs = await api('GET', '/api/auth/notifications', itMgrTok);
+    assert.ok(
+      !gmNotifs.data.some((n) => String(n.message || '').includes('باحث ذكاء اصطناعي')),
+      'GM must never receive notifications for sovereign AI permission requests'
+    );
+    assert.ok(
+      !itNotifs.data.some((n) => String(n.message || '').includes('باحث ذكاء اصطناعي')),
+      'IT Admin must never receive notifications for sovereign AI permission requests'
+    );
+
+    // Chairman approves the sovereign grant; verify GM/IT cannot see it in activeGrants or revoke it, nor see it in emailLogs!
+    const chReviewAiReq = await api(
+      'POST',
+      `/api/requests/${aiPermReq.data.id}/review`,
+      activeChairmanTok,
+      {
+        decision: 'approved',
+        approvedDuration: '8h',
+        reviewNote: 'موافقة سيادية مباشرة',
+      }
+    );
+    assert.equal(chReviewAiReq.status, 200);
+
+    const chInboxAfter = await api('GET', '/api/requests/inbox', activeChairmanTok);
+    const aiGrantRow = chInboxAfter.data.activeGrants.find((g) => g.user_id === aiJuniorId);
+    assert.ok(aiGrantRow, 'Chairman must see active sovereign AI grant');
+
+    const gmInboxAfter = await api('GET', '/api/requests/inbox', gmTok);
+    assert.ok(
+      !gmInboxAfter.data.activeGrants.some((g) => g.user_id === aiJuniorId),
+      'GM must NOT see active grants belonging to sovereign AI department'
+    );
+    const gmRevokeAttempt = await api('POST', `/api/grants/${aiGrantRow.id}/revoke`, gmTok);
+    assert.equal(gmRevokeAttempt.status, 403, 'GM must get 403 attempting to revoke a sovereign AI grant');
+
+    const itGmailLogs = await api('GET', '/api/admin/gmail-settings', itMgrTok);
+    assert.equal(itGmailLogs.status, 200);
+    assert.ok(
+      !itGmailLogs.data.emailLogs.some(
+        (l) =>
+          String(l.subject || '').includes('باحث ذكاء اصطناعي') ||
+          String(l.to_email || '').includes('ai.researcher@elhelbgroup.com')
+      ),
+      'IT Admin Gmail logs must exclude sovereign AI email log entries'
+    );
+
+    // 16c. Linux & Windows installer script regressions (umask 022, Caddy 644, gpg --yes, protected lock, Windows CRLF & Node >= 22)
+    assert.match(setupScriptContent, /^umask 022$/m, 'setup-from-zip.sh must enforce umask 022 at top level');
+    assert.ok(
+      setupScriptContent.includes('chmod 644 /etc/caddy/Caddyfile') &&
+        setupScriptContent.includes('gpg --batch --yes --dearmor') &&
+        setupScriptContent.includes('/opt/elhelb-backups/.backup.lock'),
+      'setup-from-zip.sh must keep Caddyfile world-readable for caddy user, non-interactive gpg, and protected backup lock'
+    );
+    const winBatBuf = fs.readFileSync(path.join(__dirname, '..', 'start-windows-server.bat'));
+    assert.ok(winBatBuf.includes(Buffer.from('\r\n')), 'start-windows-server.bat must use Windows CRLF line endings');
+    assert.ok(
+      winBatBuf.toString('utf8').includes('process.versions.node') &&
+        fs.readFileSync(path.join(__dirname, '..', 'server', 'routes', 'oauth.js'), 'utf8').includes('/#oauth_token='),
+      'Windows script must check Node >= 22 and OAuth must deliver tokens via URL #hash fragment'
+    );
+
+    console.log('\n✅ ALL 16 PRODUCTION v15.1 TESTS (ZERO-DEFECT AUDIT, SOVEREIGN ISOLATION, CSRF, DOS, INSTALLERS & RBAC) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}

@@ -18,6 +18,44 @@ router.use(authenticate);
 
 const ALLOWED_PRIORITIES = new Set(['low', 'medium', 'high', 'urgent']);
 
+function resolveAssignableBoardUser(board, targetUserId) {
+  const uid = Number(targetUserId);
+  if (!Number.isInteger(uid) || uid <= 0) {
+    return { errorStatus: 400, error: 'معرف الموظف غير صالح' };
+  }
+  const targetUser = get(
+    `SELECT u.*, r.slug AS role_slug,
+            EXISTS (
+              SELECT 1 FROM role_permissions rp WHERE rp.role_id = u.role_id AND rp.permission_key = 'boards.view_all'
+            ) AS has_view_all
+     FROM users u
+     JOIN roles r ON r.id = u.role_id
+     WHERE u.id = ? AND u.is_active = 1 AND u.onboarding_status = 'approved'`,
+    [uid]
+  );
+  if (!targetUser) {
+    return { errorStatus: 404, error: 'الموظف غير موجود أو غير معتمد بعد' };
+  }
+  const isExclusive = Boolean(Number(board.department_chairman_exclusive));
+  if (isExclusive) {
+    if (
+      Number(targetUser.department_id) !== Number(board.department_id) &&
+      targetUser.role_slug !== 'chairman'
+    ) {
+      return {
+        errorStatus: 403,
+        error: 'حماية سيادية: لا يمكن تعيين سوى أعضاء القسم المختص أو رئيس مجلس الإدارة على هذه اللوحة',
+      };
+    }
+  } else if (
+    Number(targetUser.department_id) !== Number(board.department_id) &&
+    !targetUser.has_view_all
+  ) {
+    return { errorStatus: 400, error: 'لا يمكن تعيين موظف من خارج القسم المختص على هذه المهمة' };
+  }
+  return { user: targetUser };
+}
+
 function loadFullCardDetails(cardId) {
   const card = resolveCardHierarchy(cardId);
   if (!card) return null;
@@ -331,6 +369,33 @@ router.post('/lists/:listId(\\d+)/cards', (req, res) => {
     return res.status(400).json({ error: 'عنوان الكارت مطلوب (بحد أقصى 200 حرف)' });
   }
 
+  const rawAssigneeIds = Array.isArray(req.body && req.body.assigneeIds)
+    ? [...new Set(req.body.assigneeIds.map((id) => Number(id)).filter((id) => id > 0))].slice(0, 20)
+    : [];
+  const validatedAssignees = [];
+  if (rawAssigneeIds.length > 0) {
+    const assignPerm = evaluatePermission(req.user, 'cards.assign', {
+      departmentId: board.department_id,
+      boardId: board.id,
+    });
+    if (!assignPerm.allowed) {
+      return denyPermission(req, res, {
+        permissionKey: 'cards.assign',
+        actionLabel: 'تعيين موظف على كارت جديد',
+        scopeType: 'board',
+        departmentId: board.department_id,
+        boardId: board.id,
+      });
+    }
+    for (const uid of rawAssigneeIds) {
+      const check = resolveAssignableBoardUser(board, uid);
+      if (!check.user) {
+        return res.status(check.errorStatus).json({ error: check.error });
+      }
+      validatedAssignees.push(check.user);
+    }
+  }
+
   let cardId;
   transaction(() => {
     consumeGrantIfOneTime(permCheck.viaGrant);
@@ -343,6 +408,24 @@ router.post('/lists/:listId(\\d+)/cards', (req, res) => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [board.id, listH.list_id, title, description, priority, dueDate, maxPos + 1, req.user.id]
     ).lastInsertRowid;
+
+    for (const assignee of validatedAssignees) {
+      run(`INSERT OR IGNORE INTO card_assignees (card_id, user_id) VALUES (?, ?)`, [
+        cardId,
+        assignee.id,
+      ]);
+      if (assignee.id !== req.user.id) {
+        run(
+          `INSERT INTO notifications (user_id, type, title, message, link_board_id)
+           VALUES (?, 'card_assigned', 'مهمة جديدة مسندة إليك', ?, ?)`,
+          [
+            assignee.id,
+            `قام ${req.user.full_name} بتعيينك على مهمة "${title}" في لوحة "${board.title}".`,
+            board.id,
+          ]
+        );
+      }
+    }
   });
 
   writeAudit({
@@ -352,6 +435,7 @@ router.post('/lists/:listId(\\d+)/cards', (req, res) => {
     status: 'ALLOWED',
     req,
     details: `${title} (${board.title})`,
+    departmentId: board.department_id,
   });
 
   res.status(201).json(loadFullCardDetails(cardId));
@@ -550,20 +634,11 @@ router.post('/cards/:id(\\d+)/assignees', async (req, res) => {
     });
   }
 
-  const targetUserId = Number(req.body && req.body.userId);
-  const targetUser = get(
-    `SELECT u.*, EXISTS (
-       SELECT 1 FROM role_permissions rp WHERE rp.role_id = u.role_id AND rp.permission_key = 'boards.view_all'
-     ) AS has_view_all
-     FROM users u WHERE u.id = ? AND u.is_active = 1`,
-    [targetUserId]
-  );
-  if (!targetUser) {
-    return res.status(404).json({ error: 'الموظف غير موجود أو غير نشط' });
+  const targetCheck = resolveAssignableBoardUser(board, req.body && req.body.userId);
+  if (!targetCheck.user) {
+    return res.status(targetCheck.errorStatus).json({ error: targetCheck.error });
   }
-  if (Number(targetUser.department_id) !== Number(board.department_id) && !targetUser.has_view_all) {
-    return res.status(400).json({ error: 'لا يمكن تعيين موظف من خارج القسم المختص على هذه المهمة' });
-  }
+  const targetUser = targetCheck.user;
 
   let newlyAssigned = false;
   transaction(() => {
@@ -601,6 +676,7 @@ router.post('/cards/:id(\\d+)/assignees', async (req, res) => {
     await sendElhelbEmail({
       to: [targetUser.email],
       ccAdmin: false,
+      isChairmanExclusive: Boolean(Number(board.department_chairman_exclusive)),
       eventType: 'card_assigned',
       subject: `📋 مهمة جديدة مسندة إليك: ${card.title}`,
       badgeText: 'تكليف بمهمة عمل',

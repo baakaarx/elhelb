@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 022
 
 # ==============================================================================
 # ELHELB GROUP — Ubuntu Server Installer (Git-based, non-root systemd service)
 # ==============================================================================
+
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+  echo "❌ يرجى تشغيل السكريبت بصلاحيات المدير (sudo):"
+  echo "   sudo bash deploy/install-server.sh"
+  exit 1
+fi
 
 REPO_URL="${REPO_URL:-https://github.com/baakaarx/elhelb.git}"
 REPO_CHECKOUT="/opt/elhelb-repo"
@@ -42,8 +49,15 @@ DOMAIN="$DOMAIN" PORT="$PORT" bash "$APP_DIR/setup-from-zip.sh"
 cat >/usr/local/bin/elhelb-update <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+umask 022
 
-exec 9>/var/lock/elhelb-update.lock
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+  echo "❌ يرجى تشغيل التحديث بصلاحيات sudo: sudo elhelb-update"
+  exit 1
+fi
+
+mkdir -p /run/lock
+exec 9>/run/lock/elhelb-update.lock
 if ! flock -n 9; then
   echo "⏳ توجد عملية تحديث جارية بالفعل."
   exit 0
@@ -64,8 +78,8 @@ if [[ "${1:-}" != "--force" && "$LOCAL_SHA" == "$REMOTE_SHA" ]]; then
 fi
 
 if [[ -f "$DATA_DIR/elhelb-boards.db" ]]; then
-  sudo -u elhelb sqlite3 "$DATA_DIR/elhelb-boards.db" ".backup '$BACKUP_DIR/pre-update-$(date +%Y%m%d-%H%M%S).db'" || true
-  ls -1t "$BACKUP_DIR"/pre-update-*.db 2>/dev/null | tail -n +15 | xargs -r rm -f
+  runuser -u elhelb -- sqlite3 "$DATA_DIR/elhelb-boards.db" ".backup '$BACKUP_DIR/pre-update-$(date +%Y%m%d-%H%M%S).db'" || true
+  find "$BACKUP_DIR" -maxdepth 1 -type f -name 'pre-update-*.db' -mtime +14 -delete
 fi
 
 git -C "$REPO_CHECKOUT" reset --hard origin/main
@@ -79,4 +93,4 @@ chmod -R u+rwX,g+rX,o-rwx "$APP_DIR"
 systemctl restart elhelb-boards.service
 echo "✅ تم التحديث وإعادة تشغيل الخدمة بنجاح!"
 EOF
-chmod +x /usr/local/bin/elhelb-update
+chmod 755 /usr/local/bin/elhelb-update

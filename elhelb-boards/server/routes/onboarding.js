@@ -28,9 +28,9 @@ router.post('/setup-credentials', async (req, res) => {
           'اسم المستخدم يجب أن يتكون من 3 إلى 36 حرفاً إنجليزياً أو رقماً (بدون مسافات، مثل: ahmed.ali)',
       });
     }
-    if (password.length < 4 || password.length > 100) {
+    if (password.length < 4 || password.length > 128) {
       return res.status(400).json({
-        error: 'كلمة المرور يجب ألا تقل عن 4 أحرف أو أرقام',
+        error: 'كلمة المرور يجب أن تكون بين 4 و128 حرفاً أو رقماً',
       });
     }
     if (fullName.length < 2 || fullName.length > 100) {
@@ -49,7 +49,7 @@ router.post('/setup-credentials', async (req, res) => {
       });
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(password, 12);
 
     run(
       `UPDATE users
@@ -144,10 +144,11 @@ router.patch('/my-preference', async (req, res) => {
         }
       }
 
-      // Optional background Gmail notification to HR & Admin
+      // Optional background Gmail notification (strictly Chairman-only if department is sovereign)
       await sendElhelbEmail({
         to: managerEmails,
-        ccAdmin: true,
+        ccAdmin: !isExclusiveDept,
+        isChairmanExclusive: isExclusiveDept,
         eventType: 'onboarding_request',
         subject: `👤 طلب تسكين موظف جديد في (${dept.name}) — ${req.user.full_name}`,
         badgeText: 'طلب تسكين موظف جديد (HR)',
@@ -450,6 +451,8 @@ router.post('/:userId(\\d+)/claim', async (req, res) => {
       );
     });
 
+    const isExclusiveClaim = Boolean(Number(dept.is_chairman_exclusive));
+
     writeAudit({
       user: req.user,
       action: `اعتماد وتسكين موظف جديد: ${targetUser.full_name}`,
@@ -457,11 +460,14 @@ router.post('/:userId(\\d+)/claim', async (req, res) => {
       status: 'ALLOWED',
       req,
       details: `القسم: ${dept.name} — الدور: ${role.name}`,
+      departmentId: dept.id,
+      isChairmanExclusive: isExclusiveClaim,
     });
 
     await sendElhelbEmail({
       to: targetUser.email ? [targetUser.email] : [],
-      ccAdmin: true,
+      ccAdmin: !isExclusiveClaim,
+      isChairmanExclusive: isExclusiveClaim,
       eventType: 'onboarding_approved',
       subject: `🎉 تم اعتماد انضمامك إلى (${dept.name}) — مجموعة الهلب`,
       badgeText: 'تم اعتماد حسابك وتسكينك',

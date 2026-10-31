@@ -496,7 +496,8 @@ function denyPermission(req, res, {
     permissionKey,
     status: 'DENIED',
     req,
-    details: `${perm ? perm.name : permissionKey}${dept ? ' — ' + dept.name : ''}`,
+    details: `${perm ? perm.name : permissionKey}${safeDeptLabel ? ' — ' + safeDeptLabel : ''}`,
+    departmentId: dept ? dept.id : departmentId,
   });
 
   return res.status(403).json({

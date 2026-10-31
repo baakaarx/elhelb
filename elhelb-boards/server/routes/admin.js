@@ -1062,7 +1062,9 @@ router.get('/gmail-settings', (req, res) => {
     enabled: cfg.enabled,
     senderName: cfg.senderName,
     adminNotifyEmail: cfg.adminNotifyEmail,
-    emailLogs: getRecentEmailLogs(40),
+    emailLogs: getRecentEmailLogs(40, {
+      includeChairmanExclusive: req.user.role_slug === 'chairman',
+    }),
   });
 });
 

@@ -353,6 +353,7 @@ function initSchema() {
       event_type TEXT NOT NULL DEFAULT 'notification',
       status TEXT NOT NULL CHECK(status IN ('SENT', 'SKIPPED_NOT_CONFIGURED', 'FAILED')),
       error_message TEXT NOT NULL DEFAULT '',
+      is_chairman_exclusive INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -371,6 +372,7 @@ function initSchema() {
   // Safe migrations for existing local DB files
   ensureColumn('departments', 'is_chairman_exclusive', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('audit_logs', 'is_chairman_exclusive', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('email_logs', 'is_chairman_exclusive', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('roles', 'rank_level', 'INTEGER NOT NULL DEFAULT 20');
   ensureColumn('users', 'email', 'TEXT DEFAULT NULL');
   ensureColumn('users', 'avatar_url', 'TEXT DEFAULT NULL');
@@ -520,6 +522,12 @@ function importDatabaseSnapshot(snapshot) {
   });
 }
 
+function checkpointDatabase() {
+  try {
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+  } catch (_) {}
+}
+
 module.exports = {
   db,
   DB_PATH,
@@ -534,4 +542,5 @@ module.exports = {
   setSetting,
   exportDatabaseSnapshot,
   importDatabaseSnapshot,
+  checkpointDatabase,
 };

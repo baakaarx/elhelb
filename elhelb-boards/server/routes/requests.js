@@ -192,6 +192,9 @@ router.get('/requests/inbox', (req, res) => {
        AND (g.uses_remaining IS NULL OR g.uses_remaining > 0)
      ORDER BY g.id DESC`
   ).filter((g) => {
+    if (isChairmanExclusiveDepartment(g.target_department_id)) {
+      return req.user.role_slug === 'chairman';
+    }
     if (canAll) return true;
     return (
       req.user.department_id &&
@@ -330,6 +333,7 @@ router.post('/requests', async (req, res) => {
       error: 'حماية سيادية: هذا القسم خاص ومرتبط مباشرةً برئيس مجلس الإدارة فقط ولا يقبل طلبات وصول خارجية.',
     });
   }
+  const isExclusiveTarget = Boolean(deptRow && Number(deptRow.is_chairman_exclusive));
   const isCrossDept =
     !req.user.department_id || Number(req.user.department_id) !== Number(targetDepartmentId);
 
@@ -355,27 +359,32 @@ router.post('/requests', async (req, res) => {
       ]
     ).lastInsertRowid;
 
-    // Notify eligible managers
+    // Notify eligible managers (strictly Chairman-only if department is sovereign Chairman-exclusive!)
     const managers = all(
-      `SELECT u.id, u.email, u.department_id
+      `SELECT u.id, u.email, u.department_id, r.slug AS role_slug
        FROM users u
+       JOIN roles r ON r.id = u.role_id
        WHERE u.is_active = 1 AND u.onboarding_status = 'approved' AND u.id != ?`,
       [req.user.id]
     );
 
     for (const m of managers) {
+      if (isExclusiveTarget && m.role_slug !== 'chairman') {
+        continue;
+      }
       const mPerms = new Set(
         all(
           `SELECT permission_key FROM role_permissions WHERE role_id = (SELECT role_id FROM users WHERE id = ?)`,
           [m.id]
         ).map((x) => x.permission_key)
       );
-      const canReview =
-        mPerms.has('requests.review_all') ||
-        (!isCrossDept &&
-          mPerms.has('requests.review_department') &&
-          Number(m.department_id) === Number(targetDepartmentId) &&
-          mPerms.has(permissionKey));
+      const canReview = isExclusiveTarget
+        ? m.role_slug === 'chairman'
+        : mPerms.has('requests.review_all') ||
+          (!isCrossDept &&
+            mPerms.has('requests.review_department') &&
+            Number(m.department_id) === Number(targetDepartmentId) &&
+            mPerms.has(permissionKey));
 
       if (canReview) {
         run(
@@ -398,11 +407,14 @@ router.post('/requests', async (req, res) => {
     status: 'ALLOWED',
     req,
     details: `${actionSummary} (${DURATION_LABELS[requestedDuration]})`,
+    departmentId: targetDepartmentId,
+    isChairmanExclusive: isExclusiveTarget,
   });
 
   await sendElhelbEmail({
     to: reviewerEmails,
-    ccAdmin: true,
+    ccAdmin: !isExclusiveTarget,
+    isChairmanExclusive: isExclusiveTarget,
     eventType: 'permission_request',
     subject: `🔑 طلب صلاحية جديد من (${req.user.full_name}) — ${perm.name}`,
     badgeText: 'طلب إذن صلاحية مؤقتة',
@@ -423,7 +435,11 @@ router.post('/requests', async (req, res) => {
   res.status(201).json({
     ok: true,
     id: createdRequestId,
-    routedTo: isCrossDept ? 'الإدارة العليا (المدير العام)' : `مدير ${deptRow ? deptRow.name : 'القسم'} أو الإدارة العليا`,
+    routedTo: isExclusiveTarget
+      ? 'رئيس مجلس الإدارة فقط (خصوصية سيادية)'
+      : isCrossDept
+        ? 'الإدارة العليا (المدير العام)'
+        : `مدير ${deptRow ? deptRow.name : 'القسم'} أو الإدارة العليا`,
   });
 });
 
@@ -553,6 +569,8 @@ router.post('/requests/:id(\\d+)/review', async (req, res) => {
     }
   });
 
+  const isExclusiveReview = isChairmanExclusiveDepartment(reqRow.target_department_id);
+
   writeAudit({
     user: req.user,
     action: decision === 'approved' ? 'اعتماد طلب صلاحية استثنائية' : 'رفض طلب صلاحية',
@@ -562,11 +580,14 @@ router.post('/requests/:id(\\d+)/review', async (req, res) => {
     details: `للموظف: ${reqRow.requester_name} — ${reqRow.action_summary}${
       decision === 'approved' ? ` (${DURATION_LABELS[approvedDuration]})` : ''
     }`,
+    departmentId: reqRow.target_department_id,
+    isChairmanExclusive: isExclusiveReview,
   });
 
   await sendElhelbEmail({
     to: reqRow.requester_email ? [reqRow.requester_email] : [],
     ccAdmin: false,
+    isChairmanExclusive: isExclusiveReview,
     eventType: decision === 'approved' ? 'request_approved' : 'request_rejected',
     subject:
       decision === 'approved'
@@ -610,6 +631,17 @@ router.post('/grants/:id(\\d+)/revoke', (req, res) => {
   );
 
   if (!grant) return res.status(404).json({ error: 'التصريح غير موجود' });
+
+  const isExclusiveGrant = isChairmanExclusiveDepartment(grant.target_department_id);
+  if (isExclusiveGrant && req.user.role_slug !== 'chairman') {
+    return denyPermission(req, res, {
+      permissionKey: 'requests.review_all',
+      actionLabel: 'سحب التصريح المؤقت',
+      scopeType: 'department',
+      departmentId: grant.target_department_id,
+      canRequestElevation: false,
+    });
+  }
 
   const canAll = req.user.permissionSet.has('requests.review_all');
   const canDept =
