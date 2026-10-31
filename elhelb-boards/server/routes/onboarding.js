@@ -1,7 +1,14 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { all, get, run, transaction } = require('../db');
-const { authenticate, userHasPermission, writeAudit } = require('../rbac');
+const {
+  COOKIE_NAME,
+  LEGACY_COOKIE_NAMES,
+  signUserToken,
+  authenticate,
+  userHasPermission,
+  writeAudit,
+} = require('../rbac');
 const { sendElhelbEmail } = require('../mailer');
 const { getStorageStatus } = require('../cloudSync');
 const adminRoutes = require('./admin');
@@ -56,10 +63,23 @@ router.post('/setup-credentials', async (req, res) => {
        SET username = ?,
            password_hash = ?,
            full_name = ?,
-           has_custom_credentials = 1
+           has_custom_credentials = 1,
+           token_version = token_version + 1
        WHERE id = ?`,
       [username, passwordHash, fullName, req.user.id]
     );
+
+    const updatedSelf = get(`SELECT * FROM users WHERE id = ?`, [req.user.id]);
+    const refreshedToken = signUserToken(updatedSelf);
+    const isHttps =
+      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    for (const oldName of LEGACY_COOKIE_NAMES || []) res.clearCookie(oldName);
+    res.cookie(COOKIE_NAME, refreshedToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isHttps,
+      maxAge: 12 * 3600 * 1000,
+    });
 
     writeAudit({
       user: { ...req.user, full_name: fullName },
@@ -71,6 +91,7 @@ router.post('/setup-credentials', async (req, res) => {
 
     return res.json({
       ok: true,
+      token: refreshedToken,
       username,
       fullName,
     });
@@ -356,6 +377,17 @@ router.post('/:userId(\\d+)/claim', async (req, res) => {
     }
     if (targetUser.onboarding_status !== 'pending') {
       return res.status(400).json({ error: 'هذا الموظف تم اعتماده وتسكينه بالفعل سابقاً' });
+    }
+
+    if (targetUser.preferred_department_id && req.user.role_slug !== 'chairman') {
+      const prefDept = get(`SELECT is_chairman_exclusive FROM departments WHERE id = ?`, [
+        targetUser.preferred_department_id,
+      ]);
+      if (prefDept && Number(prefDept.is_chairman_exclusive)) {
+        return res.status(403).json({
+          error: 'حماية سيادية: طلبات الانضمام للقسم الخاص برئيس مجلس الإدارة تُعتمد من رئيس مجلس الإدارة فقط',
+        });
+      }
     }
 
     const body = req.body || {};

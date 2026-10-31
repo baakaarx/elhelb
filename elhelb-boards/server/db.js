@@ -485,7 +485,15 @@ function importDatabaseSnapshot(snapshot) {
           const rows = snapshot.tables[table];
           if (!Array.isArray(rows) || rows.length === 0) continue;
           const validCols = getTableColumnSet(table);
-          const cols = Object.keys(rows[0]).filter((c) => validCols.has(c));
+          const colSet = new Set();
+          for (const r of rows) {
+            if (r && typeof r === 'object') {
+              for (const k of Object.keys(r)) {
+                if (validCols.has(k)) colSet.add(k);
+              }
+            }
+          }
+          const cols = Array.from(colSet);
           if (cols.length === 0) continue;
 
           const colSql = cols.map((c) => `"${c}"`).join(', ');
@@ -494,6 +502,7 @@ function importDatabaseSnapshot(snapshot) {
             `INSERT INTO "${table}" (${colSql}) VALUES (${placeholders})`
           );
           for (const row of rows) {
+            if (!row || typeof row !== 'object') continue;
             stmt.run(...cols.map((c) => normalizeParam(row[c])));
           }
         }
@@ -522,6 +531,11 @@ function importDatabaseSnapshot(snapshot) {
   });
 }
 
+function markCoreDataModified() {
+  localWriteCounter += 1;
+  coreWriteCounter += 1;
+}
+
 function checkpointDatabase() {
   try {
     db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
@@ -536,6 +550,7 @@ module.exports = {
   run,
   runUntracked,
   getWriteCounters,
+  markCoreDataModified,
   transaction,
   initSchema,
   getSetting,

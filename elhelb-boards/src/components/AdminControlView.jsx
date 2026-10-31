@@ -2141,6 +2141,9 @@ function SovereignBackupPanel({ onRefreshMe, showToast }) {
         method: 'POST',
         body: { snapshot: parsed.snapshot || parsed },
       });
+      if (res && res.token) {
+        setStoredToken(res.token);
+      }
       await onRefreshMe();
       showToast(res.message || 'تم استعادة كافة بيانات الشركة بنجاح', 'success');
     } catch (err) {

@@ -1343,7 +1343,135 @@ async function main() {
       'Windows script must check Node >= 22 and OAuth must deliver tokens via URL #hash fragment'
     );
 
-    console.log('\n✅ ALL 16 PRODUCTION v15.1 TESTS (ZERO-DEFECT AUDIT, SOVEREIGN ISOLATION, CSRF, DOS, INSTALLERS & RBAC) PASSED 100%!');
+    console.log('1️⃣7️⃣ Testing v15.2 Second Deep Audit (Setup-Credentials Token Refresh, Sovereign Pending Applicant Lock, Duplicate Email 409, Backup Restore Token & PM2 Auto-Secret)...');
+    // 17a. Changing username in /api/onboarding/setup-credentials returns refreshed JWT so session NEVER drops with 401
+    const regOAuthLike = await api('POST', '/api/auth/register', null, {
+      fullName: 'موظف تحديث بيانات الدخول',
+      username: 'temp.initial99',
+      password: 'InitPass#2026',
+    });
+    assert.equal(regOAuthLike.status, 201);
+    const setupCredsRes = await api(
+      'POST',
+      '/api/onboarding/setup-credentials',
+      regOAuthLike.data.token,
+      {
+        username: 'final.chosen99',
+        password: 'NewChosen#2026',
+        fullName: 'موظف تحديث بيانات الدخول',
+      }
+    );
+    assert.equal(setupCredsRes.status, 200);
+    assert.ok(setupCredsRes.data.token, 'setup-credentials must issue a refreshed JWT bound to the new username');
+    // Old token with old uname must be rejected (401), while refreshed token works seamlessly (200)!
+    assert.equal((await api('GET', '/api/auth/me', regOAuthLike.data.token)).status, 401);
+    const meAfterSetup = await api('GET', '/api/auth/me', setupCredsRes.data.token);
+    assert.equal(meAfterSetup.status, 200);
+    assert.equal(meAfterSetup.data.user.username, 'final.chosen99');
+
+    // 17b. Pending applicant selecting sovereign ai_systems is locked against GM/IT/HR hijack, edit, or delete
+    const pickAiPref17 = await api(
+      'PATCH',
+      '/api/onboarding/my-preference',
+      setupCredsRes.data.token,
+      {
+        preferredDepartmentId: aiDept.id,
+        jobTitle: 'مهندس رؤية حاسوبية',
+      }
+    );
+    assert.equal(pickAiPref17.status, 200);
+    const pendingAiApplicantId = meAfterSetup.data.user.id;
+    const exportDeptRow17 = (await api('GET', '/api/admin/departments', activeChairmanTok)).data.find(
+      (d) => d.slug === 'export'
+    );
+    assert.equal(
+      (
+        await api('POST', `/api/onboarding/${pendingAiApplicantId}/claim`, gmTok, {
+          departmentId: exportDeptRow17.id,
+          roleId: empRoleRow.id,
+        })
+      ).status,
+      403,
+      'GM must not hijack a pending sovereign AI applicant into another department'
+    );
+    assert.equal(
+      (await api('PATCH', `/api/admin/users/${pendingAiApplicantId}`, gmTok, { fullName: 'تعديل' })).status,
+      403,
+      'GM must not edit a pending sovereign AI applicant'
+    );
+    assert.equal(
+      (await api('DELETE', `/api/admin/users/${pendingAiApplicantId}`, gmTok)).status,
+      403,
+      'GM must not delete a pending sovereign AI applicant'
+    );
+
+    // Sovereign users_count isolation on GET /api/admin/roles
+    const chRoles17 = await api('GET', '/api/admin/roles', activeChairmanTok);
+    const gmRoles17 = await api('GET', '/api/admin/roles', gmTok);
+    const chStaffCount = chRoles17.data.roles.find((r) => r.slug === 'staff').users_count;
+    const gmStaffCount = gmRoles17.data.roles.find((r) => r.slug === 'staff').users_count;
+    assert.ok(
+      chStaffCount > gmStaffCount,
+      'GM roles users_count must exclude staff inside sovereign Chairman-exclusive departments'
+    );
+
+    // 17c. Duplicate email on POST /api/admin/users returns clean 409 (never 500)
+    const dupEmailAdminRes = await api('POST', '/api/admin/users', activeChairmanTok, {
+      username: 'dup.email.test',
+      email: 'ai.researcher@elhelbgroup.com',
+      password: 'DupEmail#2026',
+      fullName: 'اختبار تكرار البريد',
+      roleId: empRoleRow.id,
+      departmentId: exportDeptRow17.id,
+    });
+    assert.equal(dupEmailAdminRes.status, 409, 'Duplicate email must return clean 409 Conflict');
+
+    // 17d. Backup export -> Chairman rotates password (bumping token_version) -> Backup import returns valid fresh token
+    const snapBeforeRotate = await api('GET', '/api/admin/backup/export', activeChairmanTok);
+    assert.equal(snapBeforeRotate.status, 200);
+    const chMe17 = await api('GET', '/api/auth/me', activeChairmanTok);
+    const rotateAgain = await api(
+      'PATCH',
+      `/api/admin/users/${chMe17.data.user.id}`,
+      activeChairmanTok,
+      { newPassword: 'TempRotateBeforeRestore#99' }
+    );
+    assert.equal(rotateAgain.status, 200);
+    const tokAfterRotate17 = rotateAgain.data.token;
+
+    const restoreSnap17 = await api('POST', '/api/admin/backup/import', tokAfterRotate17, {
+      snapshot: snapBeforeRotate.data.snapshot,
+    });
+    assert.equal(restoreSnap17.status, 200);
+    assert.ok(restoreSnap17.data.token, 'Backup import must return a refreshed Chairman session token');
+    const restoredChairmanTok = restoreSnap17.data.token;
+    assert.equal(
+      (await api('GET', '/api/auth/me', restoredChairmanTok)).status,
+      200,
+      'Chairman session must remain 100% active immediately after restoring an older snapshot'
+    );
+
+    // 17e. PM2 ecosystem.config.cjs auto-secret & IT_SERVER_GUIDE_AR.md unzip path check
+    const pm2Out = await execFileAsync(
+      process.execPath,
+      [
+        '--no-warnings',
+        '-e',
+        'const cfg = require("./ecosystem.config.cjs"); process.stdout.write(String(cfg.apps[0].env.JWT_SECRET.length));',
+      ],
+      {
+        cwd: path.join(__dirname, '..'),
+        env: { ...process.env, JWT_SECRET: '', DB_PATH: path.join(os.tmpdir(), `pm2-check-${Date.now()}.db`) },
+      }
+    );
+    assert.ok(Number(pm2Out.stdout) >= 64, 'ecosystem.config.cjs must auto-provide >=64 char JWT_SECRET');
+    const itGuideText = fs.readFileSync(path.join(__dirname, '..', 'IT_SERVER_GUIDE_AR.md'), 'utf8');
+    assert.ok(
+      !itGuideText.includes('-d elhelb-boards') && itGuideText.includes('unzip -q elhelb-boards-server.zip'),
+      'IT_SERVER_GUIDE_AR.md must extract directly into elhelb-boards/ without double-nesting'
+    );
+
+    console.log('\n✅ ALL 17 PRODUCTION v15.2 TESTS (COMPLETE ZERO-DEFECT AUDIT, SOVEREIGN ISOLATION, OAUTH, BACKUP, PM2 & INSTALLERS) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}
