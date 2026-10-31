@@ -5,8 +5,13 @@ const http = require('node:http');
 const esbuild = require('esbuild');
 const sharp = require('sharp');
 const app = require('../server/index');
-const { all } = require('../server/db');
+const { all, get, run } = require('../server/db');
+const { ingestDocument, ingestDataset, retrieveCompanyKnowledge, getDecryptedDatasets } = require('../server/vaultService');
+const { inspectAndSanitize } = require('../server/dlpShield');
+const { analyzeImageBuffer } = require('../server/visionEngine');
+const { encryptField, decryptField } = require('../server/secureFields');
 const { getAdminKey } = require('../server/adminAuth');
+const { inferCategoryFromFilename } = require('../server/seed');
 const { analyzePlantPathologyPixels } = require('../server/visionEngine');
 const agriKnowledge = require('../shared/agriKnowledgeBase.json');
 
@@ -202,6 +207,8 @@ async function generateTestProductLabelPngBuffer() {
 }
 
 async function runTests() {
+  assert.equal(inferCategoryFromFilename('employee-salaries.csv'), 'private', 'الملفات غير المعروفة يجب ألا تُنشر افتراضياً');
+  assert.equal(inferCategoryFromFilename('06-elhelb-herbicides-and-nutrition.md'), 'products');
   await testBrowserVoiceEngineWiring();
   await testStaticBrainConversationalBehavior();
   console.log('🧪 بدء اختبار الشات بوت العام لمجموعة الهلب (حماية الجمهور + عزل الجلسات + العيادة الزراعية + تحليل الصور + Mobile API)...\n');
@@ -246,8 +253,9 @@ async function runTests() {
     console.log('✅ [2/5] إغلاق كامل لمسارات التعديل والإدارة أمام الجمهور (HTTP 403) وقبول مفتاح الإدارة فقط');
 
     // 3. عزل جلسات المحادثة بين الزوار (لا يمكن لزائر قراءة محادثة زائر آخر)
-    const sidVisitorA = 'vis_aaaaaaaaaaaaaaaaaaaaaaaa1111';
-    const sidVisitorB = 'vis_bbbbbbbbbbbbbbbbbbbbbbbb2222';
+    const sidVisitorA = 'vis_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const sidVisitorB = 'vis_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    run('DELETE FROM chat_messages WHERE session_id IN (?, ?)', [sidVisitorA, sidVisitorB]);
 
     const askA = await request(baseUrl, '/api/chat/ask', {
       method: 'POST',
@@ -264,8 +272,34 @@ async function runTests() {
 
     const histInvalid = await request(baseUrl, '/api/chat/history?sessionId=web-default');
     assert.equal(histInvalid.data.messages.length, 0, 'رفض المعرفات العامة المشتركة');
+    const weakMobileSession = await request(baseUrl, '/api/v1/chat', {
+      method: 'POST',
+      body: { sessionId: 'mobile_user_001', message: 'private session test' },
+    });
+    assert.equal(weakMobileSession.status, 200);
+    assert.equal(get('SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ?', ['mobile_user_001']).n, 0,
+      'يجب عدم حفظ المحادثات بمعرفات جلسات سهلة التخمين');
+    const persistedVisitorMessages = all('SELECT content FROM chat_messages WHERE session_id = ?', [sidVisitorA]);
+    assert.ok(persistedVisitorMessages.length >= 2);
+    assert.ok(persistedVisitorMessages.every((row) => row.content.startsWith('ELHELB_ENC_V1:')),
+      'يجب ألا تُخزّن نصوص المحادثة مكشوفة داخل SQLite');
+    const storedTrainingText = all('SELECT instruction, output_response FROM training_examples LIMIT 1')[0];
+    assert.ok(storedTrainingText.instruction.startsWith('ELHELB_ENC_V1:'));
+    assert.ok(storedTrainingText.output_response.startsWith('ELHELB_ENC_V1:'));
+    const histA = await request(baseUrl, `/api/chat/history?sessionId=${sidVisitorA}`);
+    assert.equal(histA.data.messages.length, 2);
+    assert.match(histA.data.messages[0].content, /إصابة بالحفار/);
 
-    const transcriptSessionId = 'vis_voice_text_session_123456';
+    const craftedEncryptedPrefix = 'ELHELB_ENC_V1:attacker-controlled-plaintext';
+    const encryptedPrefixValue = encryptField(craftedEncryptedPrefix);
+    assert.notEqual(encryptedPrefixValue, craftedEncryptedPrefix, 'يجب ألا تسمح بادئة مشفرة مزيفة بتجاوز تشفير الحقول');
+    assert.equal(decryptField(encryptedPrefixValue), craftedEncryptedPrefix);
+
+    const warnDlp = inspectAndSanitize('password:PlainSecretExample', { mode: 'warn' });
+    assert.doesNotMatch(warnDlp.sanitizedText, /PlainSecretExample/, 'وضع warn يجب أن يحجب القيمة ولا يكتفي برصدها');
+    assert.equal(inspectAndSanitize('password:PlainSecretExample', { mode: 'block' }).blocked, true);
+
+    const transcriptSessionId = 'vis_cccccccccccccccccccccccccccccccc';
     const voiceTextTurn = await request(baseUrl, '/api/chat/ask', {
       method: 'POST',
       body: { sessionId: transcriptSessionId, language: 'ar', message: 'السلام عليكم' },
@@ -291,10 +325,13 @@ async function runTests() {
     assert.ok(visionRes.data.ok);
     assert.ok(/Capitol|ELH-101/i.test(visionRes.data.extractedText));
     assert.ok(visionRes.data.matchedCompanyRecords.length >= 1);
+    const latestLog = all('SELECT preview FROM api_logs ORDER BY id DESC LIMIT 1')[0];
+    assert.ok(latestLog);
+    assert.equal(latestLog.preview, null, 'يجب ألا يسجل api_logs معاينة نص المستخدم مكشوفة');
     const englishVisionTurn = await request(baseUrl, '/api/chat/ask', {
       method: 'POST',
       body: {
-        sessionId: 'vis_english_image_test_0001',
+        sessionId: 'vis_dddddddddddddddddddddddddddddddd',
         language: 'en',
         message: 'Please review this product image',
         imageBase64: base64Img,
@@ -321,13 +358,13 @@ async function runTests() {
     console.log('✅ [5/6] جاهزية واجهات ربط تطبيق الموبايل (/api/v1/chat + /v1/chat/completions)');
 
     // 6. اختبار استقبال الفويس نوت وفهم «كلام الناس العامي» والتحيات ("هلا" / "السلام عليكم" / "ازيك") وسياق المحادثة
-    const convSid = 'vis_colloquial_test_session_9999';
+    const convSid = 'vis_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 
     // اختبار التحيات العربية القصيرة ورد الدعوة لإرسال فويس نوت كتابةً
     for (const greetWord of ['هلا', 'السلام عليكم', 'ازيك يا هندسة', 'تمام']) {
       const gRes = await request(baseUrl, '/api/chat/ask', {
         method: 'POST',
-        body: { sessionId: 'vis_greet_check_session_12345', message: greetWord },
+        body: { sessionId: 'vis_ffffffffffffffffffffffffffffffff', message: greetWord },
       });
       assert.equal(gRes.status, 200);
       assert.ok(!gRes.data.reply.includes('لم أجد'), `يجب أن يرد بودّ وطبيعية على "${greetWord}"`);
@@ -384,7 +421,7 @@ async function runTests() {
 
     const herbicideTurn = await request(baseUrl, '/api/chat/ask', {
       method: 'POST',
-      body: { sessionId: 'vis_herbicide_test_session_001', message: 'عاوز مبيد حشائش للقمح' },
+      body: { sessionId: 'vis_11111111111111111111111111111111', message: 'عاوز مبيد حشائش للقمح' },
     });
     assert.equal(herbicideTurn.status, 200);
     assert.ok(herbicideTurn.data.reply.includes('ألدو') && herbicideTurn.data.reply.includes('برومو بلس'));
@@ -392,7 +429,7 @@ async function runTests() {
 
     const cropsTurn = await request(baseUrl, '/api/chat/ask', {
       method: 'POST',
-      body: { sessionId: 'vis_crops_test_session_0001', message: 'ما المحاصيل التي تدعمها العيادة؟' },
+      body: { sessionId: 'vis_22222222222222222222222222222222', message: 'ما المحاصيل التي تدعمها العيادة؟' },
     });
     assert.equal(cropsTurn.status, 200);
     assert.ok(cropsTurn.data.reply.includes('البسلة') && cropsTurn.data.reply.includes('الفول السوداني'));
@@ -400,13 +437,13 @@ async function runTests() {
 
     const fertilizersTurn = await request(baseUrl, '/api/chat/ask', {
       method: 'POST',
-      body: { sessionId: 'vis_fertilizers_test_session_0001', message: 'إيه الأسمدة المتاحة عندكم في شركة الهلب؟' },
+      body: { sessionId: 'vis_33333333333333333333333333333333', message: 'إيه الأسمدة المتاحة عندكم في شركة الهلب؟' },
     });
     assert.equal(fertilizersTurn.status, 200);
     assert.ok(fertilizersTurn.data.reply.includes('نيو فروتي') && fertilizersTurn.data.reply.includes('توب فيلم'));
     const englishServerTurn = await request(baseUrl, '/api/chat/ask', {
       method: 'POST',
-      body: { sessionId: 'vis_english_fertilizer_test_0001', language: 'en', message: 'What fertilizers does ELHELB offer?' },
+      body: { sessionId: 'vis_44444444444444444444444444444444', language: 'en', message: 'What fertilizers does ELHELB offer?' },
     });
     assert.equal(englishServerTurn.status, 200);
     assert.ok(englishServerTurn.data.reply.includes('ELHELB has') && englishServerTurn.data.reply.includes('New Fruity'));
@@ -431,10 +468,100 @@ async function runTests() {
 
     const mitesTurn = await request(baseUrl, '/api/chat/ask', {
       method: 'POST',
-      body: { sessionId: 'vis_protocol_test_session_001', message: 'ما بدائل العنكبوت الأحمر؟' },
+      body: { sessionId: 'vis_55555555555555555555555555555555', message: 'ما بدائل العنكبوت الأحمر؟' },
     });
     assert.equal(mitesTurn.status, 200);
     assert.ok(mitesTurn.data.reply.includes('HelbStar') && mitesTurn.data.reply.includes('Developer'));
+
+    // Regression: private uploads must not enter public retrieval or public dataset analytics.
+    const privateMarker = 'PRIVATE-ACCESS-CONTROL-TEST-93721';
+    const privateDoc = ingestDocument({
+      title: 'اختبار مستند خاص',
+      category: 'general',
+      content: `معلومة داخلية ${privateMarker} لا يجب أن تظهر في الشات العام.`,
+    });
+    const publicMarker = 'PUBLIC-ACCESS-CONTROL-TEST-48216';
+    const publicDoc = ingestDocument({
+      title: 'اختبار مستند عام',
+      category: 'products',
+      isPublic: true,
+      content: `معلومة كتالوج عامة ${publicMarker} متاحة للعملاء.`,
+    });
+    const publicContexts = retrieveCompanyKnowledge(publicMarker, 100);
+    assert.ok(publicContexts.contexts.some((ctx) => ctx.docId === publicDoc.id));
+    assert.ok(!publicContexts.contexts.some((ctx) => ctx.docId === privateDoc.id), 'يجب استبعاد كل مستند خاص من فهرس الشات العام');
+
+    const privateDataset = ingestDataset({
+      name: 'اختبار جدول خاص',
+      category: 'sales',
+      rawData: [{ account: 'PRIVATE-DATASET-TEST-38101', total: 999 }],
+    });
+    const publicDataset = ingestDataset({
+      name: 'اختبار كتالوج عام',
+      category: 'products',
+      isPublic: true,
+      rawData: [{ product: 'PUBLIC-DATASET-TEST-17002', price: 5 }],
+    });
+    assert.ok(!getDecryptedDatasets({ publicOnly: true }).some((ds) => ds.id === privateDataset.id));
+    assert.ok(getDecryptedDatasets({ publicOnly: true }).some((ds) => ds.id === publicDataset.id));
+    assert.ok(get('SELECT summary_text FROM datasets WHERE id = ?', [privateDataset.id]).summary_text.startsWith('ELHELB_ENC_V1:'));
+    const publicMobileReply = await request(baseUrl, '/api/v1/chat', {
+      method: 'POST',
+      body: { message: 'PRIVATE-DATASET-TEST-38101' },
+    });
+    assert.equal(publicMobileReply.status, 200);
+    assert.doesNotMatch(JSON.stringify(publicMobileReply.data), /PRIVATE-DATASET-TEST-38101/,
+      'لا يجوز أن تعيد واجهة الموبايل العامة صفوف جدول خاص');
+
+    const regeneratedKey = await request(baseUrl, '/api/security/regenerate-key', {
+      method: 'POST',
+      headers: { 'X-Admin-Key': getAdminKey() },
+    });
+    assert.equal(regeneratedKey.status, 200);
+    const storedMobileKey = get('SELECT mobile_api_key FROM security_settings').mobile_api_key;
+    assert.ok(storedMobileKey.startsWith('sha256:'));
+    assert.notEqual(storedMobileKey, regeneratedKey.data.mobile_api_key);
+    const enableMobileKey = await request(baseUrl, '/api/security/settings', {
+      method: 'PUT',
+      headers: { 'X-Admin-Key': getAdminKey() },
+      body: { require_mobile_key: true },
+    });
+    assert.equal(enableMobileKey.status, 200);
+    assert.equal((await request(baseUrl, '/api/v1/status')).status, 401);
+    assert.equal((await request(baseUrl, '/api/v1/status', {
+      headers: { 'X-API-Key': regeneratedKey.data.mobile_api_key },
+    })).status, 200);
+
+    const blockSettings = await request(baseUrl, '/api/security/settings', {
+      method: 'PUT',
+      headers: { 'X-Admin-Key': getAdminKey() },
+      body: { dlp_mode: 'block' },
+    });
+    assert.equal(blockSettings.status, 200);
+    const blockedSensitiveAsk = await request(baseUrl, '/api/chat/ask', {
+      method: 'POST',
+      body: { sessionId: 'vis_66666666666666666666666666666666', message: 'password:SensitiveWordExample' },
+    });
+    assert.equal(blockedSensitiveAsk.status, 400, 'وضع block يجب أن يوقف الطلب قبل التخزين أو الإرسال للموديل');
+    assert.equal(all('SELECT id FROM chat_messages WHERE session_id = ?', ['vis_66666666666666666666666666666666']).length, 0);
+    await request(baseUrl, '/api/security/settings', {
+      method: 'PUT',
+      headers: { 'X-Admin-Key': getAdminKey() },
+      body: { dlp_mode: 'mask', require_mobile_key: false },
+    });
+
+    await assert.rejects(
+      analyzeImageBuffer(Buffer.alloc(8 * 1024 * 1024 + 1)),
+      /8 ميجابايت/,
+      'يجب رفض الصورة الأكبر من الحد قبل فكها أو تحليلها'
+    );
+
+    run('DELETE FROM datasets WHERE id IN (?, ?)', [privateDataset.id, publicDataset.id]);
+    run('DELETE FROM documents WHERE id IN (?, ?)', [privateDoc.id, publicDoc.id]);
+    run("DELETE FROM documents WHERE source_type = 'dataset_index' AND title IN (?, ?)", [
+      '[جدول تحليلي] اختبار جدول خاص',
+      '[جدول تحليلي] اختبار كتالوج عام',
+    ]);
 
     const soilLeafSvg = `<svg width="320" height="240" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="#704020"/><ellipse cx="160" cy="120" rx="70" ry="100" fill="#2c9b36"/></svg>`;
     const soilLeaf = await sharp(Buffer.from(soilLeafSvg)).png().toBuffer();

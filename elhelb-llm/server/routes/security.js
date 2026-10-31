@@ -3,6 +3,7 @@ const express = require('express');
 const { get, all, run } = require('../db');
 const { getKeyFingerprint } = require('../cryptoVault');
 const { validateAirGapUrl, probeLocalProvider } = require('../llmEngine');
+const { hashMobileKey } = require('../mobileKey');
 
 const router = express.Router();
 
@@ -12,7 +13,9 @@ router.get('/status', async (_req, res) => {
   const datasetCount = get('SELECT COUNT(*) AS c FROM datasets')?.c || 0;
   const chunkCount = get('SELECT COUNT(*) AS c FROM document_chunks')?.c || 0;
   const probe = await probeLocalProvider(settings);
-  const recentLogs = all('SELECT * FROM api_logs ORDER BY id DESC LIMIT 30');
+  const recentLogs = all(
+    'SELECT id, channel, event_type, has_image, engine_used, latency_ms, created_at FROM api_logs ORDER BY id DESC LIMIT 30'
+  );
 
   res.json({
     settings: {
@@ -23,7 +26,7 @@ router.get('/status', async (_req, res) => {
       dlp_mode: settings.dlp_mode,
       mask_phones: Boolean(settings.mask_phones),
       require_mobile_key: Boolean(settings.require_mobile_key),
-      mobile_api_key: settings.mobile_api_key,
+      mobile_api_key: settings.mobile_api_key ? '••••••••' : '',
     },
     vaultStats: {
       algorithm: 'AES-256-GCM',
@@ -46,7 +49,7 @@ router.put('/settings', (req, res) => {
     : current.provider;
   const ollamaUrl = String(req.body?.ollama_url || current.ollama_url).trim();
   const localOpenaiUrl = String(req.body?.local_openai_url || current.local_openai_url).trim();
-  const dlpMode = ['mask', 'warn', 'off'].includes(req.body?.dlp_mode)
+  const dlpMode = ['mask', 'warn', 'block', 'off'].includes(req.body?.dlp_mode)
     ? req.body.dlp_mode
     : current.dlp_mode;
   const maskPhones =
@@ -92,7 +95,7 @@ router.put('/settings', (req, res) => {
       dlp_mode: updated.dlp_mode,
       mask_phones: Boolean(updated.mask_phones),
       require_mobile_key: Boolean(updated.require_mobile_key),
-      mobile_api_key: updated.mobile_api_key,
+      mobile_api_key: updated.mobile_api_key ? '••••••••' : '',
     },
   });
 });
@@ -100,7 +103,7 @@ router.put('/settings', (req, res) => {
 router.post('/regenerate-key', (_req, res) => {
   const freshKey = 'elhelb_live_' + crypto.randomBytes(16).toString('hex');
   run("UPDATE security_settings SET mobile_api_key = ?, updated_at = datetime('now') WHERE id = 1", [
-    freshKey,
+    hashMobileKey(freshKey),
   ]);
   res.json({ mobile_api_key: freshKey });
 });

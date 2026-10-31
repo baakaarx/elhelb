@@ -9,6 +9,10 @@ const { DATA_DIR } = require('./dataDir');
 const TESS_DIR = path.join(DATA_DIR, 'tessdata');
 
 let ocrWorkerPromise = null;
+let activeVisionJobs = 0;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_IMAGE_PIXELS = 25_000_000;
+const MAX_CONCURRENT_VISION_JOBS = 1;
 
 function ensureLocalTessdata() {
   fs.mkdirSync(TESS_DIR, { recursive: true });
@@ -47,18 +51,31 @@ async function getOcrWorker() {
 
 function parseImageInputToBuffer(imageInput) {
   if (!imageInput) return null;
-  if (Buffer.isBuffer(imageInput)) return imageInput;
+  if (Buffer.isBuffer(imageInput)) {
+    if (imageInput.length > MAX_IMAGE_BYTES) throw new Error('حجم الصورة يتجاوز الحد المسموح (8 ميجابايت).');
+    return imageInput;
+  }
   const str = String(imageInput).trim();
-  const match = str.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
+  if (str.length > Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + 128) {
+    throw new Error('حجم الصورة يتجاوز الحد المسموح (8 ميجابايت).');
+  }
+  const match = str.match(/^data:image\/(?:png|jpeg|jpg|webp);base64,([A-Za-z0-9+/]+={0,2})$/i);
   const base64Data = match ? match[1] : str;
-  return Buffer.from(base64Data, 'base64');
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64Data) || base64Data.length % 4 === 1) {
+    throw new Error('صيغة الصورة أو ترميز Base64 غير صالح.');
+  }
+  const buffer = Buffer.from(base64Data, 'base64');
+  if (!buffer.length || buffer.length > MAX_IMAGE_BYTES) {
+    throw new Error('حجم الصورة فارغ أو يتجاوز الحد المسموح (8 ميجابايت).');
+  }
+  return buffer;
 }
 
 /**
  * تحليل طيفي وبصري لألوان البكسلات لرصد صور النباتات وأمراض الأوراق الزراعية (ندوة / تبقعات / اصفرار / بياض دقيقي)
  */
 async function analyzePlantPathologyPixels(rawBuffer) {
-  const { data, info } = await sharp(rawBuffer)
+  const { data, info } = await sharp(rawBuffer, { limitInputPixels: MAX_IMAGE_PIXELS })
     .rotate()
     .resize({ width: 160, height: 160, fit: 'inside' })
     .removeAlpha()
@@ -280,18 +297,21 @@ function extractStructuredSignalsFromText(text, plantAnalysis) {
 /**
  * تحليل الصورة محلياً بالكامل (فحص أمراض النباتات والأوراق + قراءة العبوات والمستندات OCR بدون إنترنت)
  */
-async function analyzeImageBuffer(input) {
+async function analyzeImageBufferInternal(input) {
   const rawBuffer = parseImageInputToBuffer(input);
   if (!rawBuffer || rawBuffer.length < 32) {
     throw new Error('ملف الصورة غير صالح أو فارغ.');
   }
 
-  const image = sharp(rawBuffer).rotate();
+  const image = sharp(rawBuffer, { limitInputPixels: MAX_IMAGE_PIXELS }).rotate();
   const meta = await image.metadata();
+  const width = Number(meta.width || 0);
+  const height = Number(meta.height || 0);
+  if (!['jpeg', 'png', 'webp'].includes(meta.format) || !width || !height || width * height > MAX_IMAGE_PIXELS) {
+    throw new Error('الصورة غير مدعومة أو أبعادها تتجاوز الحد المسموح (25 ميجابكسل).');
+  }
   const stats = await image.stats();
 
-  const width = meta.width || 0;
-  const height = meta.height || 0;
   const rMean = stats.channels?.[0]?.mean || 128;
   const gMean = stats.channels?.[1]?.mean || 128;
   const bMean = stats.channels?.[2]?.mean || 128;
@@ -307,7 +327,7 @@ async function analyzeImageBuffer(input) {
   const plantAnalysis = await analyzePlantPathologyPixels(rawBuffer);
 
   // 2) مصغّر خفيف للعرض في الشات
-  const thumbBuf = await sharp(rawBuffer)
+  const thumbBuf = await sharp(rawBuffer, { limitInputPixels: MAX_IMAGE_PIXELS })
     .rotate()
     .resize({ width: 320, height: 320, fit: 'inside', withoutEnlargement: true })
     .jpeg({ quality: 76 })
@@ -315,7 +335,7 @@ async function analyzeImageBuffer(input) {
   const thumbnailDataUrl = `data:image/jpeg;base64,${thumbBuf.toString('base64')}`;
 
   // 3) نسخة محسنة لـ Ollama Vision (إن وُجد محلياً)
-  const visionNormalizedBuf = await sharp(rawBuffer)
+  const visionNormalizedBuf = await sharp(rawBuffer, { limitInputPixels: MAX_IMAGE_PIXELS })
     .rotate()
     .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true })
     .jpeg({ quality: 86 })
@@ -326,7 +346,7 @@ async function analyzeImageBuffer(input) {
   let ocrConfidence = 0;
   try {
     const targetOcrWidth = width > 0 && width < 1000 ? Math.min(1600, width * 2) : undefined;
-    let ocrPipeline = sharp(rawBuffer).rotate();
+    let ocrPipeline = sharp(rawBuffer, { limitInputPixels: MAX_IMAGE_PIXELS }).rotate();
     if (targetOcrWidth) {
       ocrPipeline = ocrPipeline.resize({ width: targetOcrWidth, withoutEnlargement: false });
     }
@@ -371,6 +391,20 @@ async function analyzeImageBuffer(input) {
     },
     signals,
   };
+}
+
+async function analyzeImageBuffer(input) {
+  if (activeVisionJobs >= MAX_CONCURRENT_VISION_JOBS) {
+    const err = new Error('محلل الصور مشغول الآن؛ انتظر لحظات ثم أعد المحاولة.');
+    err.status = 429;
+    throw err;
+  }
+  activeVisionJobs += 1;
+  try {
+    return await analyzeImageBufferInternal(input);
+  } finally {
+    activeVisionJobs -= 1;
+  }
 }
 
 module.exports = {

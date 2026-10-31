@@ -5,7 +5,8 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const { initSchema, get } = require('./db');
+const { initSchema, get, db } = require('./db');
+const { purgeExpiredSensitiveData } = require('./secureFields');
 const { seedIfNeeded } = require('./seed');
 const { getAdminKey, requireAdminKey } = require('./adminAuth');
 const { processCompanyQuery } = require('./companyBrainService');
@@ -19,9 +20,17 @@ const { mobileRouter, checkMobileApiKey } = require('./routes/mobileApi');
 initSchema();
 seedIfNeeded();
 getAdminKey();
+purgeExpiredSensitiveData(db);
+const retentionCleanupTimer = setInterval(() => purgeExpiredSensitiveData(db), 24 * 60 * 60 * 1000);
+retentionCleanupTimer.unref();
 
 const app = express();
-app.set('trust proxy', 1);
+const proxyHops = process.env.TRUST_PROXY_HOPS;
+if (proxyHops !== undefined && /^\d+$/.test(proxyHops) && Number(proxyHops) <= 5) {
+  app.set('trust proxy', Number(proxyHops));
+} else {
+  app.set('trust proxy', process.env.VERCEL ? 1 : false);
+}
 
 app.use(
   helmet({
@@ -40,9 +49,7 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: '10mb' }));
-
-// حماية الواجهة العامة المفتوحة للجمهور من الإغراق (Rate Limiting)
+// Rate limiting runs before parsing large JSON/multipart request bodies.
 const publicChatLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
@@ -50,6 +57,23 @@ const publicChatLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'تم إرسال عدد كبير من الرسائل خلال دقيقة واحدة، يرجى الانتظار لحظات والمحاولة مجدداً.' },
 });
+const visionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'وصل تحليل الصور إلى الحد المؤقت؛ انتظر دقيقة ثم أعد المحاولة.' },
+});
+app.use(['/api/chat', '/api/v1', '/v1/chat/completions'], publicChatLimiter);
+app.use(express.json({ limit: '10mb' }));
+
+function limitImageRequests(req, res, next) {
+  const isImageRequest =
+    String(req.headers['content-type'] || '').toLowerCase().includes('multipart/form-data') ||
+    Boolean(req.body?.imageBase64) ||
+    (Array.isArray(req.body?.messages) && req.body.messages.some((message) => Array.isArray(message?.content) && message.content.some((part) => part?.type === 'image_url')));
+  return isImageRequest ? visionLimiter(req, res, next) : next();
+}
 
 app.get(['/health', '/api/health'], (_req, res) => {
   res.json({
@@ -68,11 +92,11 @@ app.get('/api/bootstrap', (_req, res) => {
 });
 
 // مسارات الشات العام للموقع والموبايل (مفتوحة للجمهور مع عزل الجلسات وحماية Rate Limit)
-app.use('/api/chat', publicChatLimiter, chatRoutes);
-app.use('/api/v1', publicChatLimiter, mobileRouter);
+app.use('/api/chat', limitImageRequests, chatRoutes);
+app.use('/api/v1', limitImageRequests, mobileRouter);
 
 // واجهة متوافقة مع مكتبات OpenAI لتطبيق الموبايل
-app.post('/v1/chat/completions', publicChatLimiter, checkMobileApiKey, async (req, res) => {
+app.post('/v1/chat/completions', limitImageRequests, checkMobileApiKey, async (req, res) => {
   try {
     const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
     const lastUser = [...messages].reverse().find((m) => m.role === 'user');
@@ -116,7 +140,7 @@ app.post('/v1/chat/completions', publicChatLimiter, checkMobileApiKey, async (re
       ],
     });
   } catch (err) {
-    res.status(400).json({ error: { message: err.message } });
+    res.status(err.status || 400).json({ error: { message: err.message } });
   }
 });
 
@@ -124,6 +148,16 @@ app.post('/v1/chat/completions', publicChatLimiter, checkMobileApiKey, async (re
 app.use('/api/vault', requireAdminKey, vaultRoutes);
 app.use('/api/studio', requireAdminKey, studioRoutes);
 app.use('/api/security', requireAdminKey, securityRoutes);
+
+app.use((err, _req, res, next) => {
+  if (res.headersSent) return next(err);
+  const status = Number(err.status || err.statusCode || 500);
+  const safeStatus = status >= 400 && status < 500 ? status : 500;
+  if (safeStatus === 500) console.error('Unhandled request error:', err);
+  return res.status(safeStatus).json({
+    error: safeStatus === 500 ? 'حدث خطأ داخلي أثناء معالجة الطلب.' : (err.message || 'الطلب غير صالح.'),
+  });
+});
 
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: 'مسار الـ API غير موجود.' });

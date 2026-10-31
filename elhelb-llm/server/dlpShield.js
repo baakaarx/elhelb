@@ -8,7 +8,7 @@ const RULES = [
     id: 'api_secret',
     label: 'مفتاح API أو رمز سري',
     severity: 'critical',
-    regex: /\b(?:sk-[a-zA-Z0-9_-]{16,}|ghp_[a-zA-Z0-9]{20,}|AIza[0-9A-Za-z_-]{20,}|Bearer\s+[A-Za-z0-9._-]{24,})\b/g,
+    regex: /\b(?:sk-[a-zA-Z0-9_-]{16,}|ghp_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{20,}|AIza[0-9A-Za-z_-]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{20,}|Bearer\s+[A-Za-z0-9._-]{24,})\b/g,
     replacement: '[🔒 مفتاح سري محجوب]',
     alwaysActive: true,
   },
@@ -18,6 +18,14 @@ const RULES = [
     severity: 'critical',
     regex: /(?:كلمة\s*المرور|كلمه\s*السر|الباسورد|password|passcode)\s*[:=]\s*[^\s،,]+/gi,
     replacement: '[🔒 كلمة مرور محجوبة]',
+    alwaysActive: true,
+  },
+  {
+    id: 'email_address',
+    label: 'عنوان بريد إلكتروني',
+    severity: 'medium',
+    regex: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+    replacement: '[🔒 بريد إلكتروني محجوب]',
     alwaysActive: true,
   },
   {
@@ -81,7 +89,7 @@ function inspectAndSanitize(text, options = {}) {
         severity: rule.severity,
         count: matches.length,
       });
-      if (mode === 'mask') {
+      if (mode === 'mask' || mode === 'warn') {
         current = current.replace(rule.regex, rule.replacement);
       }
     }

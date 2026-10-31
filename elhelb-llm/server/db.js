@@ -9,6 +9,7 @@ const CATEGORIES = {
   sales: 'المبيعات والتسعير والموزعين والتصدير',
   inventory: 'المخازن وخطوط الإنتاج والتصنيع للغير',
   hr: 'الإدارة وشؤون العاملين',
+  private: 'بيانات خاصة غير متاحة للشات العام',
 };
 
 function resolveDbPath() {
@@ -23,6 +24,7 @@ db.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA foreign_keys = ON;
   PRAGMA busy_timeout = 5000;
+  PRAGMA secure_delete = ON;
 `);
 
 function normalizeParam(val) {
@@ -59,6 +61,7 @@ function initSchema() {
       sha256_hash TEXT NOT NULL,
       chunk_count INTEGER NOT NULL DEFAULT 0,
       char_count INTEGER NOT NULL DEFAULT 0,
+      is_public INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -88,6 +91,7 @@ function initSchema() {
       rows_iv TEXT NOT NULL,
       rows_auth_tag TEXT NOT NULL,
       summary_text TEXT NOT NULL DEFAULT '',
+      is_public INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -97,6 +101,7 @@ function initSchema() {
       input_context TEXT DEFAULT '',
       output_response TEXT NOT NULL,
       category TEXT NOT NULL DEFAULT 'general',
+      is_public INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -118,8 +123,8 @@ function initSchema() {
       ollama_url TEXT NOT NULL DEFAULT 'http://127.0.0.1:11434',
       local_openai_url TEXT NOT NULL DEFAULT 'http://127.0.0.1:8080/v1',
       airgap_lock INTEGER NOT NULL DEFAULT 1,
-      dlp_mode TEXT NOT NULL DEFAULT 'warn',
-      mask_phones INTEGER NOT NULL DEFAULT 0,
+      dlp_mode TEXT NOT NULL DEFAULT 'mask',
+      mask_phones INTEGER NOT NULL DEFAULT 1,
       require_mobile_key INTEGER NOT NULL DEFAULT 0,
       mobile_api_key TEXT NOT NULL,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -139,6 +144,11 @@ function initSchema() {
 
     CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_messages(session_id);
 
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS api_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       channel TEXT NOT NULL DEFAULT 'web',
@@ -150,6 +160,46 @@ function initSchema() {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+
+  // Safe, additive migrations for databases created by earlier releases.
+  const ensureColumn = (table, column, definition) => {
+    const columns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((item) => item.name));
+    if (!columns.has(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  };
+  ensureColumn('documents', 'is_public', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('datasets', 'is_public', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('training_examples', 'is_public', 'INTEGER NOT NULL DEFAULT 0');
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_chat_created_at ON chat_messages(created_at);
+    CREATE INDEX IF NOT EXISTS idx_logs_created_at ON api_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_public_docs ON documents(is_public, category);
+    CREATE INDEX IF NOT EXISTS idx_public_datasets ON datasets(is_public, category);
+  `);
+
+  if (!get('SELECT version FROM schema_migrations WHERE version = ?', ['secure-public-data-v2'])) {
+    // Only repository-curated content is grandfathered in; admin uploads stay private by default.
+    run(`UPDATE documents SET is_public = 1
+         WHERE source_type = 'company_data_folder'
+           AND filename IN (
+             '01-elhelb-company-profile.md',
+             '02-elhelb-products-guide.md',
+             '03-elhelb-agri-clinic.md',
+             '04-elhelb-products-catalog.csv',
+             '05-elhelb-crop-programs.csv',
+             '06-elhelb-herbicides-and-nutrition.md'
+           )`);
+    run("UPDATE security_settings SET dlp_mode = 'mask' WHERE dlp_mode = 'warn'");
+    run('UPDATE security_settings SET mask_phones = 1 WHERE mask_phones = 0');
+    const settings = get('SELECT mobile_api_key FROM security_settings WHERE id = 1');
+    if (settings?.mobile_api_key && !settings.mobile_api_key.startsWith('sha256:')) {
+      run('UPDATE security_settings SET mobile_api_key = ? WHERE id = 1', [require('./mobileKey').hashMobileKey(settings.mobile_api_key)]);
+    }
+    require('./secureFields').migrateSensitiveFields(db);
+    // Remove pre-migration plaintext from freed SQLite pages and the WAL file.
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE); VACUUM;');
+    run('INSERT INTO schema_migrations (version) VALUES (?)', ['secure-public-data-v2']);
+  }
 }
 
 module.exports = {
