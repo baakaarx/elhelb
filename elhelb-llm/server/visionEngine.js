@@ -320,7 +320,15 @@ async function analyzeImageBufferInternal(input) {
   }
 
   const image = sharp(rawBuffer, { limitInputPixels: MAX_IMAGE_PIXELS }).rotate();
-  const meta = await image.metadata();
+  let meta;
+  try {
+    meta = await image.metadata();
+  } catch (error) {
+    if (/exceeds pixel limit/i.test(String(error?.message || ''))) {
+      throw new Error('أبعاد الصورة تتجاوز الحد المسموح (25 ميجابكسل).');
+    }
+    throw error;
+  }
   const width = Number(meta.width || 0);
   const height = Number(meta.height || 0);
   if (!['jpeg', 'png', 'webp'].includes(meta.format) || !width || !height || width * height > MAX_IMAGE_PIXELS) {

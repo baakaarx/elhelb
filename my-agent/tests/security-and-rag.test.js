@@ -7,7 +7,7 @@ const sharp = require('sharp');
 const app = require('../server/index');
 const { all } = require('../server/db');
 const { getAdminKey } = require('../server/adminAuth');
-const { analyzePlantPathologyPixels, getOcrResizeDimensions } = require('../server/visionEngine');
+const { analyzeImageBuffer, analyzePlantPathologyPixels, getOcrResizeDimensions } = require('../server/visionEngine');
 const agriKnowledge = require('../shared/agriKnowledgeBase.json');
 
 const voiceSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'voiceEngine.js'), 'utf8');
@@ -294,6 +294,19 @@ async function runTests() {
     assert.ok(visionRes.data.ok);
     assert.ok(/Capitol|ELH-101/i.test(visionRes.data.extractedText));
     assert.ok(visionRes.data.matchedCompanyRecords.length >= 1);
+    await assert.rejects(
+      analyzeImageBuffer(Buffer.alloc(8 * 1024 * 1024 + 1)),
+      /8 ميجابايت/,
+      'يجب رفض الصور الأكبر من الحد قبل التحليل لتفادي استهلاك موارد الدالة'
+    );
+    const oversizedPixelImage = await sharp({
+      create: { width: 6000, height: 5000, channels: 3, background: '#5a9930' },
+    }).jpeg({ quality: 70 }).toBuffer();
+    await assert.rejects(
+      analyzeImageBuffer(oversizedPixelImage),
+      /25 ميجابكسل/,
+      'يجب رفض الصور ذات الأبعاد الزائدة برسالة واضحة قبل تحليلها'
+    );
     const englishVisionTurn = await request(baseUrl, '/api/chat/ask', {
       method: 'POST',
       body: {
