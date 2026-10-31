@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const { get, all, run, initSchema, getSetting, setSetting } = require('./db');
+const { get, all, run } = require('./db');
+const cloudSync = require('./cloudSync');
 
 const EPHEMERAL_DEV_JWT_SECRET = crypto.randomBytes(48).toString('hex');
 
@@ -15,24 +16,27 @@ function getJwtSecret() {
     return envSecret;
   }
 
-  // Zero-config serverless cloud provisioning on Vercel when JWT_SECRET wasn't entered in dashboard:
-  // Generates a 384-bit CSPRNG secret stored in encrypted/redacted system_settings (synced across cloud containers).
+  // Zero-config multi-Lambda signing key on Vercel when JWT_SECRET wasn't entered in dashboard:
+  // Deterministic across ALL serverless containers of the project from cold-start millisecond zero
+  // (and domain-separated from CloudSync AES-256-GCM encryption).
   if (process.env.VERCEL) {
-    try {
-      const existing = getSetting('internal_jwt_secret_v19', '');
-      if (existing && existing.length >= 64) {
-        return existing;
-      }
-    } catch (_) {
-      initSchema();
-    }
-    const afterInit = getSetting('internal_jwt_secret_v19', '');
-    if (afterInit && afterInit.length >= 64) {
-      return afterInit;
-    }
-    const generated = crypto.randomBytes(48).toString('hex');
-    setSetting('internal_jwt_secret_v19', generated);
-    return generated;
+    const cloudSecret = (
+      process.env.BLOB_READ_WRITE_TOKEN ||
+      process.env.KV_REST_API_TOKEN ||
+      process.env.UPSTASH_REDIS_REST_TOKEN ||
+      process.env.TURSO_AUTH_TOKEN ||
+      ''
+    ).trim();
+    const projectMaterial = [
+      cloudSecret,
+      (process.env.VERCEL_PROJECT_ID || '').trim(),
+      (process.env.VERCEL_GIT_REPO_ID || '').trim(),
+      (process.env.VERCEL_PROJECT_PRODUCTION_URL || 'elhelb-vercel-prod').trim(),
+    ].join('|');
+    return crypto
+      .createHmac('sha256', projectMaterial)
+      .update('elhelb-vercel-jwt-signing-v19.1')
+      .digest('hex');
   }
 
   if (process.env.NODE_ENV === 'production') {
@@ -203,67 +207,89 @@ function loadUserById(userId) {
   };
 }
 
-function authenticate(req, res, next) {
-  const candidates = extractCandidateTokens(req);
-  if (candidates.length === 0) {
-    return res.status(401).json({
-      error: 'يرجى تسجيل الدخول أولاً للوصول إلى النظام',
-      code: 'UNAUTHENTICATED',
-    });
-  }
-
-  const activeJwtSecret = getJwtSecret();
-  let payload = null;
-  let verifiedSource = null;
-  for (const item of candidates) {
-    try {
-      const decoded = jwt.verify(item.token, activeJwtSecret, { algorithms: ['HS256'] });
-      if (decoded && decoded.jti && isTokenJtiRevoked(decoded.jti)) {
-        continue;
-      }
-      payload = decoded;
-      verifiedSource = item.source;
-      break;
-    } catch (_) {
-      // Try next candidate token in case a proxy injected an unrelated header
+async function authenticate(req, res, next) {
+  try {
+    const candidates = extractCandidateTokens(req);
+    if (candidates.length === 0) {
+      return res.status(401).json({
+        error: 'يرجى تسجيل الدخول أولاً للوصول إلى النظام',
+        code: 'UNAUTHENTICATED',
+      });
     }
-  }
 
-  if (!payload || !payload.uid || typeof payload.uname !== 'string' || !payload.uname) {
-    for (const oldName of LEGACY_COOKIE_NAMES) res.clearCookie(oldName);
-    res.clearCookie(COOKIE_NAME);
-    return res.status(401).json({
-      error: 'انتهت صلاحية الجلسة، يرجى تسجيل الدخول مرة أخرى',
-      code: 'INVALID_TOKEN',
-    });
-  }
+    const activeJwtSecret = getJwtSecret();
+    let payload = null;
+    let verifiedSource = null;
+    for (const item of candidates) {
+      try {
+        const decoded = jwt.verify(item.token, activeJwtSecret, { algorithms: ['HS256'] });
+        if (decoded && decoded.jti && isTokenJtiRevoked(decoded.jti)) {
+          continue;
+        }
+        payload = decoded;
+        verifiedSource = item.source;
+        break;
+      } catch (_) {
+        // Try next candidate token in case a proxy injected an unrelated header
+      }
+    }
 
-  // Strict CSRF Defense: state-changing requests MUST include an explicit custom/Bearer header
-  // (cross-origin forms/subdomains cannot attach custom headers without CORS preflight approval)
-  if (!SAFE_READ_METHODS.has(String(req.method || '').toUpperCase()) && verifiedSource !== 'header') {
-    return res.status(403).json({
-      error: 'تم رفض الطلب لحماية الجلسة من التزوير العابر للمواقع (CSRF) — يرجى التحديث وإعادة المحاولة',
-      code: 'CSRF_BLOCKED',
-    });
-  }
+    if (!payload || !payload.uid || typeof payload.uname !== 'string' || !payload.uname) {
+      for (const oldName of LEGACY_COOKIE_NAMES) res.clearCookie(oldName);
+      res.clearCookie(COOKIE_NAME);
+      return res.status(401).json({
+        error: 'انتهت صلاحية الجلسة، يرجى تسجيل الدخول مرة أخرى',
+        code: 'INVALID_TOKEN',
+      });
+    }
 
-  const user = loadUserById(payload.uid);
-  if (
-    !user ||
-    Number(user.token_version) !== Number(payload.tv) ||
-    String(user.username || '').trim().toLowerCase() !== payload.uname.trim().toLowerCase()
-  ) {
-    for (const oldName of LEGACY_COOKIE_NAMES) res.clearCookie(oldName);
-    res.clearCookie(COOKIE_NAME);
-    return res.status(401).json({
-      error: 'تم تحديث بيانات الحساب أو إيقافه، يرجى تسجيل الدخول مجدداً',
-      code: 'SESSION_REVOKED',
-    });
-  }
+    // Strict CSRF Defense: state-changing requests MUST include an explicit custom/Bearer header
+    // (cross-origin forms/subdomains cannot attach custom headers without CORS preflight approval)
+    if (!SAFE_READ_METHODS.has(String(req.method || '').toUpperCase()) && verifiedSource !== 'header') {
+      return res.status(403).json({
+        error: 'تم رفض الطلب لحماية الجلسة من التزوير العابر للمواقع (CSRF) — يرجى التحديث وإعادة المحاولة',
+        code: 'CSRF_BLOCKED',
+      });
+    }
 
-  req.user = user;
-  req.tokenPayload = payload;
-  next();
+    const isSessionMatch = (u) =>
+      Boolean(
+        u &&
+          Number(u.token_version) === Number(payload.tv) &&
+          String(u.username || '').trim().toLowerCase() === payload.uname.trim().toLowerCase()
+      );
+
+    let user = loadUserById(payload.uid);
+    if (!isSessionMatch(user) && cloudSync.resolveActiveProvider()) {
+      // Another warm serverless container may have just created/rotated this user within checkIntervalMs;
+      // force a fresh cloud pull once before rejecting the valid token.
+      await cloudSync.syncBeforeRequest(true);
+      if (payload.jti && isTokenJtiRevoked(payload.jti)) {
+        for (const oldName of LEGACY_COOKIE_NAMES) res.clearCookie(oldName);
+        res.clearCookie(COOKIE_NAME);
+        return res.status(401).json({
+          error: 'انتهت صلاحية الجلسة، يرجى تسجيل الدخول مرة أخرى',
+          code: 'INVALID_TOKEN',
+        });
+      }
+      user = loadUserById(payload.uid);
+    }
+
+    if (!isSessionMatch(user)) {
+      for (const oldName of LEGACY_COOKIE_NAMES) res.clearCookie(oldName);
+      res.clearCookie(COOKIE_NAME);
+      return res.status(401).json({
+        error: 'تم تحديث بيانات الحساب أو إيقافه، يرجى تسجيل الدخول مجدداً',
+        code: 'SESSION_REVOKED',
+      });
+    }
+
+    req.user = user;
+    req.tokenPayload = payload;
+    return next();
+  } catch (err) {
+    return next(err);
+  }
 }
 
 function findMatchingGrant(user, permissionKey, target = {}) {
