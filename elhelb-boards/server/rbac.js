@@ -51,16 +51,59 @@ const GLOBAL_PERMISSIONS = new Set([
   'audit.view',
 ]);
 
+function isSecureRequest(req) {
+  if (!req) return false;
+  if (req.secure) return true;
+  if (req.app && req.app.get('trust proxy')) {
+    const proto = String(req.headers['x-forwarded-proto'] || '')
+      .split(',')[0]
+      .trim()
+      .toLowerCase();
+    return proto === 'https';
+  }
+  return false;
+}
+
 function signUserToken(user) {
   return jwt.sign(
     {
       uid: Number(user.id),
       uname: String(user.username || '').trim().toLowerCase(),
       tv: Number(user.token_version || 1),
+      jti: crypto.randomUUID(),
     },
     JWT_SECRET,
     { algorithm: 'HS256', expiresIn: '12h' }
   );
+}
+
+function revokeTokenPayload(payload) {
+  if (!payload || typeof payload.jti !== 'string' || !payload.jti) return;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const expSec = Number.isFinite(Number(payload.exp))
+    ? Number(payload.exp)
+    : nowSec + 12 * 3600;
+  try {
+    run(`DELETE FROM revoked_tokens WHERE expires_epoch <= ?`, [nowSec]);
+    run(
+      `INSERT OR IGNORE INTO revoked_tokens (jti, expires_epoch) VALUES (?, ?)`,
+      [payload.jti.slice(0, 64), expSec]
+    );
+  } catch (_) {}
+}
+
+function isTokenJtiRevoked(jti) {
+  if (!jti || typeof jti !== 'string') return false;
+  const nowSec = Math.floor(Date.now() / 1000);
+  try {
+    const row = get(
+      `SELECT 1 AS revoked FROM revoked_tokens WHERE jti = ? AND expires_epoch > ?`,
+      [jti, nowSec]
+    );
+    return Boolean(row);
+  } catch (_) {
+    return false;
+  }
 }
 
 const SAFE_READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -164,7 +207,11 @@ function authenticate(req, res, next) {
   let verifiedSource = null;
   for (const item of candidates) {
     try {
-      payload = jwt.verify(item.token, JWT_SECRET, { algorithms: ['HS256'] });
+      const decoded = jwt.verify(item.token, JWT_SECRET, { algorithms: ['HS256'] });
+      if (decoded && decoded.jti && isTokenJtiRevoked(decoded.jti)) {
+        continue;
+      }
+      payload = decoded;
       verifiedSource = item.source;
       break;
     } catch (_) {
@@ -205,6 +252,7 @@ function authenticate(req, res, next) {
   }
 
   req.user = user;
+  req.tokenPayload = payload;
   next();
 }
 
@@ -574,7 +622,9 @@ module.exports = {
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
   GLOBAL_PERMISSIONS,
+  isSecureRequest,
   signUserToken,
+  revokeTokenPayload,
   loadUserById,
   getActiveGrantsForUser,
   authenticate,

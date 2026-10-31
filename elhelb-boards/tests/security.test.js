@@ -1471,7 +1471,123 @@ async function main() {
       'IT_SERVER_GUIDE_AR.md must extract directly into elhelb-boards/ without double-nesting'
     );
 
-    console.log('\n✅ ALL 17 PRODUCTION v15.2 TESTS (COMPLETE ZERO-DEFECT AUDIT, SOVEREIGN ISOLATION, OAUTH, BACKUP, PM2 & INSTALLERS) PASSED 100%!');
+    console.log('1️⃣8️⃣ Testing v16 Exhaustive Zero-Vulnerability Audit (IDOR Board Title Masking, Post-Delete Sovereign Audit Tagging, Server-Side JTI Logout Revocation & NaN/Cookie Hardening)...');
+    // 18a + 18b. Create a secret sovereign AI board + card, probe IDOR as GM & IT, then delete and verify audit_logs stay 100% hidden!
+    const secretAiBoardRes = await api('POST', '/api/boards', restoredChairmanTok, {
+      title: 'خطة استحواذ استراتيجية سرية للغاية 2027',
+      description: 'مكتب رئيس مجلس الإدارة',
+      departmentId: aiDept.id,
+      background: 'royal',
+    });
+    assert.equal(secretAiBoardRes.status, 201);
+    const secretBoardId = secretAiBoardRes.data.id;
+    const secretBoardDetail = await api('GET', `/api/boards/${secretBoardId}`, restoredChairmanTok);
+    const secretCardRes = await api(
+      'POST',
+      `/api/lists/${secretBoardDetail.data.lists[0].id}/cards`,
+      restoredChairmanTok,
+      { title: 'ملف الصفقة السرية رقم 99' }
+    );
+    assert.equal(secretCardRes.status, 201);
+
+    // Probe PATCH, DELETE, GET on board & card as IT Admin -> 403 and ZERO leak of board title or AI dept name!
+    for (const probe of [
+      await api('GET', `/api/boards/${secretBoardId}`, itMgrTok),
+      await api('PATCH', `/api/boards/${secretBoardId}`, itMgrTok, { title: 'probe' }),
+      await api('DELETE', `/api/boards/${secretBoardId}`, itMgrTok),
+      await api('POST', `/api/boards/${secretBoardId}/labels`, itMgrTok, { name: 'probe' }),
+      await api('GET', `/api/cards/${secretCardRes.data.id}`, itMgrTok),
+    ]) {
+      assert.equal(probe.status, 403);
+      const rawJson = JSON.stringify(probe.data);
+      assert.ok(
+        !rawJson.includes('خطة استحواذ') &&
+          !rawJson.includes('ملف الصفقة') &&
+          !rawJson.includes('الذكاء الاصطناعي'),
+        'IDOR 403 responses must NEVER leak private board/card titles or sovereign AI department name'
+      );
+    }
+
+    // NaN-safe card move check
+    const moveNanRes = await api(
+      'POST',
+      `/api/cards/${secretCardRes.data.id}/move`,
+      restoredChairmanTok,
+      {
+        targetListId: secretBoardDetail.data.lists[1].id,
+        targetIndex: 'not-a-number',
+      }
+    );
+    assert.equal(moveNanRes.status, 200);
+    assert.equal(moveNanRes.data.card.position, 1);
+
+    // Chairman deletes the secret card AND the secret board -> verify GM & IT audit logs still show ZERO trace!
+    assert.equal(
+      (await api('DELETE', `/api/cards/${secretCardRes.data.id}`, restoredChairmanTok)).status,
+      200
+    );
+    assert.equal(
+      (await api('DELETE', `/api/boards/${secretBoardId}`, restoredChairmanTok)).status,
+      200
+    );
+    const gmAuditAfterDel = await api('GET', '/api/admin/audit-logs', gmTok);
+    const itAuditAfterDel = await api('GET', '/api/admin/audit-logs', itMgrTok);
+    for (const logs of [gmAuditAfterDel.data, itAuditAfterDel.data]) {
+      assert.ok(
+        !logs.some(
+          (row) =>
+            String(row.details || '').includes('خطة استحواذ') ||
+            String(row.details || '').includes('ملف الصفقة')
+        ),
+        'Post-DELETE audit logs for sovereign boards/cards must remain strictly hidden from GM & IT'
+      );
+    }
+
+    // 18c. Server-side JTI cryptographic logout revocation (multi-device safe!) + spoofed X-Forwarded-Proto cookie defense
+    const regLogoutUser = await api('POST', '/api/auth/register', null, {
+      fullName: 'اختبار إبطال التوكن عند الخروج',
+      username: 'jti.logout.user',
+      password: 'LogoutSafe#2026',
+    });
+    assert.equal(regLogoutUser.status, 201);
+
+    const loginLaptop = await fetch(`${base}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Forwarded-Proto': 'https', // Untrusted proxy header on plain HTTP!
+      },
+      body: JSON.stringify({ username: 'jti.logout.user', password: 'LogoutSafe#2026' }),
+    });
+    assert.equal(loginLaptop.status, 200);
+    const setCookieHdr = loginLaptop.headers.get('set-cookie') || '';
+    assert.ok(
+      !/;\s*Secure/i.test(setCookieHdr),
+      'Plain HTTP server without trust proxy must ignore spoofed X-Forwarded-Proto: https on Set-Cookie'
+    );
+    const tokLaptop = (await loginLaptop.json()).token;
+
+    const loginPhoneRes = await api('POST', '/api/auth/login', null, {
+      username: 'jti.logout.user',
+      password: 'LogoutSafe#2026',
+    });
+    assert.equal(loginPhoneRes.status, 200);
+    const tokPhone = loginPhoneRes.data.token;
+
+    // Logout on Laptop -> tokLaptop MUST immediately return 401 on server, while tokPhone stays 200!
+    assert.equal((await api('POST', '/api/auth/logout', tokLaptop)).status, 200);
+    assert.equal(
+      (await api('GET', '/api/auth/me', tokLaptop)).status,
+      401,
+      'Logged-out JWT must be cryptographically rejected on server immediately'
+    );
+    assert.equal(
+      (await api('GET', '/api/auth/me', tokPhone)).status,
+      200,
+      'Other active device session (phone) must remain active when logging out from office PC'
+    );
+
+    console.log('\n✅ ALL 18 PRODUCTION v16 TESTS (100% EXHAUSTIVE ZERO-VULNERABILITY AUDIT, IDOR MASKING, JTI LOGOUT, SOVEREIGN ISOLATION & INSTALLERS) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}

@@ -302,6 +302,7 @@ router.post('/boards', (req, res) => {
     status: 'ALLOWED',
     req,
     details: `${title} (${dept.name})`,
+    departmentId: dept.id,
   });
 
   const created = resolveBoardHierarchy(boardId);
@@ -320,7 +321,9 @@ router.get('/boards/:id(\\d+)', (req, res) => {
   if (!access.allowed) {
     return denyPermission(req, res, {
       permissionKey: 'boards.view_department',
-      actionLabel: `فتح لوحة تابعة لـ (${board.department_name})`,
+      actionLabel: Number(board.department_chairman_exclusive)
+        ? 'الوصول للوحة خاصة'
+        : `فتح لوحة تابعة لـ (${board.department_name})`,
       scopeType: 'department',
       departmentId: board.department_id,
       boardId: board.id,
@@ -476,6 +479,16 @@ router.patch('/boards/:id(\\d+)', (req, res) => {
   const board = resolveBoardHierarchy(boardId);
   if (!board) return res.status(404).json({ error: 'اللوحة غير موجودة' });
 
+  if (!canAccessBoard(req.user, board).allowed) {
+    return denyPermission(req, res, {
+      permissionKey: 'boards.view_department',
+      actionLabel: 'الوصول للوحة',
+      scopeType: 'department',
+      departmentId: board.department_id,
+      boardId: board.id,
+    });
+  }
+
   const permCheck = evaluatePermission(req.user, 'boards.edit', {
     departmentId: board.department_id,
     boardId: board.id,
@@ -523,6 +536,7 @@ router.patch('/boards/:id(\\d+)', (req, res) => {
     status: 'ALLOWED',
     req,
     details: title,
+    departmentId: board.department_id,
   });
 
   res.json(resolveBoardHierarchy(board.id));
@@ -533,6 +547,16 @@ router.delete('/boards/:id(\\d+)', (req, res) => {
   const boardId = Number(req.params.id);
   const board = resolveBoardHierarchy(boardId);
   if (!board) return res.status(404).json({ error: 'اللوحة غير موجودة' });
+
+  if (!canAccessBoard(req.user, board).allowed) {
+    return denyPermission(req, res, {
+      permissionKey: 'boards.view_department',
+      actionLabel: 'الوصول للوحة',
+      scopeType: 'department',
+      departmentId: board.department_id,
+      boardId: board.id,
+    });
+  }
 
   const permCheck = evaluatePermission(req.user, 'boards.delete', {
     departmentId: board.department_id,
@@ -561,6 +585,7 @@ router.delete('/boards/:id(\\d+)', (req, res) => {
     status: 'ALLOWED',
     req,
     details: `${board.title} (${board.department_name})`,
+    departmentId: board.department_id,
   });
 
   res.json({ ok: true });
@@ -600,6 +625,16 @@ router.post('/boards/:id(\\d+)/labels', (req, res) => {
   const boardId = Number(req.params.id);
   const board = resolveBoardHierarchy(boardId);
   if (!board) return res.status(404).json({ error: 'اللوحة غير موجودة' });
+
+  if (!canAccessBoard(req.user, board).allowed) {
+    return denyPermission(req, res, {
+      permissionKey: 'boards.view_department',
+      actionLabel: 'الوصول للوحة',
+      scopeType: 'department',
+      departmentId: board.department_id,
+      boardId: board.id,
+    });
+  }
 
   const permCheck = evaluatePermission(req.user, 'boards.edit', {
     departmentId: board.department_id,
@@ -643,6 +678,16 @@ router.delete('/labels/:id(\\d+)', (req, res) => {
   if (!label) return res.status(404).json({ error: 'التصنيف غير موجود' });
 
   const board = resolveBoardHierarchy(label.board_id);
+  if (!canAccessBoard(req.user, board).allowed) {
+    return denyPermission(req, res, {
+      permissionKey: 'boards.view_department',
+      actionLabel: 'الوصول للوحة',
+      scopeType: 'department',
+      departmentId: board.department_id,
+      boardId: board.id,
+    });
+  }
+
   const permCheck = evaluatePermission(req.user, 'boards.edit', {
     departmentId: board.department_id,
     boardId: board.id,

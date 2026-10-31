@@ -169,6 +169,7 @@ router.post('/boards/:boardId(\\d+)/lists', (req, res) => {
     status: 'ALLOWED',
     req,
     details: `${title} — ${board.title}`,
+    departmentId: board.department_id,
   });
 
   res.status(201).json(createdList);
@@ -298,6 +299,7 @@ router.delete('/lists/:id(\\d+)', (req, res) => {
     status: 'ALLOWED',
     req,
     details: `${listH.list_title} — ${board.title}`,
+    departmentId: board.department_id,
   });
 
   res.json({ ok: true });
@@ -315,7 +317,9 @@ router.get('/cards/:id(\\d+)', (req, res) => {
   if (!canAccessBoard(req.user, board).allowed) {
     return denyPermission(req, res, {
       permissionKey: 'boards.view_department',
-      actionLabel: `عرض مهمة في (${board.department_name})`,
+      actionLabel: Number(board.department_chairman_exclusive)
+        ? 'الوصول لمهمة خاصة'
+        : `عرض مهمة في (${board.department_name})`,
       scopeType: 'department',
       departmentId: board.department_id,
       boardId: board.id,
@@ -549,7 +553,8 @@ router.post('/cards/:id(\\d+)/move', (req, res) => {
   }
 
   const targetListId = Number(req.body && req.body.targetListId);
-  const targetIndex = Math.max(0, Number((req.body && req.body.targetIndex) ?? 0));
+  const rawIdx = Number((req.body && req.body.targetIndex) ?? 0);
+  const targetIndex = Number.isFinite(rawIdx) ? Math.max(0, Math.trunc(rawIdx)) : 0;
 
   const targetList = get(`SELECT * FROM lists WHERE id = ?`, [targetListId]);
   if (!targetList || Number(targetList.board_id) !== Number(card.board_id)) {
@@ -596,6 +601,7 @@ router.post('/cards/:id(\\d+)/move', (req, res) => {
     status: 'ALLOWED',
     req,
     details: `${card.title} ← ${targetList.title}`,
+    departmentId: board.department_id,
   });
 
   res.json({ ok: true, card: loadFullCardDetails(card.id) });
@@ -959,6 +965,7 @@ router.delete('/cards/:id(\\d+)', (req, res) => {
     status: 'ALLOWED',
     req,
     details: `${card.title} (${board.title})${permCheck.viaGrant ? ' [بتصريح استثنائي من المدير]' : ''}`,
+    departmentId: board.department_id,
   });
 
   res.json({ ok: true, consumedGrant: Boolean(permCheck.viaGrant) });

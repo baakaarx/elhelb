@@ -8,6 +8,7 @@ const {
   JWT_SECRET,
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
+  isSecureRequest,
   signUserToken,
   loadUserById,
   writeAudit,
@@ -312,8 +313,7 @@ router.post('/register', registerLimiter, async (req, res) => {
 
     const rawRow = get(`SELECT * FROM users WHERE id = ?`, [newUserId]);
     const token = signUserToken(rawRow);
-    const isHttps =
-      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    const isHttps = isSecureRequest(req);
     for (const oldName of LEGACY_COOKIE_NAMES || []) res.clearCookie(oldName);
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
@@ -431,8 +431,7 @@ router.get('/oauth/google/callback', async (req, res) => {
 
     const rawRow = get(`SELECT * FROM users WHERE id = ?`, [user.id]);
     const token = signUserToken(rawRow);
-    const isHttps =
-      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    const isHttps = isSecureRequest(req);
     for (const oldName of LEGACY_COOKIE_NAMES || []) res.clearCookie(oldName);
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,

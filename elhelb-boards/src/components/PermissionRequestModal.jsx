@@ -44,6 +44,8 @@ export default function PermissionRequestModal({
   }, [isViewPerm, requestedDuration]);
 
   const selectedPerm = catalog.permissions.find((p) => p.key === permissionKey);
+  const selectedDeptObj = catalog.departments.find((d) => Number(d.id) === Number(targetDepartmentId));
+  const isExclusiveDept = Boolean(selectedDeptObj && selectedDeptObj.is_chairman_exclusive);
   const isCrossDept =
     !user.departmentId || Number(targetDepartmentId) !== Number(user.departmentId);
 
@@ -233,9 +235,11 @@ export default function PermissionRequestModal({
               <span>
                 جهة المراجعة:{' '}
                 <strong>
-                  {isCrossDept
-                    ? 'المدير العام (لأن الطلب عابر للأقسام)'
-                    : 'مدير القسم المختص أو المدير العام'}
+                  {isExclusiveDept
+                    ? 'رئيس مجلس الإدارة فقط (خصوصية سيادية)'
+                    : isCrossDept
+                      ? 'المدير العام (لأن الطلب عابر للأقسام)'
+                      : 'مدير القسم المختص أو المدير العام'}
                 </strong>
                 . بمجرد الموافقة سيتحقق السيرفر تلقائياً ويسمح لك بالتنفيذ طوال المدة المعتمدة.
               </span>

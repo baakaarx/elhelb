@@ -4,6 +4,7 @@ const { all, get, run, transaction } = require('../db');
 const {
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
+  isSecureRequest,
   signUserToken,
   authenticate,
   userHasPermission,
@@ -71,8 +72,7 @@ router.post('/setup-credentials', async (req, res) => {
 
     const updatedSelf = get(`SELECT * FROM users WHERE id = ?`, [req.user.id]);
     const refreshedToken = signUserToken(updatedSelf);
-    const isHttps =
-      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    const isHttps = isSecureRequest(req);
     for (const oldName of LEGACY_COOKIE_NAMES || []) res.clearCookie(oldName);
     res.cookie(COOKIE_NAME, refreshedToken, {
       httpOnly: true,

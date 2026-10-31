@@ -15,6 +15,7 @@ const { seedIfNeeded } = require('../seed');
 const {
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
+  isSecureRequest,
   signUserToken,
   authenticate,
   evaluatePermission,
@@ -735,8 +736,7 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
   if (existing.id === req.user.id && bumpToken > 0) {
     const updatedSelf = get(`SELECT * FROM users WHERE id = ?`, [existing.id]);
     refreshedToken = signUserToken(updatedSelf);
-    const isHttps =
-      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    const isHttps = isSecureRequest(req);
     res.cookie(COOKIE_NAME, refreshedToken, {
       httpOnly: true,
       sameSite: 'lax',
@@ -1344,8 +1344,7 @@ router.post('/backup/import', (req, res) => {
   let refreshedToken = null;
   if (restoredChairman) {
     refreshedToken = signUserToken(restoredChairman);
-    const isHttps =
-      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    const isHttps = isSecureRequest(req);
     for (const oldName of LEGACY_COOKIE_NAMES || []) res.clearCookie(oldName);
     res.cookie(COOKIE_NAME, refreshedToken, {
       httpOnly: true,

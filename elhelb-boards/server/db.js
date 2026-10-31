@@ -367,6 +367,11 @@ function initSchema() {
       verified_at TEXT DEFAULT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS revoked_tokens (
+      jti TEXT PRIMARY KEY,
+      expires_epoch INTEGER NOT NULL
+    );
   `);
 
   // Safe migrations for existing local DB files
@@ -422,6 +427,7 @@ const SNAPSHOT_TABLES_FORWARD = [
   'audit_logs',
   'email_logs',
   'email_verifications',
+  'revoked_tokens',
 ];
 
 const SNAPSHOT_TABLES_REVERSE = [...SNAPSHOT_TABLES_FORWARD].reverse();
@@ -445,6 +451,12 @@ function exportDatabaseSnapshot() {
     } else if (table === 'email_verifications') {
       tables[table] = all(
         `SELECT * FROM (SELECT * FROM email_verifications ORDER BY id DESC LIMIT 100) ORDER BY id ASC`
+      );
+    } else if (table === 'revoked_tokens') {
+      const nowSec = Math.floor(Date.now() / 1000);
+      tables[table] = all(
+        `SELECT * FROM revoked_tokens WHERE expires_epoch > ? LIMIT 500`,
+        [nowSec]
       );
     } else {
       tables[table] = all(`SELECT * FROM "${table}"`);

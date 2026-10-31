@@ -219,10 +219,12 @@ async function sendElhelbEmail({
 
   try {
     const transporter = createGmailTransport(cfg);
+    const safeSender = cfg.senderName.replace(/[\r\n"]+/g, ' ').trim();
+    const safeSubject = String(subject || '').replace(/[\r\n]+/g, ' ').trim();
     const info = await transporter.sendMail({
-      from: `"${cfg.senderName.replace(/"/g, '')}" <${cfg.gmailUser}>`,
+      from: `"${safeSender}" <${cfg.gmailUser}>`,
       to: toHeader,
-      subject,
+      subject: safeSubject,
       html,
     });
 

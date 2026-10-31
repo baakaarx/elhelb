@@ -5,7 +5,9 @@ const { get, all, run } = require('../db');
 const {
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
+  isSecureRequest,
   signUserToken,
+  revokeTokenPayload,
   loadUserById,
   authenticate,
   writeAudit,
@@ -252,8 +254,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     failedAccountAttempts.delete(String(row.username || '').toLowerCase());
 
     const token = signUserToken(row);
-    const isHttps =
-      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    const isHttps = isSecureRequest(req);
     for (const oldName of LEGACY_COOKIE_NAMES || []) res.clearCookie(oldName);
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
@@ -283,6 +284,7 @@ router.post('/login', loginLimiter, async (req, res) => {
 });
 
 router.post('/logout', authenticate, (req, res) => {
+  revokeTokenPayload(req.tokenPayload);
   writeAudit({
     user: req.user,
     action: 'تسجيل خروج',
