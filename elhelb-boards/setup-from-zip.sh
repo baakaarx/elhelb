@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # ==============================================================================
-# ELHELB GROUP — المثبّت المباشر من ملف الضغط (خاص بقسم الـ IT)
+# ELHELB GROUP — المثبّت المباشر المؤمَّن من ملف الضغط (خاص بقسم الـ IT)
 # الاستخدام:
 #   1) تشغيل على IP السيرفر مباشرة (http://SERVER_IP:3000):
 #        sudo bash setup-from-zip.sh
-#   2) تشغيل على دومين رسمي بشهادة HTTPS مجانية تلقائية:
+#   2) تشغيل على دومين رسمي بشهادة HTTPS مجانية تلقائية عبر Caddy:
 #        sudo DOMAIN=boards.elhelbgroup.com bash setup-from-zip.sh
 # ==============================================================================
 
@@ -20,7 +20,7 @@ PORT="${PORT:-3000}"
 echo "🌿 [1/5] تحديث حزم السيرفر وتثبيت الأدوات الأساسية..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y curl ca-certificates gnupg sqlite3 rsync
+apt-get install -y curl ca-certificates gnupg sqlite3 rsync util-linux
 
 if ! command -v node >/dev/null 2>&1 || [[ "$(node -v | cut -d. -f1 | tr -d 'v')" -lt 22 ]]; then
   echo "🌿 [2/5] تثبيت Node.js 22 LTS..."
@@ -32,14 +32,16 @@ if ! command -v pm2 >/dev/null 2>&1; then
   npm install -g pm2
 fi
 
-echo "🌿 [3/5] إعداد مجلد قاعدة البيانات الدائم والنسخ الاحتياطي..."
+echo "🌿 [3/5] إعداد مجلد قاعدة البيانات الدائم ومفتاح التشفير المعزول..."
 mkdir -p "$APP_DIR" "$DATA_DIR" "$BACKUP_DIR"
+chmod 700 "$DATA_DIR" "$BACKUP_DIR"
 
 if [[ ! -f "$DATA_DIR/.jwt_secret" ]]; then
-  node -e "console.log(require('crypto').randomBytes(48).toString('hex'))" > "$DATA_DIR/.jwt_secret"
+  umask 077
+  node -e "process.stdout.write(require('crypto').randomBytes(48).toString('hex'))" > "$DATA_DIR/.jwt_secret"
   chmod 600 "$DATA_DIR/.jwt_secret"
 fi
-JWT_SECRET_VAL="$(cat "$DATA_DIR/.jwt_secret")"
+JWT_SECRET_VAL="${JWT_SECRET:-$(cat "$DATA_DIR/.jwt_secret")}"
 
 if [[ "$SRC_DIR" != "$APP_DIR" ]]; then
   rsync -a --delete --exclude 'node_modules' --exclude 'data' "$SRC_DIR/" "$APP_DIR/"
@@ -51,15 +53,24 @@ npm ci --include=dev --no-fund --loglevel=error
 npm run build
 npm prune --omit=dev
 
+TRUST_PROXY_VAL="0"
+if [[ -n "$DOMAIN" ]]; then
+  TRUST_PROXY_VAL="1"
+fi
+
 echo "🌿 [5/5] تشغيل المنصة عبر PM2 وتفعيل التشغيل التلقائي عند إعادة الإقلاع..."
-DB_PATH="$DATA_DIR/elhelb-boards.db" JWT_SECRET="$JWT_SECRET_VAL" PORT="$PORT" \
+DB_PATH="$DATA_DIR/elhelb-boards.db" \
+JWT_SECRET="$JWT_SECRET_VAL" \
+PORT="$PORT" \
+TRUST_PROXY="$TRUST_PROXY_VAL" \
+ADMIN_INIT_PASSWORD="${ADMIN_INIT_PASSWORD:-}" \
   pm2 startOrReload ecosystem.config.cjs --update-env
 pm2 save
 env PATH=$PATH:/usr/bin pm2 startup systemd -u root --hp /root >/dev/null 2>&1 || true
 
-# نسخ احتياطي يومي تلقائي الساعة 3 فجراً مع الاحتفاظ بآخر 30 نسخة
+# نسخ احتياطي يومي تلقائي الساعة 3 فجراً مع قفل flock والاحتفاظ بآخر 30 نسخة
 cat >/etc/cron.d/elhelb-boards-backup <<'EOF'
-0 3 * * * root test -f /opt/elhelb-data/elhelb-boards.db && sqlite3 /opt/elhelb-data/elhelb-boards.db ".backup '/opt/elhelb-backups/daily-$(date +\%F).db'" && ls -1t /opt/elhelb-backups/daily-*.db 2>/dev/null | tail -n +31 | xargs -r rm -f
+0 3 * * * root flock -n /var/lock/elhelb-backup.lock sh -c 'test -f /opt/elhelb-data/elhelb-boards.db && sqlite3 /opt/elhelb-data/elhelb-boards.db ".backup /opt/elhelb-backups/daily-$(date +\%F).db" && ls -1t /opt/elhelb-backups/daily-*.db 2>/dev/null | tail -n +31 | xargs -r rm -f'
 EOF
 chmod 644 /etc/cron.d/elhelb-boards-backup
 

@@ -12,6 +12,8 @@ const {
 } = require('../db');
 const { seedIfNeeded } = require('../seed');
 const {
+  COOKIE_NAME,
+  signUserToken,
   authenticate,
   evaluatePermission,
   writeAudit,
@@ -673,7 +675,22 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
     details: `${fullName} — الدور: ${role.name} — الحالة: ${isActive ? 'نشط' : 'موقوف'}`,
   });
 
-  res.json({ ok: true });
+  // If caller rotated their own password, issue a fresh token immediately so their session stays active
+  let refreshedToken = null;
+  if (existing.id === req.user.id && bumpToken > 0) {
+    const updatedSelf = get(`SELECT * FROM users WHERE id = ?`, [existing.id]);
+    refreshedToken = signUserToken(updatedSelf);
+    const isHttps =
+      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    res.cookie(COOKIE_NAME, refreshedToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isHttps,
+      maxAge: 12 * 3600 * 1000,
+    });
+  }
+
+  res.json({ ok: true, token: refreshedToken });
 });
 
 router.delete('/users/:id(\\d+)', (req, res) => {

@@ -1024,7 +1024,79 @@ async function main() {
     const gmUsersList = await api('GET', '/api/admin/users', gmTok);
     assert.ok(!gmUsersList.data.some((u) => u.username === 'ai.sovereign'), 'GM users table must hide ai.sovereign');
 
-    console.log('\n✅ ALL 13 PRODUCTION v13 TESTS (14 DEPARTMENTS, SOVEREIGN CHAIRMAN-ONLY AI ISOLATION, BACKUP, CLOUD & RBAC) PASSED 100%!');
+    console.log('1️⃣4️⃣ Testing Production Security Hardening (Mandatory JWT_SECRET, Clickjacking/CSP, XFF Anti-Spoof Brute-Force Lock & Seamless Admin Password Rotation)...');
+    // 14a. Production MUST refuse to start without JWT_SECRET or with short JWT_SECRET
+    await assert.rejects(
+      execFileAsync(process.execPath, ['--no-warnings', '-e', 'require("./server/rbac")'], {
+        cwd: path.join(__dirname, '..'),
+        env: { ...process.env, NODE_ENV: 'production', JWT_SECRET: '', VERCEL: '' },
+      }),
+      /FATAL SECURITY ERROR: JWT_SECRET/
+    );
+    await assert.rejects(
+      execFileAsync(process.execPath, ['--no-warnings', '-e', 'require("./server/rbac")'], {
+        cwd: path.join(__dirname, '..'),
+        env: { ...process.env, NODE_ENV: 'production', JWT_SECRET: 'too-short', VERCEL: '' },
+      }),
+      /at least 32 characters/
+    );
+
+    // 14b. Production cloudSync must NOT expose resetCloudSyncStateForTests
+    const { stdout: prodExportsOut } = await execFileAsync(
+      process.execPath,
+      ['--no-warnings', '-e', 'console.log(JSON.stringify(Object.keys(require("./server/cloudSync"))))'],
+      {
+        cwd: path.join(__dirname, '..'),
+        env: { ...process.env, NODE_ENV: 'production' },
+      }
+    );
+    const prodCloudKeys = JSON.parse(prodExportsOut.trim());
+    assert.ok(!prodCloudKeys.includes('resetCloudSyncStateForTests'));
+
+    // 14c. Verify scripts/verify-server.js passes 100% (tests X-Frame-Options: DENY & CSP in production)
+    const { stdout: verifyOut } = await execFileAsync(
+      process.execPath,
+      ['--no-warnings', 'scripts/verify-server.js'],
+      { cwd: path.join(__dirname, '..') }
+    );
+    assert.ok(verifyOut.includes('Passed 100%'));
+
+    // 14d. Anti-Brute-Force + X-Forwarded-For spoofing defense
+    let lockedOut = false;
+    for (let i = 0; i < 10; i += 1) {
+      const bfRes = await fetch(`${base}/api/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Forwarded-For': `203.0.113.${i + 10}`,
+        },
+        body: JSON.stringify({ username: 'export_emp', password: `wrong-pass-${i}` }),
+      });
+      if (bfRes.status === 429) {
+        lockedOut = true;
+        break;
+      }
+    }
+    assert.equal(lockedOut, true, 'Brute-force attacks must hit 429 even when spoofing X-Forwarded-For');
+
+    // 14e. Chairman rotates own password from UI -> receives fresh token & old token is immediately revoked!
+    const adminMeBefore = await api('GET', '/api/auth/me', chairmanTok);
+    const adminId = adminMeBefore.data.user.id;
+    const rotateRes = await api('PATCH', `/api/admin/users/${adminId}`, chairmanTok, {
+      fullName: adminMeBefore.data.user.fullName,
+      email: adminMeBefore.data.user.email || '',
+      jobTitle: adminMeBefore.data.user.jobTitle || '',
+      roleId: adminMeBefore.data.user.roleId,
+      departmentId: null,
+      isActive: true,
+      newPassword: 'Strong#Chairman2026!',
+    });
+    assert.equal(rotateRes.status, 200);
+    assert.ok(rotateRes.data.token, 'Rotating own password must return a refreshed JWT immediately');
+    assert.equal((await api('GET', '/api/auth/me', chairmanTok)).status, 401, 'Old Chairman token must be revoked');
+    assert.equal((await api('GET', '/api/auth/me', rotateRes.data.token)).status, 200, 'New Chairman token works seamlessly');
+
+    console.log('\n✅ ALL 14 PRODUCTION v14 TESTS (HARDENED SECURITY, 14 DEPARTMENTS, SOVEREIGN AI ISOLATION, BACKUP & CLOUD) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}

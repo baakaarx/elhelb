@@ -1,8 +1,44 @@
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { get, all, run } = require('./db');
 
-const JWT_SECRET =
-  process.env.JWT_SECRET || 'elhelb-sovereign-v10-isolated-2026-secret';
+function resolveJwtSecret() {
+  const envSecret = (process.env.JWT_SECRET || '').trim();
+  if (envSecret) {
+    if (process.env.NODE_ENV === 'production' && envSecret.length < 32) {
+      throw new Error(
+        'FATAL SECURITY ERROR: JWT_SECRET must be at least 32 characters in production.'
+      );
+    }
+    return envSecret;
+  }
+
+  // Serverless cloud fallback ONLY if an authenticated cloud storage token is present
+  const cloudToken = (
+    process.env.BLOB_READ_WRITE_TOKEN ||
+    process.env.KV_REST_API_TOKEN ||
+    process.env.UPSTASH_REDIS_REST_TOKEN ||
+    process.env.TURSO_AUTH_TOKEN ||
+    ''
+  ).trim();
+  if (process.env.VERCEL && cloudToken.length >= 24) {
+    return crypto
+      .createHmac('sha256', cloudToken)
+      .update('elhelb-jwt-signing-key-v14')
+      .digest('hex');
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'FATAL SECURITY ERROR: JWT_SECRET environment variable (min 32 chars) is required in production. Use setup-from-zip.sh, start-windows-server.bat, or docker compose up.'
+    );
+  }
+
+  // Ephemeral random key for local development / automated test runs (zero hardcoded secret)
+  return crypto.randomBytes(48).toString('hex');
+}
+
+const JWT_SECRET = resolveJwtSecret();
 const COOKIE_NAME = 'elhelb_session_v10';
 const LEGACY_COOKIE_NAMES = ['elhelb_session'];
 
