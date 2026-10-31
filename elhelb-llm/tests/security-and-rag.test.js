@@ -15,12 +15,16 @@ const voiceCommonJs = esbuild.transformSync(voiceSource, { format: 'cjs' }).code
 const voiceModule = { exports: {} };
 new Function('module', 'exports', voiceCommonJs)(voiceModule, voiceModule.exports);
 const speechFixture = voiceModule.exports.cleanTextForClientSpeech('استخدم Tazolen 72% WP بمعدل 1.5 لتر/فدان.');
-assert.match(speechFixture, /تازولين اتنين وسبعين في المية/);
+assert.match(speechFixture, /تازولين اثنان وسبعون في المئة/);
 assert.match(speechFixture, /واحد فاصلة خمسة لتر لكل فدان/);
 assert.doesNotMatch(speechFixture, /[A-Za-z/]/, 'يجب ألا يقرأ الصوت اختصارات لاتينية أو slash في نص عربي');
+const englishSpeechFixture = voiceModule.exports.cleanTextForClientSpeech('Use product 72% at 1.5 L/ha.', { lang: 'en-US' });
+assert.match(englishSpeechFixture, /72 percent/);
+assert.match(englishSpeechFixture, /1 point 5 L per ha/);
+assert.doesNotMatch(englishSpeechFixture, /في المية|[\u0600-\u06FF]/);
 const fertilizerSpeechFixture = voiceModule.exports.cleanTextForClientSpeech('New Fruity 10-10-40، بمعدل 250 جم/100 لتر.');
-assert.match(fertilizerSpeechFixture, /نيو فروتي عشرة، عشرة، أربعين/);
-assert.match(fertilizerSpeechFixture, /لكل مية لتر/);
+assert.match(fertilizerSpeechFixture, /نيو فروتي عشرة، عشرة، أربعون/);
+assert.match(fertilizerSpeechFixture, /لكل مئة لتر/);
 assert.doesNotMatch(fertilizerSpeechFixture, /[A-Za-z/]/);
 const offlineBundle = esbuild.buildSync({
   entryPoints: [path.join(__dirname, '..', 'src', 'offlineStaticBrain.js')],
@@ -53,7 +57,7 @@ async function testBrowserVoiceEngineWiring() {
   });
   const recognition = recognitionInstances[0];
   assert.ok(recHandle && recognition.started);
-  assert.equal(recognition.lang, 'ar-EG');
+  assert.equal(recognition.lang, 'ar-SA');
   recognition.onstart();
   const makeResult = (value, isFinal = true) => {
     const item = [{ transcript: value }];
@@ -67,8 +71,8 @@ async function testBrowserVoiceEngineWiring() {
   assert.equal(voiceModule.exports.deduplicateSpeechTranscript('عندي عندي عندي مشكلة عندي مشكلة عندي مشكلة'), 'عندي مشكلة');
   assert.equal(voiceModule.exports.deduplicateSpeechTranscript('عندي مشكلة عايزك عندي مشكلة'), 'عندي مشكلة عايزك');
   assert.ok(statuses.includes('listening'));
-  const alternateRecognition = voiceModule.exports.startArabicRecognition({ lang: 'ar-SA' });
-  assert.equal(recognitionInstances[1].lang, 'ar-SA', 'يجب تمرير اختيار اللغة العربية إلى محرك الميكروفون');
+  const alternateRecognition = voiceModule.exports.startArabicRecognition({ lang: 'en-US' });
+  assert.equal(recognitionInstances[1].lang, 'en-US', 'يجب تمرير اختيار اللغة الإنجليزية إلى محرك الميكروفون');
   alternateRecognition.abort();
 
   const utterances = [];
@@ -76,7 +80,10 @@ async function testBrowserVoiceEngineWiring() {
     speaking: false,
     paused: false,
     cancel() {},
-    getVoices: () => [{ name: 'Arabic', lang: 'ar-EG' }],
+    getVoices: () => [
+      { name: 'Arabic', lang: 'ar-SA' },
+      { name: 'English', lang: 'en-US' },
+    ],
     speak(utterance) {
       utterances.push(utterance);
       this.speaking = true;
@@ -87,15 +94,28 @@ async function testBrowserVoiceEngineWiring() {
   };
   function MockUtterance(text) { this.text = text; }
   global.window = { speechSynthesis: synth, SpeechSynthesisUtterance: MockUtterance, isSecureContext: true };
-  await new Promise((resolve, reject) => {
+  const arabicSpeechDone = new Promise((resolve, reject) => {
     voiceModule.exports.speakArabic('رد صوتي عربي 72%', {
       onStart: () => {},
       onError: reject,
       onEnd: resolve,
     });
   });
+  assert.equal(utterances.length, 1, 'يجب بدء النطق فوراً دون مؤقت يؤخره خارج نقرة المستخدم');
+  await arabicSpeechDone;
   assert.equal(utterances.length, 1);
-  assert.match(utterances[0].text, /اتنين وسبعين في المية/);
+  assert.equal(utterances[0].voice.lang, 'ar-SA', 'يجب اختيار صوت العربية الرسمية عند توفره');
+  assert.match(utterances[0].text, /اثنان وسبعون في المئة/);
+  await new Promise((resolve, reject) => {
+    voiceModule.exports.speakArabic('English reply 72%', {
+      lang: 'en-US',
+      onError: reject,
+      onEnd: resolve,
+    });
+  });
+  assert.equal(utterances[1].lang, 'en-US');
+  assert.equal(utterances[1].voice.lang, 'en-US', 'يجب اختيار صوت مطابق للغة الإنجليزية');
+  assert.match(utterances[1].text, /72 percent/);
   global.window = previousWindow;
 }
 
@@ -234,6 +254,18 @@ async function runTests() {
     assert.ok(visionRes.data.ok);
     assert.ok(/Capitol|ELH-101/i.test(visionRes.data.extractedText));
     assert.ok(visionRes.data.matchedCompanyRecords.length >= 1);
+    const englishVisionTurn = await request(baseUrl, '/api/chat/ask', {
+      method: 'POST',
+      body: {
+        sessionId: 'vis_english_image_test_0001',
+        language: 'en',
+        message: 'Please review this product image',
+        imageBase64: base64Img,
+      },
+    });
+    assert.equal(englishVisionTurn.status, 200);
+    assert.match(englishVisionTurn.data.reply, /I reviewed the image/i);
+    assert.ok(!/[\u0600-\u06FF]/.test(englishVisionTurn.data.reply), 'يجب أن يظل رد تحليل الصورة باللغة الإنجليزية');
     console.log('✅ [4/5] استقبال وقراءة الصور أوفلاين (OCR Vision) ومطابقتها مع كتالوج مستحضرات الهلب');
 
     // 5. اختبار توافق واجهة تطبيق الموبايل (/api/v1/chat و /v1/chat/completions)
@@ -323,12 +355,25 @@ async function runTests() {
     });
     assert.equal(fertilizersTurn.status, 200);
     assert.ok(fertilizersTurn.data.reply.includes('نيو فروتي') && fertilizersTurn.data.reply.includes('توب فيلم'));
+    const englishServerTurn = await request(baseUrl, '/api/chat/ask', {
+      method: 'POST',
+      body: { sessionId: 'vis_english_fertilizer_test_0001', language: 'en', message: 'What fertilizers does ELHELB offer?' },
+    });
+    assert.equal(englishServerTurn.status, 200);
+    assert.ok(englishServerTurn.data.reply.includes('ELHELB has') && englishServerTurn.data.reply.includes('New Fruity'));
     assert.equal(agriKnowledge.fertilizers.length, 20, 'يجب أن يتضمن الدليل جميع منتجات الأسمدة والمغذيات العشرين');
     const offlineFertilizers = await offlineModule.exports.runStandaloneClientTurn({
       sessionId: 'offline_fertilizer_test',
       message: 'إيه الأسمدة المتاحة عندكم في شركة الهلب؟',
     });
     assert.ok(offlineFertilizers.reply.includes('نيو فروتي') && offlineFertilizers.reply.includes('توب فيلم'));
+    const englishTurn = await offlineModule.exports.runStandaloneClientTurn({
+      sessionId: 'offline_english_test',
+      language: 'en',
+      message: 'What fertilizers does ELHELB offer?',
+    });
+    assert.ok(englishTurn.reply.includes('ELHELB has') && englishTurn.reply.includes('New Fruity'));
+    assert.ok(!/[\u0600-\u06FF]/.test(englishTurn.reply), 'يجب أن يكون الرد في وضع الإنجليزية بالإنجليزية');
 
     const mitesTurn = await request(baseUrl, '/api/chat/ask', {
       method: 'POST',

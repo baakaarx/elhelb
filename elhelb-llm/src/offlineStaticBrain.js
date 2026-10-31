@@ -17,14 +17,15 @@ export function normalizeArabicClient(text = '') {
     .trim();
 }
 
-export function formatForSpeechClient(text = '') {
+export function formatForSpeechClient(text = '', language = 'ar') {
+  const isEnglish = String(language).toLowerCase().startsWith('en');
   return String(text || '')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
-    .replace(/[#>*_~|•]/g, ' ')
+    .replace(/[ #>*_~|•]/g, ' ')
     .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '')
-    .replace(/(\d+(?:\.\d+)?)\s*%/g, '$1 في المائة')
+    .replace(/(\d+(?:\.\d+)?)\s*%/g, isEnglish ? '$1 percent' : '$1 بالمائة')
     .replace(/\b(?:EC|WP|SC|SL|WG|GR|UL|DP)\b/g, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -373,7 +374,15 @@ async function analyzeImageInBrowserCanvas(dataUrl) {
   });
 }
 
-function getStandaloneKnowledgeReply(rawText) {
+function getStandaloneKnowledgeReply(rawText, language = 'ar') {
+  const rawLower = String(rawText || '').toLowerCase();
+  if (String(language).toLowerCase().startsWith('en')) {
+    if (/(?:fertili[sz]er|nutrient|plant food)/i.test(rawLower)) {
+      const names = (agriKnowledge.fertilizers || []).map((item) => item.name);
+      return `ELHELB has ${names.length} registered fertilizers and crop nutrients: ${names.join(', ')}. Tell me your crop and growth stage so I can narrow the options. For exact rates, follow the product label; I will not guess a dose.`;
+    }
+    return null;
+  }
   const norm = normalizeArabicClient(rawText);
   const asksWeeds = /(?:حشائش|حشايش|حشيش|مبيد حشائش|السعد|الدنيبه|ابو ركبه|العجيره)/.test(norm);
   const herbicide = agriKnowledge.herbicides.find((item) => {
@@ -453,7 +462,7 @@ export function getLocalHistoryResponse(sessionId) {
   return { messages: loadLocalHistory(sessionId) };
 }
 
-export async function runStandaloneClientTurn({ sessionId, message = '', imageFile = null, imageBase64 = null }) {
+export async function runStandaloneClientTurn({ sessionId, message = '', imageFile = null, imageBase64 = null, language = 'ar' }) {
   const history = loadLocalHistory(sessionId);
   const cleanMsg = String(message || '').trim();
 
@@ -476,7 +485,10 @@ export async function runStandaloneClientTurn({ sessionId, message = '', imageFi
     else if (/(?:عنكبوت احمر|اكاروس|نقط صفراء)/.test(textContext)) vis.condition = 'chlorosis';
     thumbToSave = vis.thumbDataUrl;
 
-    if (vis.condition === 'blight') {
+    if (String(language).toLowerCase().startsWith('en')) {
+      reply = 'I received and reviewed the image. Please tell me the crop, plant age, and the main symptom; a photo alone is not enough to confirm a diagnosis or a safe application rate.';
+      suggestions = ['The crop is potato and the leaves have spots', 'I see insects under the leaves', 'How can I contact ELHELB support?'];
+    } else if (vis.condition === 'blight') {
       reply =
         '🌿 **فحص الصورة في عيادة الهلب الزراعية (ELHELB Agri-Clinic):**\n\n' +
         '- **الملاحظة البصرية في الصورة:** يظهر على الأوراق الخضراء **بقعة نخرية داكنة (بنية مائلة للسواد / لفحة واضحة على نصل الورقة والساق)**.\n' +
@@ -516,30 +528,37 @@ export async function runStandaloneClientTurn({ sessionId, message = '', imageFi
       ];
     }
   } else {
-    const catalogReply = getStandaloneKnowledgeReply(cleanMsg);
+    const catalogReply = getStandaloneKnowledgeReply(cleanMsg, language);
     if (catalogReply) {
       reply = catalogReply;
-      suggestions = ['اذكر المحصول والآفة لتوصية أدق', 'ما المنتجات المتاحة لمشكلة أخرى؟', 'تحدث عن المحاصيل التي أزرعها'];
+      suggestions = String(language).toLowerCase().startsWith('en')
+        ? ['Tell me your crop and growth stage', 'What products are available?', 'How can I contact ELHELB support?']
+        : ['اذكر المحصول والآفة لتوصية أدق', 'ما المنتجات المتاحة لمشكلة أخرى؟', 'تحدث عن المحاصيل التي أزرعها'];
     } else {
-      const answerObj = generateStandaloneTextReply(cleanMsg, history);
+      const answerObj = generateStandaloneTextReply(cleanMsg, history, language);
       reply = answerObj.reply;
       suggestions = answerObj.suggestions;
     }
   }
 
   if (dataUrl && cleanMsg) {
-    const contextReply = getStandaloneKnowledgeReply(cleanMsg);
-    reply += `\n\n🧭 **تم دمج وصفك مع ملاحظة الصورة:** «${cleanMsg}»`;
+    const contextReply = getStandaloneKnowledgeReply(cleanMsg, language);
+    const isEnglish = String(language).toLowerCase().startsWith('en');
+    reply += isEnglish
+      ? `\n\nYour description: “${cleanMsg}”.`
+      : `\n\n🧭 **تم دمج وصفك مع ملاحظة الصورة:** «${cleanMsg}»`;
     if (contextReply && !contextReply.includes('سجل العيادة يشمل')) reply += `\n${contextReply}`;
-    else reply += '\nالصورة لا تؤكد المسبب وحدها؛ اذكر المحصول وعمره وصوّر موضع الإصابة عن قرب لتضييق الاحتمالات.';
+    else reply += isEnglish
+      ? '\nThe image alone cannot confirm the cause. Tell me the crop and plant age, and share a close-up of the affected area.'
+      : '\nالصورة لا تؤكد المسبب وحدها؛ اذكر المحصول وعمره وصوّر موضع الإصابة عن قرب لتضييق الاحتمالات.';
   }
 
-  const speechText = formatForSpeechClient(reply);
+  const speechText = formatForSpeechClient(reply, language);
   const now = Date.now();
   const userMessage = {
     id: now,
     role: 'user',
-    content: cleanMsg || '📷 صورة مرفقة للتحليل',
+    content: cleanMsg || (String(language).toLowerCase().startsWith('en') ? '📷 Image attached for analysis' : '📷 صورة مرفقة للتحليل'),
     imageThumb: thumbToSave,
   };
   const assistantMessage = {
@@ -561,7 +580,13 @@ export async function runStandaloneClientTurn({ sessionId, message = '', imageFi
   };
 }
 
-function generateStandaloneTextReply(rawText, history = []) {
+function generateStandaloneTextReply(rawText, history = [], language = 'ar') {
+  if (String(language).toLowerCase().startsWith('en')) {
+    return {
+      reply: 'I can help with ELHELB agricultural products and crop problems. Please tell me the crop, what symptoms you see, and the product name if you have one. For safety, confirm every application rate on the product label.',
+      suggestions: ['What fertilizers does ELHELB offer?', 'Help me identify a crop problem', 'How do I contact ELHELB support?'],
+    };
+  }
   const norm = normalizeArabicClient(rawText);
   const wordCount = norm.split(/\s+/).filter(Boolean).length;
 

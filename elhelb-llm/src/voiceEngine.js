@@ -25,37 +25,37 @@ const BRAND_SPEECH_ALIASES = [
   ['Built-up', 'بيلت أب'], ['Besiege', 'بيسيج'], ['ELHELB GROUP', 'مجموعة الهلب'],
 ];
 
-const EGYPTIAN_NUMBERS = ['صفر', 'واحد', 'اتنين', 'تلاتة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'تمانية', 'تسعة'];
-const EGYPTIAN_TEENS = { 10: 'عشرة', 11: 'حداشر', 12: 'اتناشر', 13: 'تلتاشر', 14: 'أربعتاشر', 15: 'خمستاشر', 16: 'ستاشر', 17: 'سبعتاشر', 18: 'تمنتاشر', 19: 'تسعتاشر' };
-const EGYPTIAN_TENS = ['', '', 'عشرين', 'تلاتين', 'أربعين', 'خمسين', 'ستين', 'سبعين', 'تمانين', 'تسعين'];
-const EGYPTIAN_HUNDREDS = ['', 'مية', 'ميتين', 'تلتمية', 'أربعمية', 'خمسمية', 'ستمِية', 'سبعمية', 'تمنمية', 'تسعمية'];
+const ARABIC_NUMBERS = ['صفر', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'ثمانية', 'تسعة'];
+const ARABIC_TEENS = { 10: 'عشرة', 11: 'أحد عشر', 12: 'اثنا عشر', 13: 'ثلاثة عشر', 14: 'أربعة عشر', 15: 'خمسة عشر', 16: 'ستة عشر', 17: 'سبعة عشر', 18: 'ثمانية عشر', 19: 'تسعة عشر' };
+const ARABIC_TENS = ['', '', 'عشرون', 'ثلاثون', 'أربعون', 'خمسون', 'ستون', 'سبعون', 'ثمانون', 'تسعون'];
+const ARABIC_HUNDREDS = ['', 'مئة', 'مئتان', 'ثلاثمئة', 'أربعمئة', 'خمسمئة', 'ستمئة', 'سبعمئة', 'ثمانمئة', 'تسعمئة'];
 
-function numberToEgyptianArabic(raw) {
+function numberToArabicWords(raw) {
   const value = Number(raw);
   if (!Number.isFinite(value)) return raw;
   if (raw.includes('.')) {
     const [whole, fraction] = raw.split('.');
-    const decimals = fraction.split('').map((digit) => EGYPTIAN_NUMBERS[Number(digit)]).join(' ');
-    return `${numberToEgyptianArabic(whole)} فاصلة ${decimals}`;
+    const decimals = fraction.split('').map((digit) => ARABIC_NUMBERS[Number(digit)]).join(' ');
+    return `${numberToArabicWords(whole)} فاصلة ${decimals}`;
   }
-  if (value < 10) return EGYPTIAN_NUMBERS[value];
-  if (value < 20) return EGYPTIAN_TEENS[value];
+  if (value < 10) return ARABIC_NUMBERS[value];
+  if (value < 20) return ARABIC_TEENS[value];
   if (value < 100) {
     const tens = Math.floor(value / 10);
     const ones = value % 10;
-    return ones ? `${EGYPTIAN_NUMBERS[ones]} و${EGYPTIAN_TENS[tens]}` : EGYPTIAN_TENS[tens];
+    return ones ? `${ARABIC_NUMBERS[ones]} و${ARABIC_TENS[tens]}` : ARABIC_TENS[tens];
   }
   if (value < 1000) {
     const hundreds = Math.floor(value / 100);
     const rest = value % 100;
-    return rest ? `${EGYPTIAN_HUNDREDS[hundreds]} و${numberToEgyptianArabic(String(rest))}` : EGYPTIAN_HUNDREDS[hundreds];
+    return rest ? `${ARABIC_HUNDREDS[hundreds]} و${numberToArabicWords(String(rest))}` : ARABIC_HUNDREDS[hundreds];
   }
   if (value < 1000000) {
     const thousands = Math.floor(value / 1000);
     const rest = value % 1000;
-    return rest ? `${numberToEgyptianArabic(String(thousands))} ألف و${numberToEgyptianArabic(String(rest))}` : `${numberToEgyptianArabic(String(thousands))} ألف`;
+    return rest ? `${numberToArabicWords(String(thousands))} ألف و${numberToArabicWords(String(rest))}` : `${numberToArabicWords(String(thousands))} ألف`;
   }
-  return raw.split('').map((digit) => EGYPTIAN_NUMBERS[Number(digit)]).join(' ');
+  return raw.split('').map((digit) => ARABIC_NUMBERS[Number(digit)]).join(' ');
 }
 
 export function isVoiceInputSupported() {
@@ -66,28 +66,43 @@ export function isVoiceOutputSupported() {
   return typeof window !== 'undefined' && Boolean(window.speechSynthesis && window.SpeechSynthesisUtterance);
 }
 
-export function getVoiceDiagnostics() {
+export function getVoiceDiagnostics(language = 'ar-SA') {
   if (typeof window === 'undefined') {
-    return { secureContext: false, recognition: false, synthesis: false, arabicVoice: false, voices: [] };
+    return { secureContext: false, recognition: false, synthesis: false, languageVoiceAvailable: false, voices: [] };
   }
   const voices = window.speechSynthesis?.getVoices?.() || [];
+  const prefix = String(language).toLowerCase().startsWith('en') ? 'en' : 'ar';
+  const languageVoices = voices.filter((voice) => String(voice.lang).toLowerCase().startsWith(prefix));
   return {
     secureContext: Boolean(window.isSecureContext),
     recognition: Boolean(window.SpeechRecognition || window.webkitSpeechRecognition),
     synthesis: isVoiceOutputSupported(),
-    arabicVoice: voices.some((voice) => /^ar(?:[-_]|$)/i.test(voice.lang)),
-    voices: voices.filter((voice) => /^ar(?:[-_]|$)/i.test(voice.lang)).map((voice) => `${voice.name} (${voice.lang})`),
+    languageVoiceAvailable: languageVoices.length > 0,
+    voices: languageVoices.map((voice) => `${voice.name} (${voice.lang})`),
   };
 }
 
-export function cleanTextForClientSpeech(text = '') {
+export function cleanTextForClientSpeech(text = '', { lang = 'ar-SA' } = {}) {
+  const isEnglish = String(lang).toLowerCase().startsWith('en');
   let clean = String(text || '')
-    .replace(/```[\s\S]*?```/g, ' تم استخراج النص من الصورة بنجاح. ')
+    .replace(/```[\s\S]*?```/g, isEnglish ? ' Text extracted from the image. ' : ' تم استخراج النص من الصورة بنجاح. ')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/https?:\/\/\S+/gi, ' رابط الموقع الرسمي ')
+    .replace(/https?:\/\/\S+/gi, isEnglish ? ' the official website ' : ' رابط الموقع الرسمي ')
     .replace(/[\u{1F300}-\u{1FAFF}\u2600-\u27BF]/gu, ' ');
+
+  if (isEnglish) {
+    return clean
+      .replace(/(\d+(?:\.\d+)?)\s*%/g, '$1 percent')
+      .replace(/\b(?:EC|WP|SC|SL|WG|GR|UL|DP|NPK|K2O)\b/gi, ' ')
+      .replace(/\s*\/\s*/g, ' per ')
+      .replace(/(?<=\d)\.(?=\d)/g, ' point ')
+      .replace(/(?<=\d)\s*[–—-]\s*(?=\d)/g, ', ')
+      .replace(/[|#*_~<>]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
 
   for (const [english, arabic] of BRAND_SPEECH_ALIASES) {
     clean = clean.replace(new RegExp(`\\b${english.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), arabic);
@@ -96,7 +111,7 @@ export function cleanTextForClientSpeech(text = '') {
   return clean
     .replace(/\b(?:ELHELB|EC|WP|SC|SL|WG|GR|UL|DP|NPK|K2O|USD|EGP)\b/gi, ' ')
     .replace(/\b[A-Z][A-Z0-9+.-]{2,}\b/g, ' ')
-    .replace(/(\d+(?:\.\d+)?)\s*%/g, '$1 في المية')
+    .replace(/(\d+(?:\.\d+)?)\s*%/g, '$1 في المئة')
     .replace(/(\d)\s*\/\s*(?=\d|[\u0600-\u06FF])/g, '$1 لكل ')
     .replace(/\s*\/\s*(?=[\u0600-\u06FF])/g, ' لكل ')
     .replace(/\s*\/\s*/g, ' لكل ')
@@ -104,18 +119,19 @@ export function cleanTextForClientSpeech(text = '') {
     .replace(/(?<=\d)\s*[–—]\s*(?=\d)/g, ' لحد ')
     .replace(/(?<=\d)\s*-\s*(?=\d)/g, '، ')
     .replace(/\b[A-Za-z][A-Za-z0-9+._%-]*\b/g, ' ')
-    .replace(/(?<![\p{L}\p{N}])(\d+(?:\.\d+)?)(?![\p{L}\p{N}])/gu, (_match, number) => numberToEgyptianArabic(number))
+    .replace(/(?<![\p{L}\p{N}])(\d+(?:\.\d+)?)(?![\p{L}\p{N}])/gu, (_match, number) => numberToArabicWords(number))
     .replace(/[|#*_~<>]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-function pickBestArabicVoice(language = 'ar-EG') {
+function pickBestVoice(language = 'ar-SA') {
   if (!isVoiceOutputSupported()) return null;
   const voices = window.speechSynthesis.getVoices() || [];
-  const exactPrefix = String(language).replace('_', '-').toLowerCase();
-  return voices.find((voice) => String(voice.lang).replace('_', '-').toLowerCase() === exactPrefix) ||
-    voices.find((voice) => /^ar(?:[-_]|$)/i.test(voice.lang)) || null;
+  const requested = String(language).replace('_', '-').toLowerCase();
+  const prefix = requested.split('-')[0];
+  return voices.find((voice) => String(voice.lang).replace('_', '-').toLowerCase() === requested) ||
+    voices.find((voice) => String(voice.lang).replace('_', '-').toLowerCase().startsWith(`${prefix}-`)) || null;
 }
 
 function speechTokenKey(token) {
@@ -198,38 +214,6 @@ function mergeTranscriptParts(parts = []) {
 }
 
 let activeSpeechCleanup = null;
-let voicesReadyPromise = null;
-
-function waitForVoices() {
-  if (!isVoiceOutputSupported()) return Promise.resolve([]);
-  const synth = window.speechSynthesis;
-  const current = synth.getVoices() || [];
-  if (current.length) return Promise.resolve(current);
-  if (!voicesReadyPromise) {
-    voicesReadyPromise = new Promise((resolve) => {
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        const voices = synth.getVoices() || [];
-        if (voices.length) {
-          done = true;
-          clearTimeout(timer);
-          synth.removeEventListener?.('voiceschanged', finish);
-          resolve(voices);
-        }
-      };
-      const timer = setTimeout(() => {
-        done = true;
-        synth.removeEventListener?.('voiceschanged', finish);
-        resolve(synth.getVoices() || []);
-      }, 1200);
-      synth.addEventListener?.('voiceschanged', finish);
-      finish();
-    });
-  }
-  return voicesReadyPromise;
-}
-
 export function stopSpeaking() {
   if (activeSpeechCleanup) {
     activeSpeechCleanup();
@@ -266,13 +250,13 @@ function splitSpeech(text, maxLength = 150) {
   return chunks;
 }
 
-export function speakArabic(text, { onStart, onEnd, onError, lang = 'ar-EG' } = {}) {
+export function speakArabic(text, { onStart, onEnd, onError, lang = 'ar-SA' } = {}) {
   if (!isVoiceOutputSupported()) {
     onError?.(new Error('ميزة النطق الصوتي غير متاحة في هذا المتصفح.'));
     onEnd?.();
     return;
   }
-  const clean = cleanTextForClientSpeech(text);
+  const clean = cleanTextForClientSpeech(text, { lang });
   if (!clean) { onEnd?.(); return; }
 
   const synth = window.speechSynthesis;
@@ -299,11 +283,11 @@ export function speakArabic(text, { onStart, onEnd, onError, lang = 'ar-EG' } = 
     if (finished) return;
     if (index >= chunks.length) { finish(); return; }
     const utterance = new window.SpeechSynthesisUtterance(chunks[index++]);
-    const voice = pickBestArabicVoice(lang);
-    // لا نختار صوتاً إنجليزياً صراحةً؛ نترك المحرك يختار أفضل صوت متاح مع تعيين ar-EG.
-    // الأرقام والاختصارات حُوّلت إلى ألفاظ عربية قبل الوصول إلى المحرك.
-    startWatchdog = setTimeout(() => finish(new Error('لم يبدأ الصوت العربي. فعّل صوت العربية في إعدادات الجهاز ثم حاول مرة أخرى.')), 8000);
-    utterance.lang = voice?.lang || lang || 'ar-EG';
+    const voice = pickBestVoice(lang);
+    // ابدأ النطق فوراً داخل نقرة المستخدم قدر الإمكان؛ تأخير SpeechSynthesis قد يمنعه على متصفحات الهاتف.
+    const languageName = String(lang).toLowerCase().startsWith('en') ? 'الإنجليزية' : 'العربية';
+    startWatchdog = setTimeout(() => finish(new Error(`لم يبدأ الصوت ${languageName}. افحص محرك تحويل النص إلى كلام والصوت المثبت في إعدادات الجهاز.`)), 8000);
+    utterance.lang = voice?.lang || lang || 'ar-SA';
     utterance.rate = 0.9;
     utterance.pitch = 1.04;
     utterance.volume = 1;
@@ -319,17 +303,24 @@ export function speakArabic(text, { onStart, onEnd, onError, lang = 'ar-EG' } = 
       clearTimeout(startWatchdog);
       if (event.error === 'canceled' || event.error === 'interrupted') return;
       if (event.error === 'language-unavailable' || event.error === 'voice-unavailable') {
-        finish(new Error('لا يوجد صوت عربي مفعّل على الجهاز. نزّل صوت العربية من إعدادات تحويل النص إلى كلام.'));
+        finish(new Error(`لا يوجد صوت ${languageName} مفعّل على الجهاز. نزّل صوت اللغة المطلوبة من إعدادات تحويل النص إلى كلام.`));
+        return;
+      }
+      if (event.error === 'not-allowed') {
+        finish(new Error('المتصفح منع تشغيل الصوت تلقائياً. اضغط «اختبار الصوت» أو «استمع للرد بالصوت» مرة واحدة، وافحص صوت الوسائط.'));
         return;
       }
       finish(event);
     };
-    try { synth.speak(utterance); } catch (err) { finish(err); }
+    try {
+      synth.speak(utterance);
+      if (synth.paused) synth.resume();
+    } catch (err) { finish(err); }
   };
-  waitForVoices().finally(() => setTimeout(speakNext, 60));
+  speakNext();
 }
 
-export function startArabicRecognition({ onInterim, onFinal, onError, onEnd, onStatus, lang = 'ar-EG' } = {}) {
+export function startArabicRecognition({ onInterim, onFinal, onError, onEnd, onStatus, lang = 'ar-SA' } = {}) {
   const SpeechRec = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
   if (!SpeechRec) {
     onError?.('المتصفح لا يدعم الاستماع المباشر. افتح الموقع في Chrome المحدّث، واسمح بالميكروفون.', 'unsupported');
@@ -342,7 +333,7 @@ export function startArabicRecognition({ onInterim, onFinal, onError, onEnd, onS
     onError?.('تعذر تهيئة خدمة الميكروفون في المتصفح. جرّب Chrome المحدّث وافحص إذن الميكروفون.', 'init-failed');
     return null;
   }
-  recognition.lang = lang || 'ar-EG';
+  recognition.lang = lang || 'ar-SA';
   recognition.continuous = true;
   recognition.interimResults = true;
   recognition.maxAlternatives = 1;

@@ -76,6 +76,8 @@ router.post('/ask', (req, res) => {
 
     try {
       const rawMessage = String(req.body?.message || '').slice(0, 3000);
+      const requestedLanguage = String(req.body?.language || 'ar').toLowerCase();
+      const language = requestedLanguage.startsWith('en') ? 'en' : 'ar';
       const rawSessionId = String(req.body?.sessionId || '');
       const sessionId = isValidPrivateSessionId(rawSessionId)
         ? rawSessionId
@@ -90,6 +92,7 @@ router.post('/ask', (req, res) => {
         sessionId,
         channel: 'web',
         persistChat: shouldPersist,
+        language,
       });
 
       res.json({

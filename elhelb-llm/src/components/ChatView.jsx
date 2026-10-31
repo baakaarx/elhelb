@@ -53,7 +53,7 @@ function FormattedMessage({ text }) {
   const blocks = String(text).split(/(```[\s\S]*?```)/g);
 
   return (
-    <div className="formatted-content">
+    <div className="formatted-content" dir="auto">
       {blocks.map((block, bIdx) => {
         if (block.startsWith('```') && block.endsWith('```')) {
           const cleanCode = block.replace(/^```\w*\n?/, '').replace(/```$/, '');
@@ -133,11 +133,11 @@ export default function ChatView({
   const [callError, setCallError] = useState('');
   const [voiceLanguage, setVoiceLanguage] = useState(() => {
     try {
-      return ['ar-EG', 'ar-SA'].includes(localStorage.getItem('elhelb_voice_language'))
+      return ['ar-SA', 'en-US'].includes(localStorage.getItem('elhelb_voice_language'))
         ? localStorage.getItem('elhelb_voice_language')
-        : 'ar-EG';
+        : 'ar-SA';
     } catch {
-      return 'ar-EG';
+      return 'ar-SA';
     }
   });
   const voiceLanguageRef = useRef(voiceLanguage);
@@ -405,6 +405,7 @@ export default function ChatView({
     const textToRead = msg.speechText || msg.content;
     setSpeakingMsgId(msg.id);
     speakArabic(textToRead, {
+      lang: voiceLanguageRef.current,
       onError: (err) => setError(err?.message || 'تعذر تشغيل الصوت؛ يمكنك قراءة الرد على الشاشة.'),
       onEnd: () => setSpeakingMsgId(null),
     });
@@ -474,6 +475,7 @@ export default function ChatView({
         const fd = new FormData();
         fd.append('message', textToSend);
         fd.append('sessionId', sessionId);
+        fd.append('language', voiceLanguageRef.current.startsWith('en') ? 'en' : 'ar');
         fd.append('image', fileToSend);
         res = await apiRequest('/api/chat/ask', { method: 'POST', formData: fd });
       } else {
@@ -482,6 +484,7 @@ export default function ChatView({
           body: {
             message: textToSend,
             sessionId,
+            language: voiceLanguageRef.current.startsWith('en') ? 'en' : 'ar',
             imageBase64: base64ToSend || null,
           },
         });
@@ -496,6 +499,7 @@ export default function ChatView({
       if (autoSpeakReply && !fromVoiceCall && res.assistantMessage) {
         setSpeakingMsgId(res.assistantMessage.id);
         speakArabic(res.speechText || res.assistantMessage.content, {
+          lang: voiceLanguageRef.current,
           onError: (err) => setError(err?.message || 'تعذر تشغيل الصوت؛ يمكنك قراءة الرد على الشاشة.'),
           onEnd: () => setSpeakingMsgId(null),
         });
@@ -610,7 +614,7 @@ export default function ChatView({
                             )}
                           </>
                         ) : (
-                          <div className="user-text">{m.content}</div>
+                          <div className="user-text" dir="auto">{m.content}</div>
                         )}
                       </div>
                     </div>
@@ -768,18 +772,18 @@ export default function ChatView({
                 تحويل كلامك لنص يعتمد على المتصفح والجهاز، وقد يستخدم خدمة النظام؛ تجنّب ذكر بيانات سرية.
               </div>
               <label className="voice-language-control">
-                لغة المحادثة
+                لغة الرد والمحادثة
                 <select
                   value={voiceLanguage}
                   onChange={(event) => {
-                    const nextLanguage = event.target.value === 'ar-SA' ? 'ar-SA' : 'ar-EG';
+                    const nextLanguage = event.target.value === 'en-US' ? 'en-US' : 'ar-SA';
                     voiceLanguageRef.current = nextLanguage;
                     setVoiceLanguage(nextLanguage);
                     if (callActiveRef.current && callStage === 'listening') startCallListeningCycle();
                   }}
                 >
-                  <option value="ar-EG">العربية المصرية</option>
-                  <option value="ar-SA">العربية — بديل للجهاز</option>
+                  <option value="ar-SA">العربية الرسمية</option>
+                  <option value="en-US">English</option>
                 </select>
               </label>
             </div>
@@ -808,10 +812,10 @@ export default function ChatView({
               <div className="voice-error-box">
                 <div>{callError}</div>
                 <div className="voice-device-check">
-                  حالة الجهاز: {getVoiceDiagnostics().secureContext ? 'اتصال آمن' : 'افتح الرابط عبر HTTPS'}،{' '}
-                  {getVoiceDiagnostics().recognition ? 'التعرف على الكلام متاح' : 'التعرف على الكلام غير مدعوم'}،{' '}
-                  {getVoiceDiagnostics().synthesis ? 'النطق متاح' : 'النطق غير متاح'}،{' '}
-                  {getVoiceDiagnostics().arabicVoice ? 'صوت عربي موجود' : 'لم يظهر صوت عربي مثبت'}.
+                  حالة الجهاز: {getVoiceDiagnostics(voiceLanguage).secureContext ? 'اتصال آمن' : 'افتح الرابط عبر HTTPS'}،{' '}
+                  {getVoiceDiagnostics(voiceLanguage).recognition ? 'التعرف على الكلام متاح' : 'التعرف على الكلام غير مدعوم'}،{' '}
+                  {getVoiceDiagnostics(voiceLanguage).synthesis ? 'النطق متاح' : 'النطق غير متاح'}،{' '}
+                  {getVoiceDiagnostics(voiceLanguage).languageVoiceAvailable ? 'صوت اللغة المختارة مثبت' : 'لم يظهر صوت للغة المختارة في الجهاز'}.
                 </div>
               </div>
             )}

@@ -9,21 +9,17 @@ const { analyzeHumanIntent, GENERAL_STARTER_SUGGESTIONS } = require('./conversat
 /**
  * تجهيز نص نظيف وسلس للنطق الصوتي بالعربية (بدون رموز ماركداون أو إيموجي أو أقواس برمجية)
  */
-function formatForSpeech(text = '') {
+function formatForSpeech(text = '', language = 'ar') {
+  const isEnglish = String(language).toLowerCase().startsWith('en');
   return String(text || '')
-    .replace(/```[\s\S]*?```/g, ' تم استخراج النص من الصورة بنجاح. ')
+    .replace(/```[\s\S]*?```/g, isEnglish ? ' Text extracted from the image. ' : ' تم استخراج النص من الصورة بنجاح. ')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\[([^\]]+)\]/g, '$1')
     .replace(/[#>*_~|•]/g, ' ')
     .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '')
-    .replace(/(\d+(?:\.\d+)?)\s*%/g, '$1 في المائة')
-    .replace(/\bEC\b/g, '')
-    .replace(/\bWP\b/g, '')
-    .replace(/\bSC\b/g, '')
-    .replace(/\bSL\b/g, '')
-    .replace(/\bWG\b/g, '')
-    .replace(/\bGR\b/g, '')
+    .replace(/(\d+(?:\.\d+)?)\s*%/g, isEnglish ? '$1 percent' : '$1 بالمائة')
+    .replace(/\b(?:EC|WP|SC|SL|WG|GR)\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -35,7 +31,9 @@ async function processCompanyQuery({
   channel = 'web',
   customHistory = null,
   persistChat = true,
+  language = 'ar',
 }) {
+  const responseLanguage = String(language).toLowerCase().startsWith('en') ? 'en' : 'ar';
   const rawMessage = String(message || '').trim();
   if (!rawMessage && !imageInput) {
     throw new Error('يرجى التحدث أو كتابة سؤالك أو إرفاق صورة لتحليلها.');
@@ -66,9 +64,9 @@ async function processCompanyQuery({
   }
 
   // إذا كان حواراً بشرياً مباشراً (تحية، شكر، طلب مساعدة عامة، تشخيص تفاعلي خطوة بخطوة)
-  if (nlu.handledDirectly && !imageInput) {
+  if (nlu.handledDirectly && !imageInput && responseLanguage !== 'en') {
     const started = Date.now();
-    const speechText = formatForSpeech(nlu.reply);
+    const speechText = formatForSpeech(nlu.reply, responseLanguage);
     let userMsgId = started;
     let botMsgId = started + 1;
 
@@ -149,6 +147,7 @@ async function processCompanyQuery({
     settings,
     modelProfile,
     trainingExamples,
+    language: responseLanguage,
   });
 
   const citations = retrieval.contexts.slice(0, 4).map((ctx, idx) => ({
@@ -162,7 +161,7 @@ async function processCompanyQuery({
     snippet: ctx.decryptedText.slice(0, 240) + (ctx.decryptedText.length > 240 ? '...' : ''),
   }));
 
-  const speechText = formatForSpeech(completion.answer);
+  const speechText = formatForSpeech(completion.answer, responseLanguage);
   let suggestions;
   if (visionReport?.plantAnalysis?.isPlantPhoto && !visionReport?.ocr?.hasReadableText) {
     if (visionReport.plantAnalysis.plantCondition === 'blight_or_leaf_spot') {
@@ -185,6 +184,14 @@ async function processCompanyQuery({
       'إيه طريقة ومعدل الاستخدام الموصى به؟',
       'إيه أحجام العبوات المتوفرة؟',
       'عاوز أسأل عن آفة أو محصول تاني',
+    ];
+  }
+
+  if (responseLanguage === 'en') {
+    suggestions = [
+      'What fertilizers does ELHELB offer?',
+      'Help me identify this crop problem',
+      'How can I contact ELHELB support?',
     ];
   }
 
