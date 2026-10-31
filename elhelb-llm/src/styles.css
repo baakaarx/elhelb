@@ -826,6 +826,13 @@ button {
   align-items: center;
 }
 
+.voice-call-top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
 .voice-live-badge {
   display: inline-flex;
   align-items: center;
@@ -859,7 +866,7 @@ button {
 }
 
 .voice-language-control select {
-  max-width: 190px;
+  max-width: min(260px, 68vw);
   padding: 6px 10px;
   border: 1px solid rgba(212, 169, 10, 0.55);
   border-radius: 10px;
@@ -867,6 +874,19 @@ button {
   color: #f8fafc;
   font: inherit;
 }
+
+.voice-refresh-btn {
+  margin-top: 8px;
+  padding: 5px 10px;
+  border: 1px solid rgba(203, 213, 225, 0.28);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.voice-refresh-btn:active { transform: scale(0.98); }
 
 .voice-orb-container {
   position: relative;

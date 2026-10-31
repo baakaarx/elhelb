@@ -66,13 +66,32 @@ export function isVoiceOutputSupported() {
   return typeof window !== 'undefined' && Boolean(window.speechSynthesis && window.SpeechSynthesisUtterance);
 }
 
+function voiceLanguageMatches(voice, language) {
+  const voiceLang = String(voice?.lang || '').replace('_', '-').toLowerCase();
+  const prefix = String(language || 'ar-SA').toLowerCase().split('-')[0];
+  return voiceLang === prefix || voiceLang.startsWith(`${prefix}-`);
+}
+
+function voiceQualityRank(voice, language) {
+  const name = String(voice?.name || '').toLowerCase();
+  const exactLocale = String(voice?.lang || '').replace('_', '-').toLowerCase() === String(language).replace('_', '-').toLowerCase();
+  const modernLabel = /natural|neural|enhanced|premium|wavenet/.test(name);
+  // Prefer an exact-locale local voice; then names that indicate a newer system voice.
+  return (exactLocale ? 100 : 0) + (voice?.localService === false ? 0 : 30) + (modernLabel ? 20 : 0);
+}
+
+export function getAvailableSpeechVoices(language = 'ar-SA') {
+  if (typeof window === 'undefined' || !window.speechSynthesis?.getVoices) return [];
+  return (window.speechSynthesis.getVoices() || [])
+    .filter((voice) => voiceLanguageMatches(voice, language) && voice.localService !== false)
+    .sort((a, b) => voiceQualityRank(b, language) - voiceQualityRank(a, language));
+}
+
 export function getVoiceDiagnostics(language = 'ar-SA') {
   if (typeof window === 'undefined') {
     return { secureContext: false, recognition: false, synthesis: false, languageVoiceAvailable: false, voices: [] };
   }
-  const voices = window.speechSynthesis?.getVoices?.() || [];
-  const prefix = String(language).toLowerCase().startsWith('en') ? 'en' : 'ar';
-  const languageVoices = voices.filter((voice) => String(voice.lang).toLowerCase().startsWith(prefix));
+  const languageVoices = getAvailableSpeechVoices(language);
   return {
     secureContext: Boolean(window.isSecureContext),
     recognition: Boolean(window.SpeechRecognition || window.webkitSpeechRecognition),
@@ -125,13 +144,9 @@ export function cleanTextForClientSpeech(text = '', { lang = 'ar-SA' } = {}) {
     .trim();
 }
 
-function pickBestVoice(language = 'ar-SA') {
-  if (!isVoiceOutputSupported()) return null;
-  const voices = window.speechSynthesis.getVoices() || [];
-  const requested = String(language).replace('_', '-').toLowerCase();
-  const prefix = requested.split('-')[0];
-  return voices.find((voice) => String(voice.lang).replace('_', '-').toLowerCase() === requested) ||
-    voices.find((voice) => String(voice.lang).replace('_', '-').toLowerCase().startsWith(`${prefix}-`)) || null;
+function pickBestVoice(language = 'ar-SA', voiceURI = '') {
+  const voices = getAvailableSpeechVoices(language);
+  return voices.find((voice) => voice.voiceURI === voiceURI) || voices[0] || null;
 }
 
 function speechTokenKey(token) {
@@ -250,7 +265,7 @@ function splitSpeech(text, maxLength = 150) {
   return chunks;
 }
 
-export function speakArabic(text, { onStart, onEnd, onError, lang = 'ar-SA' } = {}) {
+export function speakArabic(text, { onStart, onEnd, onError, lang = 'ar-SA', voiceURI = '' } = {}) {
   if (!isVoiceOutputSupported()) {
     onError?.(new Error('ميزة النطق الصوتي غير متاحة في هذا المتصفح.'));
     onEnd?.();
@@ -258,6 +273,13 @@ export function speakArabic(text, { onStart, onEnd, onError, lang = 'ar-SA' } = 
   }
   const clean = cleanTextForClientSpeech(text, { lang });
   if (!clean) { onEnd?.(); return; }
+  const availableVoices = getAvailableSpeechVoices(lang);
+  if (!availableVoices.length) {
+    const languageName = String(lang).toLowerCase().startsWith('en') ? 'الإنجليزية' : 'العربية';
+    onError?.(new Error(`لا يوجد صوت محلي مثبت للغة ${languageName}. نزّل بيانات صوتها من إعدادات تحويل النص إلى كلام، ثم حدّث قائمة الأصوات.`));
+    onEnd?.();
+    return;
+  }
 
   const synth = window.speechSynthesis;
   activeSpeechCleanup?.();
@@ -283,7 +305,7 @@ export function speakArabic(text, { onStart, onEnd, onError, lang = 'ar-SA' } = 
     if (finished) return;
     if (index >= chunks.length) { finish(); return; }
     const utterance = new window.SpeechSynthesisUtterance(chunks[index++]);
-    const voice = pickBestVoice(lang);
+    const voice = pickBestVoice(lang, voiceURI);
     // ابدأ النطق فوراً داخل نقرة المستخدم قدر الإمكان؛ تأخير SpeechSynthesis قد يمنعه على متصفحات الهاتف.
     const languageName = String(lang).toLowerCase().startsWith('en') ? 'الإنجليزية' : 'العربية';
     startWatchdog = setTimeout(() => finish(new Error(`لم يبدأ الصوت ${languageName}. افحص محرك تحويل النص إلى كلام والصوت المثبت في إعدادات الجهاز.`)), 8000);
