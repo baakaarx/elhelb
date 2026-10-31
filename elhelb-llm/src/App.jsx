@@ -1,13 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { RotateCcw, AudioLines, X } from 'lucide-react';
+import { RotateCcw, X } from 'lucide-react';
 import { getVisitorSessionId, resetVisitorSessionId, apiRequest } from './api';
-import { stopSpeaking } from './voiceEngine';
 import ChatView from './components/ChatView';
 
 export default function App() {
   const [sessionId, setSessionId] = useState(() => getVisitorSessionId());
   const [hasMessages, setHasMessages] = useState(false);
-  const [voiceCallOpen, setVoiceCallOpen] = useState(false);
 
   const isEmbeddedWidget = useMemo(() => {
     if (typeof window === 'undefined') return false;
@@ -51,7 +49,6 @@ export default function App() {
   }, []);
 
   async function handleNewChat() {
-    stopSpeaking();
     try {
       await apiRequest(`/api/chat/history?sessionId=${encodeURIComponent(sessionId)}`, {
         method: 'DELETE',
@@ -65,7 +62,6 @@ export default function App() {
   }
 
   function handleCloseWidgetPopup() {
-    stopSpeaking();
     if (typeof window !== 'undefined' && window.parent && window.parent !== window) {
       window.parent.postMessage({ type: 'ELHELB_WIDGET_CLOSE' }, '*');
     }
@@ -84,19 +80,6 @@ export default function App() {
           </div>
 
           <div className="header-right-controls">
-            <button
-              type="button"
-              className="voice-mode-header-btn"
-              onClick={() => setVoiceCallOpen(true)}
-              title="بدء محادثة صوتية مباشرة"
-            >
-              <AudioLines size={15} />
-              <span className="voice-btn-label-full">
-                {isEmbeddedWidget ? 'تحدث صوتي' : 'تحدث بالصوت'}
-              </span>
-              <span className="voice-btn-label-compact">صوت</span>
-            </button>
-
             {hasMessages && (
               <button
                 type="button"
@@ -129,12 +112,6 @@ export default function App() {
         <ChatView
           key={sessionId}
           sessionId={sessionId}
-          voiceCallOpen={voiceCallOpen}
-          onOpenVoiceCall={() => setVoiceCallOpen(true)}
-          onCloseVoiceCall={() => {
-            stopSpeaking();
-            setVoiceCallOpen(false);
-          }}
           onMessagesCountChange={(count) => setHasMessages(count > 0)}
         />
       </main>
