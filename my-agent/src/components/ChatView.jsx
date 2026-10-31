@@ -353,7 +353,7 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
               <p className="welcome-subtitle">
                 اكتب سؤالك أو اتكلم بالميكروفون عن <strong>محصولك أو مشكلة زراعية أو منتج من منتجات الهلب</strong>، وهنتابع معاك خطوة بخطوة.
               </p>
-              <p className="voice-input-note">كلامك بيتحوّل لنص تراجعه في خانة الكتابة قبل الإرسال؛ التسجيل الصوتي نفسه لا يُرسل ولا يُحفظ.</p>
+              <p className="voice-input-note">بعد التحويل، اللي بيتبعت للمساعد هو النص فقط؛ ملف الصوت لا يُرفق بالمحادثة، وخدمة التعرف تعتمد على المتصفح والجهاز.</p>
 
               <div className="suggestions-grid">
                 {SUGGESTED_QUESTIONS.map((item, idx) => {
