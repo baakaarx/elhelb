@@ -88,7 +88,7 @@ function cosineVec(a, b) {
   return d;
 }
 
-function buildSystemPrompt({ modelProfile, contexts, dataAnalysis, visionReport }) {
+function buildSystemPrompt({ modelProfile, contexts, dataAnalysis, visionReport, language = 'ar' }) {
   const base =
     modelProfile.system_prompt ||
     'أنت الموديل الذكي الشامل الخاص بشركة مجموعة الهلب. تحلل جميع بيانات الشركة والجداول والصور وتجيب بدقة باللغة العربية.';
@@ -125,7 +125,9 @@ ${visionReport.ocr.text || '(صورة بصرية بدون نصوص مطبوعة 
   }
 
   const clinicBlock = `\n\n=== قاعدة المعرفة الزراعية المعتمدة (21 محصولاً + مبيدات الحشائش والتوصيات) ===\nالمحاصيل: ${agriKnowledge.crops.join('، ')}\nمبيدات الحشائش: ${agriKnowledge.herbicides.map((h) => `${h.name} — ${h.active} — ${h.target} — ${h.rate}`).join('\n')}\nتوصيات الآفات: ${agriKnowledge.protocols.map((p) => `${p.issue}: ${p.products}; ${p.rate}`).join('\n')}`;
-  const voiceStyle = '\n\n=== أسلوب الإجابة الصوتية والحوار ===\nأجب دائماً بالعربية المصرية الطبيعية والمهذبة حتى لو احتوى كلام المستخدم على كلمات إنجليزية، ولا تنتقل للإنجليزية إلا إذا طلب ذلك صراحةً. استخدم جملاً قصيرة وسهلة النطق، واشرح المصطلح الإنجليزي بالعربية ولا تنطق الاختصارات أو الشرطات المائلة حرفياً. لا تخترع جرعات، واسأل سؤالاً توضيحياً واحداً عند نقص بيانات المحصول أو الإصابة.';
+  const voiceStyle = String(language).toLowerCase().startsWith('en')
+    ? '\n\n=== Response language and voice style ===\nAnswer in clear, natural English. Keep sentences short and easy to speak. Preserve exact product names and label rates; never invent a dose, and ask one clarifying question when crop or symptoms are missing.'
+    : '\n\n=== أسلوب الإجابة الصوتية والحوار ===\nأجب دائماً بالعربية الفصحى المبسطة، حتى لو احتوى كلام المستخدم على كلمات إنجليزية. استخدم جملاً قصيرة وسهلة النطق، واشرح المصطلح الإنجليزي بالعربية ولا تنطق الاختصارات أو الشرطات المائلة حرفياً. لا تخترع جرعات، واسأل سؤالاً توضيحياً واحداً عند نقص بيانات المحصول أو الإصابة.';
   return `${base}${voiceStyle}\n\n=== وثائق ومعرفة الشركة ===\n${docsBlock}${clinicBlock}${analyticsBlock}${visionBlock}`;
 }
 
@@ -176,6 +178,7 @@ function runBuiltInCompanyBrain({
   visionReport = null,
   modelProfile,
   trainingExamples = [],
+  language = 'ar',
 }) {
   const trimmedQ = String(query || '').trim();
   const effectiveQuery = visionReport?.ocr?.text
@@ -184,6 +187,15 @@ function runBuiltInCompanyBrain({
 
   const qVec = computeLocalEmbedding(effectiveQuery || 'تحليل عام');
   const { stems: qStems, concepts: qConcepts } = tokenize(effectiveQuery);
+
+  if (visionReport && String(language).toLowerCase().startsWith('en')) {
+    const visibleText = String(visionReport.ocr?.text || '').trim();
+    return {
+      answer: `I reviewed the image${visibleText ? ` and detected this text: ${visibleText}` : ''}. A photo alone cannot confirm a crop diagnosis or a safe application rate. Please tell me the crop, plant age, and the main symptom; for products, follow the registered label.`,
+      engineUsed: visionReport.ocr?.hasReadableText ? 'elhelb-vision-ocr-en' : 'elhelb-vision-inspector-en',
+      confidence: 0.72,
+    };
+  }
 
   // 1) إذا كانت الرسالة تحتوي على صورة مرفقة -> تحليل زراعي بصري للنباتات والأوراق أو قراءة العبوات والمستندات
   if (visionReport) {
@@ -313,6 +325,30 @@ function runBuiltInCompanyBrain({
       answer: sections.join('\n\n'),
       engineUsed: ocr.hasReadableText ? 'elhelb-vision-ocr+rag' : 'elhelb-vision-inspector',
       confidence: ocr.hasReadableText ? Math.max(0.75, ocr.confidence / 100) : 0.72,
+    };
+  }
+
+  if (String(language).toLowerCase().startsWith('en')) {
+    const englishQuery = String(originalUserText || trimmedQ).toLowerCase();
+    if (/\b(?:hi|hello|hey)\b/i.test(englishQuery) && qStems.length <= 4) {
+      return {
+        answer: 'Hello! I can help in English with ELHELB products and agricultural questions. Tell me your crop and what symptoms you are seeing.',
+        engineUsed: 'elhelb-company-brain-en',
+        confidence: 0.99,
+      };
+    }
+    if (/(?:fertili[sz]er|nutrient|plant food)/i.test(englishQuery)) {
+      const names = (agriKnowledge.fertilizers || []).map((item) => item.name);
+      return {
+        answer: `ELHELB has ${names.length} registered fertilizers and crop nutrients: ${names.join(', ')}. Tell me your crop and growth stage so I can narrow the options. Follow the product label for exact rates; I will not guess a dose.`,
+        engineUsed: 'elhelb-fertilizer-catalog-en',
+        confidence: 0.98,
+      };
+    }
+    return {
+      answer: 'I can help in English with ELHELB agricultural products and crop problems. Please tell me the crop, symptoms, and product name if available. For safety, confirm every application rate on the product label.',
+      engineUsed: 'elhelb-conversational-guide-en',
+      confidence: 0.78,
     };
   }
 
@@ -527,7 +563,9 @@ async function generateCompanyResponse({
   settings,
   modelProfile,
   trainingExamples = [],
+  language = 'ar',
 }) {
+  const responseLanguage = String(language).toLowerCase().startsWith('en') ? 'en' : 'ar';
   const startedAt = Date.now();
   const provider = settings.provider || 'auto';
   const airgapLock = Boolean(settings.airgap_lock);
@@ -544,6 +582,7 @@ async function generateCompanyResponse({
           contexts,
           dataAnalysis,
           visionReport,
+          language: responseLanguage,
         });
         const targetModel = visionReport
           ? modelProfile.vision_model || 'llama3.2-vision'
@@ -616,6 +655,7 @@ async function generateCompanyResponse({
     visionReport,
     modelProfile,
     trainingExamples,
+    language: responseLanguage,
   });
 
   return {

@@ -119,12 +119,14 @@ async function handleStaticClientFallback(path, method, body, formData) {
       return runStandaloneClientTurn({
         sessionId: String(formData.get('sessionId') || getVisitorSessionId()),
         message: String(formData.get('message') || ''),
+        language: String(formData.get('language') || 'ar'),
         imageFile: formData.get('image') || null,
       });
     }
     return runStandaloneClientTurn({
       sessionId: body?.sessionId || getVisitorSessionId(),
       message: body?.message || '',
+      language: body?.language || 'ar',
       imageBase64: body?.imageBase64 || null,
     });
   }
