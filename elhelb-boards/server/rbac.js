@@ -1,8 +1,10 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const { get, all, run } = require('./db');
+const { get, all, run, initSchema, getSetting, setSetting } = require('./db');
 
-function resolveJwtSecret() {
+const EPHEMERAL_DEV_JWT_SECRET = crypto.randomBytes(48).toString('hex');
+
+function getJwtSecret() {
   const envSecret = (process.env.JWT_SECRET || '').trim();
   if (envSecret) {
     if (process.env.NODE_ENV === 'production' && envSecret.length < 32) {
@@ -13,17 +15,39 @@ function resolveJwtSecret() {
     return envSecret;
   }
 
+  // Zero-config serverless cloud provisioning on Vercel when JWT_SECRET wasn't entered in dashboard:
+  // Generates a 384-bit CSPRNG secret stored in encrypted/redacted system_settings (synced across cloud containers).
+  if (process.env.VERCEL) {
+    try {
+      const existing = getSetting('internal_jwt_secret_v19', '');
+      if (existing && existing.length >= 64) {
+        return existing;
+      }
+    } catch (_) {
+      initSchema();
+    }
+    const afterInit = getSetting('internal_jwt_secret_v19', '');
+    if (afterInit && afterInit.length >= 64) {
+      return afterInit;
+    }
+    const generated = crypto.randomBytes(48).toString('hex');
+    setSetting('internal_jwt_secret_v19', generated);
+    return generated;
+  }
+
   if (process.env.NODE_ENV === 'production') {
     throw new Error(
       'FATAL SECURITY ERROR: JWT_SECRET environment variable (min 32 chars, separate from storage tokens) is required in production.'
     );
   }
 
-  // Ephemeral random key for local development / automated test runs (zero hardcoded secret)
-  return crypto.randomBytes(48).toString('hex');
+  return EPHEMERAL_DEV_JWT_SECRET;
 }
 
-const JWT_SECRET = resolveJwtSecret();
+// Fail fast at module load on dedicated non-Vercel production servers if JWT_SECRET is missing
+if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
+  getJwtSecret();
+}
 const COOKIE_NAME = 'elhelb_session_v10';
 const LEGACY_COOKIE_NAMES = ['elhelb_session'];
 
@@ -57,7 +81,7 @@ function signUserToken(user) {
       tv: Number(user.token_version || 1),
       jti: crypto.randomUUID(),
     },
-    JWT_SECRET,
+    getJwtSecret(),
     { algorithm: 'HS256', expiresIn: '12h' }
   );
 }
@@ -188,11 +212,12 @@ function authenticate(req, res, next) {
     });
   }
 
+  const activeJwtSecret = getJwtSecret();
   let payload = null;
   let verifiedSource = null;
   for (const item of candidates) {
     try {
-      const decoded = jwt.verify(item.token, JWT_SECRET, { algorithms: ['HS256'] });
+      const decoded = jwt.verify(item.token, activeJwtSecret, { algorithms: ['HS256'] });
       if (decoded && decoded.jti && isTokenJtiRevoked(decoded.jti)) {
         continue;
       }
@@ -682,7 +707,7 @@ function validateEmployeeFullName(fullName, { allowExecutiveTitles = false, minL
 }
 
 function deriveSettingsVaultKey() {
-  const seedMaterial = (process.env.SETTINGS_ENCRYPTION_KEY || JWT_SECRET || '').trim();
+  const seedMaterial = (process.env.SETTINGS_ENCRYPTION_KEY || getJwtSecret() || '').trim();
   return crypto
     .createHmac('sha256', seedMaterial)
     .update('elhelb-settings-vault-v17')
@@ -721,7 +746,10 @@ function decryptSecretValue(storedValue) {
 }
 
 module.exports = {
-  JWT_SECRET,
+  get JWT_SECRET() {
+    return getJwtSecret();
+  },
+  getJwtSecret,
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
   GLOBAL_PERMISSIONS,

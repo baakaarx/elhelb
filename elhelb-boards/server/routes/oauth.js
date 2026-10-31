@@ -5,7 +5,7 @@ const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { get, all, run, transaction, getSetting } = require('../db');
 const {
-  JWT_SECRET,
+  getJwtSecret,
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
   isSecureRequest,
@@ -390,7 +390,7 @@ router.get('/oauth/google/start', (req, res) => {
 
   const state = jwt.sign(
     { p: 'google', d: prefDept, n: nonce },
-    JWT_SECRET,
+    getJwtSecret(),
     { algorithm: 'HS256', expiresIn: '15m' }
   );
 
@@ -411,7 +411,7 @@ router.get('/oauth/google/callback', async (req, res) => {
     const { code, state } = req.query;
     if (!code || !state) return res.redirect('/?oauth_error=cancelled');
 
-    const decodedState = jwt.verify(String(state), JWT_SECRET, {
+    const decodedState = jwt.verify(String(state), getJwtSecret(), {
       algorithms: ['HS256'],
     });
     const cookieNonce = req.cookies && req.cookies.elhelb_oauth_nonce;

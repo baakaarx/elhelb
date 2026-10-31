@@ -28,13 +28,19 @@ function resolveIndependentEncryptionSecret() {
   if (dedicated.length >= 16) {
     return dedicated;
   }
+  if (process.env.VERCEL) {
+    return crypto
+      .createHmac('sha256', process.env.VERCEL_PROJECT_ID || 'elhelb-vercel-runtime')
+      .update('elhelb-vercel-cloud-pepper-v19')
+      .digest('hex');
+  }
   if (process.env.NODE_ENV === 'production') {
     throw new Error(
       'FATAL SECURITY ERROR: CLOUD_ENCRYPTION_KEY or JWT_SECRET (independent of cloud storage token) is required in production.'
     );
   }
-  const { JWT_SECRET } = require('./rbac');
-  return JWT_SECRET;
+  const { getJwtSecret } = require('./rbac');
+  return getJwtSecret();
 }
 
 function deriveCipherKey(secretMaterial) {
@@ -72,12 +78,31 @@ function decodeSnapshot(rawBuf, secretMaterial) {
   const iv = buf.subarray(4, 16);
   const authTag = buf.subarray(16, 32);
   const ciphertext = buf.subarray(32);
-  const key = deriveCipherKey(secretMaterial);
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-  decipher.setAuthTag(authTag);
-  const gzBuf = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-  const jsonStr = zlib.gunzipSync(gzBuf).toString('utf8');
-  return JSON.parse(jsonStr);
+
+  const tryKey = (key) => {
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTag);
+    const gzBuf = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    return JSON.parse(zlib.gunzipSync(gzBuf).toString('utf8'));
+  };
+
+  try {
+    return tryKey(deriveCipherKey(secretMaterial));
+  } catch (primaryErr) {
+    // Transparent migration for pre-v18 Vercel cloud snapshots when no explicit CLOUD_ENCRYPTION_KEY override was forced
+    if (!process.env.CLOUD_ENCRYPTION_KEY) {
+      for (const legacyPepper of [(process.env.JWT_SECRET || '').trim(), '']) {
+        try {
+          const legacyKey = crypto
+            .createHmac('sha256', String(secretMaterial))
+            .update(`elhelb-cloud-snapshot-v11:${legacyPepper}`)
+            .digest();
+          return tryKey(legacyKey);
+        } catch (_) {}
+      }
+    }
+    throw primaryErr;
+  }
 }
 
 function resolveActiveProvider() {
@@ -542,9 +567,12 @@ async function performCloudPullInternal(cfg, force = false) {
     if (pulled && pulled.buf) {
       const decoded = decodeSnapshot(pulled.buf, cfg.secretMaterial);
       importDatabaseSnapshot(decoded);
-      runUntracked(() => seedIfNeeded());
+      const seedRes = runUntracked(() => seedIfNeeded());
       syncedRev = pulled.rev;
       lastSyncError = '';
+      if (seedRes && seedRes.bootstrapRotated) {
+        await performCloudPush(cfg);
+      }
     }
     return syncedRev;
   }
@@ -562,9 +590,12 @@ async function performCloudPullInternal(cfg, force = false) {
     const buf = await blobDownload(cfg, latest);
     const decoded = decodeSnapshot(buf, cfg.secretMaterial);
     importDatabaseSnapshot(decoded);
-    runUntracked(() => seedIfNeeded());
+    const seedRes = runUntracked(() => seedIfNeeded());
     syncedRev = latest.pathname;
     lastSyncError = '';
+    if (seedRes && seedRes.bootstrapRotated) {
+      await performCloudPush(cfg);
+    }
     return syncedRev;
   }
 
@@ -581,9 +612,12 @@ async function performCloudPullInternal(cfg, force = false) {
     if (pulled && pulled.buf) {
       const decoded = decodeSnapshot(pulled.buf, cfg.secretMaterial);
       importDatabaseSnapshot(decoded);
-      runUntracked(() => seedIfNeeded());
+      const seedRes = runUntracked(() => seedIfNeeded());
       syncedRev = pulled.rev;
       lastSyncError = '';
+      if (seedRes && seedRes.bootstrapRotated) {
+        await performCloudPush(cfg);
+      }
     }
     return syncedRev;
   }
