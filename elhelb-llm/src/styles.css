@@ -123,32 +123,6 @@ button {
   gap: 8px;
   flex-shrink: 0;
 }
-
-.voice-mode-header-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  border-radius: 999px;
-  border: 1px solid rgba(212, 169, 10, 0.6);
-  background: linear-gradient(135deg, rgba(246, 216, 107, 0.18), rgba(212, 169, 10, 0.28));
-  color: var(--gold-light);
-  font-size: 0.8rem;
-  font-weight: 800;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.voice-btn-label-compact {
-  display: none;
-}
-
-.voice-mode-header-btn:hover {
-  background: linear-gradient(135deg, #f6d86b 0%, #d4a90a 100%);
-  color: #05080e;
-}
-
 .new-chat-btn {
   display: inline-flex;
   align-items: center;
@@ -225,13 +199,6 @@ button {
   font-size: 0.83rem;
   margin-bottom: 14px;
 }
-
-.chatbot-shell.embedded-widget .hero-voice-cta {
-  padding: 9px 16px;
-  font-size: 0.82rem;
-  margin-bottom: 16px;
-}
-
 .chatbot-shell.embedded-widget .suggestions-grid {
   grid-template-columns: 1fr;
   gap: 8px;
@@ -243,15 +210,6 @@ button {
 
 .chatbot-shell.embedded-widget .composer-dock {
   padding: 8px 10px calc(12px + env(safe-area-inset-bottom, 0px));
-}
-
-.online-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #22c55e;
-  box-shadow: 0 0 8px #22c55e;
-  display: inline-block;
 }
 
 /* مساحة المحادثة الرئيسية */
@@ -285,7 +243,6 @@ button {
   width: 100%;
 }
 
-/* شاشة الترحيب */
 .welcome-hero {
   text-align: center;
   padding: 20px 8px 18px;
@@ -319,36 +276,19 @@ button {
 }
 
 .welcome-subtitle {
-  margin: 0 auto 18px;
+  margin: 0 auto 8px;
   max-width: 580px;
   font-size: 0.93rem;
   line-height: 1.75;
   color: var(--text-secondary);
 }
 
-.hero-voice-cta {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  margin-bottom: 24px;
-  padding: 11px 22px;
-  border-radius: 999px;
-  border: 1.5px solid var(--gold);
-  background: linear-gradient(135deg, #060a11 0%, #101d2e 100%);
-  color: var(--gold-light);
-  font-weight: 800;
-  font-size: 0.92rem;
-  cursor: pointer;
-  box-shadow: 0 8px 24px rgba(5, 8, 14, 0.16);
-  transition: all 0.18s ease;
+.voice-input-note {
+  margin: 0 auto 18px;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  line-height: 1.55;
 }
-
-.hero-voice-cta:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 28px rgba(212, 169, 10, 0.25);
-}
-
 .suggestions-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -476,42 +416,6 @@ button {
   border-top-left-radius: 5px;
   box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
 }
-
-.bubble-actions {
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid #f1f5f9;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.speak-reply-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: #f8fafc;
-  color: var(--text-secondary);
-  font-size: 0.76rem;
-  font-weight: 700;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.speak-reply-btn:hover {
-  border-color: var(--sky);
-  color: var(--sky);
-}
-
-.speak-reply-btn.active {
-  background: #fef3c7;
-  border-color: var(--gold);
-  color: #92400e;
-}
-
 /* أزرار المتابعة التفاعلية تحت الرد */
 .followup-chips {
   display: flex;
@@ -673,6 +577,34 @@ button {
   gap: 10px;
 }
 
+.voice-note-preview-content,
+.sent-voice-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+  font-size: 0.82rem;
+}
+
+.voice-note-preview-content audio,
+.sent-voice-note audio {
+  display: block;
+  width: min(320px, 100%);
+  height: 38px;
+}
+
+.voice-note-transcript {
+  color: var(--text-secondary);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.sent-voice-note {
+  width: min(320px, 100%);
+  margin-bottom: 8px;
+}
+
 .preview-mini-thumb {
   width: 42px;
   height: 42px;
@@ -796,256 +728,6 @@ button {
   cursor: not-allowed;
 }
 
-/* شاشة المكالمة / المحادثة الصوتية المباشرة */
-.voice-call-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  background: rgba(3, 5, 10, 0.92);
-  backdrop-filter: blur(10px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: max(16px, env(safe-area-inset-top, 16px)) 16px max(16px, env(safe-area-inset-bottom, 16px));
-}
-
-.voice-call-card {
-  width: 100%;
-  max-width: 540px;
-  max-height: 100%;
-  overflow-y: auto;
-  background: radial-gradient(circle at 50% 25%, rgba(0, 159, 227, 0.16), #060a12 72%);
-  border: 1.5px solid rgba(212, 169, 10, 0.45);
-  border-radius: 28px;
-  padding: 26px 24px;
-  color: #fff;
-  text-align: center;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
-.voice-call-top {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 100%;
-}
-
-.voice-live-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 14px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  font-size: 0.78rem;
-  font-weight: 700;
-  color: #cbd5e1;
-}
-
-.voice-privacy-note {
-  max-width: 410px;
-  margin: 8px auto 0;
-  color: #94a3b8;
-  font-size: 0.69rem;
-  line-height: 1.5;
-}
-
-.voice-language-control {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 10px;
-  color: #cbd5e1;
-  font-size: 0.78rem;
-  font-weight: 700;
-}
-
-.voice-language-control select {
-  max-width: min(260px, 68vw);
-  padding: 6px 10px;
-  border: 1px solid rgba(212, 169, 10, 0.55);
-  border-radius: 10px;
-  background: #0b1220;
-  color: #f8fafc;
-  font: inherit;
-}
-
-.voice-refresh-btn {
-  margin-top: 8px;
-  padding: 5px 10px;
-  border: 1px solid rgba(203, 213, 225, 0.28);
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #cbd5e1;
-  font-size: 0.72rem;
-  cursor: pointer;
-}
-
-.voice-refresh-btn:active { transform: scale(0.98); }
-
-.voice-orb-container {
-  position: relative;
-  width: 150px;
-  height: 150px;
-  margin: 28px auto 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.voice-orb-core {
-  position: relative;
-  z-index: 2;
-  width: 104px;
-  height: 104px;
-  border-radius: 50%;
-  background: #04060b;
-  border: 2px solid var(--gold);
-  padding: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 0 30px rgba(212, 169, 10, 0.25);
-}
-
-.voice-orb-core img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.orb-ring {
-  position: absolute;
-  inset: 10px;
-  border-radius: 50%;
-  border: 2px solid rgba(0, 159, 227, 0.45);
-  opacity: 0;
-}
-
-.voice-orb-container.listening .orb-ring {
-  border-color: rgba(0, 159, 227, 0.65);
-  animation: orbWave 2s infinite ease-out;
-}
-
-.voice-orb-container.speaking .orb-ring {
-  border-color: rgba(246, 216, 107, 0.75);
-  animation: orbWave 1.6s infinite ease-out;
-}
-
-.voice-orb-container .ring-2 {
-  animation-delay: 0.7s !important;
-}
-
-@keyframes orbWave {
-  0% {
-    transform: scale(0.8);
-    opacity: 0.9;
-  }
-  100% {
-    transform: scale(1.38);
-    opacity: 0;
-  }
-}
-
-.voice-stage-label {
-  font-size: 1.05rem;
-  font-weight: 800;
-  color: var(--gold-light);
-  margin-bottom: 12px;
-}
-
-.voice-user-transcript {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 14px;
-  padding: 9px 15px;
-  font-size: 0.9rem;
-  color: #e2e8f0;
-  margin-bottom: 12px;
-  max-width: 100%;
-}
-
-.voice-error-box {
-  background: rgba(220, 38, 38, 0.2);
-  border: 1px solid rgba(248, 113, 113, 0.5);
-  color: #fecaca;
-  border-radius: 12px;
-  padding: 10px 14px;
-  font-size: 0.84rem;
-  margin-bottom: 14px;
-}
-
-.voice-device-check {
-  margin-top: 7px;
-  color: #fecaca;
-  font-size: 0.76rem;
-  line-height: 1.6;
-}
-
-.voice-bot-subtitle {
-  width: 100%;
-  max-height: 190px;
-  overflow-y: auto;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 16px;
-  padding: 13px 16px;
-  text-align: right;
-  font-size: 0.87rem;
-  line-height: 1.7;
-  color: #f1f5f9;
-  margin-bottom: 20px;
-}
-
-.voice-call-controls {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.voice-action-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 10px 18px;
-  border-radius: 999px;
-  border: none;
-  font-weight: 800;
-  font-size: 0.86rem;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.voice-action-btn.primary {
-  background: linear-gradient(135deg, #f6d86b 0%, #d4a90a 100%);
-  color: #05080e;
-}
-
-.voice-action-btn.secondary {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-}
-
-.voice-action-btn.end-call {
-  background: #dc2626;
-  color: #fff;
-}
-
-.voice-action-btn:hover {
-  transform: translateY(-1px);
-  filter: brightness(1.06);
-}
-
 /* =========================================================
    ضبط أبعاد الشات بوت على الهواتف الذكية (Android & iPhone)
    ========================================================= */
@@ -1084,13 +766,7 @@ button {
   .header-right-controls {
     gap: 6px;
   }
-
-  .voice-mode-header-btn {
-    padding: 6px 11px;
-    font-size: 0.76rem;
-  }
-
-  .new-chat-btn {
+.new-chat-btn {
     width: 34px;
     height: 34px;
     padding: 0;
@@ -1105,7 +781,6 @@ button {
     padding: 12px 10px 8px;
   }
 
-  /* ضغط متناسق لشاشة الترحيب على الموبايل لتظهر كل الاختيارات بوضوح دون سكرول طويل */
   .welcome-hero {
     padding: 6px 2px 10px;
   }
@@ -1130,16 +805,7 @@ button {
     margin-bottom: 12px;
     padding: 0 4px;
   }
-
-  .hero-voice-cta {
-    width: 100%;
-    max-width: 340px;
-    padding: 10px 16px;
-    font-size: 0.86rem;
-    margin-bottom: 14px;
-  }
-
-  .suggestions-grid {
+.suggestions-grid {
     grid-template-columns: 1fr;
     gap: 8px;
   }
@@ -1248,51 +914,6 @@ button {
     max-height: 108px;
   }
 
-  /* شاشة المحادثة الصوتية المباشرة على الفون */
-  .voice-call-card {
-    padding: 18px 15px;
-    border-radius: 22px;
-  }
-
-  .voice-orb-container {
-    width: 114px;
-    height: 114px;
-    margin: 14px auto;
-  }
-
-  .voice-orb-core {
-    width: 82px;
-    height: 82px;
-    padding: 11px;
-  }
-
-  .voice-stage-label {
-    font-size: 0.94rem;
-    margin-bottom: 10px;
-  }
-
-  .voice-user-transcript {
-    font-size: 0.84rem;
-    padding: 8px 12px;
-  }
-
-  .voice-bot-subtitle {
-    max-height: 30dvh;
-    padding: 11px 13px;
-    font-size: 0.84rem;
-    margin-bottom: 14px;
-  }
-
-  .voice-call-controls {
-    width: 100%;
-    gap: 8px;
-  }
-
-  .voice-action-btn {
-    flex: 1 1 auto;
-    padding: 11px 14px;
-    font-size: 0.83rem;
-  }
 }
 
 /* الهواتف النحيفة جداً (320px - 375px مثل iPhone SE) */
@@ -1300,16 +921,7 @@ button {
   .brand-tagline {
     display: none;
   }
-
-  .voice-btn-label-full {
-    display: none;
-  }
-
-  .voice-btn-label-compact {
-    display: inline;
-  }
-
-  .attach-btn,
+.attach-btn,
   .mic-btn,
   .send-btn {
     width: 37px;

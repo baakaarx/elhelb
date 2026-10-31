@@ -14,18 +14,11 @@ const voiceSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'voiceEngi
 const voiceCommonJs = esbuild.transformSync(voiceSource, { format: 'cjs' }).code;
 const voiceModule = { exports: {} };
 new Function('module', 'exports', voiceCommonJs)(voiceModule, voiceModule.exports);
-const speechFixture = voiceModule.exports.cleanTextForClientSpeech('استخدم Tazolen 72% WP بمعدل 1.5 لتر/فدان.');
-assert.match(speechFixture, /تازولين اثنان وسبعون في المئة/);
-assert.match(speechFixture, /واحد فاصلة خمسة لتر لكل فدان/);
-assert.doesNotMatch(speechFixture, /[A-Za-z/]/, 'يجب ألا يقرأ الصوت اختصارات لاتينية أو slash في نص عربي');
-const englishSpeechFixture = voiceModule.exports.cleanTextForClientSpeech('Use product 72% at 1.5 L/ha.', { lang: 'en-US' });
-assert.match(englishSpeechFixture, /72 percent/);
-assert.match(englishSpeechFixture, /1 point 5 L per ha/);
-assert.doesNotMatch(englishSpeechFixture, /في المية|[\u0600-\u06FF]/);
-const fertilizerSpeechFixture = voiceModule.exports.cleanTextForClientSpeech('New Fruity 10-10-40، بمعدل 250 جم/100 لتر.');
-assert.match(fertilizerSpeechFixture, /نيو فروتي عشرة، عشرة، أربعون/);
-assert.match(fertilizerSpeechFixture, /لكل مئة لتر/);
-assert.doesNotMatch(fertilizerSpeechFixture, /[A-Za-z/]/);
+assert.doesNotMatch(voiceSource, /speechSynthesis|speakArabic|isVoiceOutputSupported/, 'يجب إزالة إخراج الصوت من محرك الويب');
+const appVoiceSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'App.jsx'), 'utf8');
+const chatVoiceSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'ChatView.jsx'), 'utf8');
+assert.doesNotMatch(`${appVoiceSource}\n${chatVoiceSource}`, /speakArabic|speechSynthesis|استمع للرد بالصوت|اختبار الصوت/);
+
 const offlineBundle = esbuild.buildSync({
   entryPoints: [path.join(__dirname, '..', 'src', 'offlineStaticBrain.js')],
   bundle: true,
@@ -88,87 +81,6 @@ async function testBrowserVoiceEngineWiring() {
   assert.equal(recognitionInstances[1].lang, 'en-US', 'يجب تمرير اختيار اللغة الإنجليزية إلى محرك الميكروفون');
   alternateRecognition.abort();
 
-  const utterances = [];
-  const synth = {
-    speaking: false,
-    paused: false,
-    cancel() {},
-    getVoices: () => [
-      { name: 'Arabic', lang: 'ar-SA', voiceURI: 'ar-sa-local', localService: true },
-      { name: 'Google Arabic', lang: 'ar-EG', voiceURI: 'ar-eg-online', localService: false },
-      { name: 'English Standard', lang: 'en-US', voiceURI: 'en-standard', localService: true },
-      { name: 'English Natural', lang: 'en-US', voiceURI: 'en-natural', localService: true },
-      { name: 'Remote English', lang: 'en-US', voiceURI: 'en-remote', localService: false },
-    ],
-    speak(utterance) {
-      utterances.push(utterance);
-      this.speaking = true;
-      utterance.onstart?.();
-      queueMicrotask(() => { this.speaking = false; utterance.onend?.(); });
-    },
-    resume() {},
-  };
-  function MockUtterance(text) { this.text = text; }
-  global.window = { speechSynthesis: synth, SpeechSynthesisUtterance: MockUtterance, isSecureContext: true };
-  const voiceCounts = voiceModule.exports.getSpeechVoiceCounts('ar-SA');
-  assert.equal(voiceCounts.local, 1);
-  assert.equal(voiceCounts.remote, 1);
-  assert.ok(!voiceModule.exports.getAvailableSpeechVoices('ar-SA').some((voice) => voice.localService === false));
-  assert.ok(voiceModule.exports.getAvailableSpeechVoices('ar-SA', { allowRemote: true }).some((voice) => voice.voiceURI === 'ar-eg-online'));
-  const availableEnglishVoices = voiceModule.exports.getAvailableSpeechVoices('en-US');
-  assert.equal(availableEnglishVoices[0].name, 'English Natural', 'يجب تفضيل الصوت المحلي الأحدث عند توفره');
-  assert.ok(!availableEnglishVoices.some((voice) => voice.localService === false), 'يجب عدم إرسال النص إلى صوت خارجي');
-  const arabicSpeechDone = new Promise((resolve, reject) => {
-    voiceModule.exports.speakArabic('رد صوتي عربي 72%', {
-      onStart: () => {},
-      onError: reject,
-      onEnd: resolve,
-    });
-  });
-  assert.equal(utterances.length, 1, 'يجب بدء النطق فوراً دون مؤقت يؤخره خارج نقرة المستخدم');
-  await arabicSpeechDone;
-  assert.equal(utterances.length, 1);
-  assert.equal(utterances[0].voice.lang, 'ar-SA', 'يجب اختيار صوت العربية الرسمية عند توفره');
-  assert.match(utterances[0].text, /اثنان وسبعون في المئة/);
-  await new Promise((resolve, reject) => {
-    voiceModule.exports.speakArabic('English reply 72%', {
-      lang: 'en-US',
-      onError: reject,
-      onEnd: resolve,
-    });
-  });
-  assert.equal(utterances[1].lang, 'en-US');
-  assert.equal(utterances[1].voice.name, 'English Natural', 'يجب اختيار الصوت الإنجليزي المحلي الأحدث افتراضياً');
-  assert.match(utterances[1].text, /72 percent/);
-  await new Promise((resolve, reject) => {
-    voiceModule.exports.speakArabic('Selected device voice test.', {
-      lang: 'en-US',
-      voiceURI: 'en-standard',
-      onError: reject,
-      onEnd: resolve,
-    });
-  });
-  assert.equal(utterances[2].voice.voiceURI, 'en-standard', 'يجب احترام اختيار المستخدم للصوت المثبت');
-  await new Promise((resolve, reject) => {
-    voiceModule.exports.speakArabic('Arabic device fallback test.', {
-      lang: 'ar-SA',
-      voiceURI: 'ar-eg-online',
-      allowRemote: true,
-      onError: reject,
-      onEnd: resolve,
-    });
-  });
-  assert.equal(utterances[3].voice.voiceURI, 'ar-eg-online', 'يجب استخدام صوت المتصفح الأونلاين عند السماح بذلك');
-  const savedGetVoices = synth.getVoices;
-  synth.getVoices = () => [];
-  let missingArabicVoiceError = '';
-  voiceModule.exports.speakArabic('اختبار عربي', {
-    lang: 'ar-SA',
-    onError: (error) => { missingArabicVoiceError = error.message; },
-  });
-  assert.match(missingArabicVoiceError, /لا يوجد صوت محلي مثبت للغة العربية/);
-  assert.equal(utterances.length, 4, 'لا يُسمح بالرجوع إلى صوت غير محلي عند غياب العربية');
-  synth.getVoices = savedGetVoices;
   global.window = previousWindow;
 }
 
@@ -207,6 +119,40 @@ function request(baseUrl, path, { method = 'GET', body, headers = {} } = {}) {
     req.on('error', reject);
     if (payload) req.write(payload);
     req.end();
+  });
+}
+
+function requestMultipart(baseUrl, path, { fields = {}, files = [] } = {}) {
+  return new Promise((resolve, reject) => {
+    const boundary = `----elhelb-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const chunks = [];
+    for (const [name, value] of Object.entries(fields)) {
+      chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${String(value)}\r\n`));
+    }
+    for (const file of files) {
+      chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${file.field}"; filename="${file.filename}"\r\nContent-Type: ${file.contentType}\r\n\r\n`));
+      chunks.push(Buffer.from(file.data));
+      chunks.push(Buffer.from('\r\n'));
+    }
+    chunks.push(Buffer.from(`--${boundary}--\r\n`));
+    const payload = Buffer.concat(chunks);
+    const req = http.request(new URL(path, baseUrl), {
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': payload.length,
+      },
+    }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => { raw += chunk; });
+      res.on('end', () => {
+        let data = raw;
+        try { data = JSON.parse(raw); } catch {}
+        resolve({ status: res.statusCode, data });
+      });
+    });
+    req.on('error', reject);
+    req.end(payload);
   });
 }
 
@@ -290,7 +236,15 @@ async function runTests() {
 
     const histInvalid = await request(baseUrl, '/api/chat/history?sessionId=web-default');
     assert.equal(histInvalid.data.messages.length, 0, 'رفض المعرفات العامة المشتركة');
-    console.log('✅ [3/5] عزل تام لخصوصية محادثات الزوار + دقة إجابات العيادة الزراعية');
+
+    const voiceNoteTurn = await requestMultipart(baseUrl, '/api/chat/ask', {
+      fields: { sessionId: 'x', language: 'ar', message: 'السلام عليكم' },
+      files: [{ field: 'voice', filename: 'voice-note.webm', contentType: 'audio/webm', data: Buffer.from('temporary audio bytes') }],
+    });
+    assert.equal(voiceNoteTurn.status, 200, 'يجب استقبال ملف الفويس نوت مع التفريغ النصي');
+    assert.match(voiceNoteTurn.data.reply, /يا هلا/);
+
+    console.log('✅ [3/5] عزل تام لخصوصية الزوار + استقبال فويس نوت + دقة العيادة الزراعية');
 
     // 4. اختبار استقبال وتحليل الصور (Vision OCR) ومطابقتها مع مستحضرات الهلب
     const imgBuf = await generateTestProductLabelPngBuffer();
@@ -336,10 +290,10 @@ async function runTests() {
     );
     console.log('✅ [5/6] جاهزية واجهات ربط تطبيق الموبايل (/api/v1/chat + /v1/chat/completions)');
 
-    // 6. اختبار نظام التحدث وفهم «كلام الناس العامي» والتحيات ("هلا" / "السلام عليكم" / "ازيك") وسياق المحادثة
+    // 6. اختبار استقبال الفويس نوت وفهم «كلام الناس العامي» والتحيات ("هلا" / "السلام عليكم" / "ازيك") وسياق المحادثة
     const convSid = 'vis_colloquial_test_session_9999';
 
-    // اختبار التحيات العربية القصيرة مثل "هلا" و"السلام عليكم" و"ازيك"
+    // اختبار التحيات العربية القصيرة ورد الدعوة لإرسال فويس نوت كتابةً
     for (const greetWord of ['هلا', 'السلام عليكم', 'ازيك يا هندسة', 'تمام']) {
       const gRes = await request(baseUrl, '/api/chat/ask', {
         method: 'POST',
@@ -348,6 +302,10 @@ async function runTests() {
       assert.equal(gRes.status, 200);
       assert.ok(!gRes.data.reply.includes('لم أجد'), `يجب أن يرد بودّ وطبيعية على "${greetWord}"`);
       assert.ok(!gRes.data.suggestions.includes('إيه طريقة ومعدل الاستخدام الموصى به؟'));
+      if (greetWord === 'هلا') {
+        assert.match(gRes.data.reply, /فويس نوت/);
+        assert.doesNotMatch(gRes.data.reply, /هرد عليك بالصوت/);
+      }
     }
 
     // أ) شكوى عامة بالعامية -> تشخيص تفاعلي خطوة بخطوة
@@ -377,6 +335,14 @@ async function runTests() {
       followUpTurn.data.reply.includes('بيريبان') && followUpTurn.data.reply.includes('5 لتر'),
       'يجب أن يتذكر سياق المحادثة السابق (بيريبان) تلقائياً'
     );
+
+    const contextualAck = await request(baseUrl, '/api/chat/ask', {
+      method: 'POST',
+      body: { sessionId: convSid, message: 'تمام' },
+    });
+    assert.equal(contextualAck.status, 200);
+    assert.match(contextualAck.data.reply, /بيريبان/);
+    assert.ok(contextualAck.data.suggestions.some((item) => item.includes('بيريبان')));
 
     // د) رد الشكر الطبيعي
     const thanksTurn = await request(baseUrl, '/api/chat/ask', {
@@ -445,10 +411,10 @@ async function runTests() {
     const soilCheck = await analyzePlantPathologyPixels(soilLeaf);
     assert.ok(soilCheck.isPlantPhoto);
     assert.notEqual(soilCheck.plantCondition, 'blight_or_leaf_spot', 'يجب ألا تُصنّف التربة البنية حول ورقة سليمة كندوة/لفحة');
-    console.log('✅ [6/6] تجهيز نص النطق (اختبار نصي فقط) + 20 سماداً + 12 مبيد حشائش + 21 محصولاً + منع تصنيف التربة كمرض');
+    console.log('✅ [6/6] تفريغ الفويس نوت إلى نص + 20 سماداً + 12 مبيد حشائش + 21 محصولاً + منع تصنيف التربة كمرض');
     console.log('');
 
-    console.log('🎉 اجتازت جميع اختبارات الشات بوت والأمان وتجهيز النص الصوتي. النطق الفعلي يحتاج تجربة على جهاز حقيقي.');
+    console.log('🎉 اجتازت اختبارات الشات والأمان ومعالجة نص الفويس نوت. تسجيل الميكروفون نفسه يحتاج تجربة على هاتف حقيقي.');
   } finally {
     server.close();
   }

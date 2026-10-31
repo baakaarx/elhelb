@@ -125,10 +125,10 @@ ${visionReport.ocr.text || '(صورة بصرية بدون نصوص مطبوعة 
   }
 
   const clinicBlock = `\n\n=== قاعدة المعرفة الزراعية المعتمدة (21 محصولاً + مبيدات الحشائش والتوصيات) ===\nالمحاصيل: ${agriKnowledge.crops.join('، ')}\nمبيدات الحشائش: ${agriKnowledge.herbicides.map((h) => `${h.name} — ${h.active} — ${h.target} — ${h.rate}`).join('\n')}\nتوصيات الآفات: ${agriKnowledge.protocols.map((p) => `${p.issue}: ${p.products}; ${p.rate}`).join('\n')}`;
-  const voiceStyle = String(language).toLowerCase().startsWith('en')
-    ? '\n\n=== Response language and voice style ===\nAnswer in clear, natural English. Keep sentences short and easy to speak. Preserve exact product names and label rates; never invent a dose, and ask one clarifying question when crop or symptoms are missing.'
-    : '\n\n=== أسلوب الإجابة الصوتية والحوار ===\nأجب دائماً بالعربية الفصحى المبسطة، حتى لو احتوى كلام المستخدم على كلمات إنجليزية. استخدم جملاً قصيرة وسهلة النطق، واشرح المصطلح الإنجليزي بالعربية ولا تنطق الاختصارات أو الشرطات المائلة حرفياً. لا تخترع جرعات، واسأل سؤالاً توضيحياً واحداً عند نقص بيانات المحصول أو الإصابة.';
-  return `${base}${voiceStyle}\n\n=== وثائق ومعرفة الشركة ===\n${docsBlock}${clinicBlock}${analyticsBlock}${visionBlock}`;
+  const conversationStyle = String(language).toLowerCase().startsWith('en')
+    ? '\n\n=== Conversational response style ===\nSound warm, attentive, and natural rather than scripted. Start by directly addressing the user’s actual question, then explain only what is useful. Use the conversation history to understand short follow-ups and never make the user repeat details already provided. Ask one focused clarifying question at a time when key details are missing. Keep the first answer concise, then offer a useful next step. Be honest about uncertainty; ground company and agricultural claims in the supplied sources, never invent a product, label, or application rate, and advise checking the registered label for safe use.'
+    : '\n\n=== أسلوب الحوار والتعامل مع العميل ===\nتحدث بعربية مصرية مهذبة وطبيعية ودافئة، من غير مبالغة أو ردود محفوظة. ابدأ بالإجابة المباشرة على سؤال العميل، ثم أضف التفاصيل المفيدة فقط. افهم المتابعات القصيرة من سياق المحادثة ولا تطلب من العميل إعادة معلومات قالها قبل كده. لو ناقصك شيء مهم، اسأل سؤالاً توضيحياً واحداً واضحاً في كل مرة. خليك مختصراً في أول رد، واعرض خطوة تالية مفيدة. كن صريحاً في حدود اليقين؛ اعتمد على مصادر الشركة المقدمة ولا تخترع منتجاً أو معلومة أو جرعة، ونبّه إلى اتباع ملصق المنتج المسجل وإرشادات السلامة.';
+  return `${base}${conversationStyle}\n\n=== وثائق ومعرفة الشركة ===\n${docsBlock}${clinicBlock}${analyticsBlock}${visionBlock}`;
 }
 
 /**

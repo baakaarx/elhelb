@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Send,
   ImagePlus,
@@ -10,22 +10,9 @@ import {
   Globe2,
   Mic,
   MicOff,
-  Volume2,
-  VolumeX,
-  AudioLines,
-  PhoneOff,
 } from 'lucide-react';
 import { apiRequest } from '../api';
-import {
-  isVoiceOutputSupported,
-  getAvailableSpeechVoices,
-  getSpeechVoiceCounts,
-  getVoiceDiagnostics,
-  speakArabic,
-  stopSpeaking,
-  startArabicRecognition,
-  startVoiceRecorder,
-} from '../voiceEngine';
+import { startArabicRecognition, startVoiceRecorder } from '../voiceEngine';
 
 const SUGGESTED_QUESTIONS = [
   {
@@ -104,13 +91,7 @@ function renderInlineTokens(line) {
   });
 }
 
-export default function ChatView({
-  sessionId,
-  voiceCallOpen,
-  onOpenVoiceCall,
-  onCloseVoiceCall,
-  onMessagesCountChange,
-}) {
+export default function ChatView({ sessionId, onMessagesCountChange }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [pendingImageFile, setPendingImageFile] = useState(null);
@@ -118,46 +99,21 @@ export default function ChatView({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // حالات الصوت في شريط الكتابة وقراءة الردود
-  const [isMicListening, setIsMicListening] = useState(false);
+  // التسجيل الصوتي مخصص لإرسال ملاحظة صوتية واردة فقط؛ لا يوجد نطق لردود المساعد.
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [isFinalizingVoice, setIsFinalizingVoice] = useState(false);
   const [voiceSeconds, setVoiceSeconds] = useState(0);
-  const [voiceNoteUrl, setVoiceNoteUrl] = useState('');
-  const [speakingMsgId, setSpeakingMsgId] = useState(null);
+  const [pendingVoiceFile, setPendingVoiceFile] = useState(null);
+  const [pendingVoiceUrl, setPendingVoiceUrl] = useState('');
+  const [voiceTranscript, setVoiceTranscript] = useState('');
+  const voiceTranscriptRef = useRef('');
+  const recordingRef = useRef(false);
   const micHandleRef = useRef(null);
   const recorderRef = useRef(null);
-  const voiceCallStartedRef = useRef(false);
-
-  // حالات وضع المكالمة / المحادثة الصوتية المباشرة
-  const [callStage, setCallStage] = useState('idle'); // 'listening' | 'thinking' | 'speaking' | 'ready'
-  const [liveTranscript, setLiveTranscript] = useState('');
-  const [lastBotSubtitle, setLastBotSubtitle] = useState('');
-  const [callError, setCallError] = useState('');
-  const [voiceLanguage, setVoiceLanguage] = useState(() => {
-    try {
-      return ['ar-EG', 'ar-SA', 'en-US'].includes(localStorage.getItem('elhelb_voice_language'))
-        ? localStorage.getItem('elhelb_voice_language')
-        : 'ar-EG';
-    } catch {
-      return 'ar-EG';
-    }
-  });
-  const voiceLanguageRef = useRef(voiceLanguage);
-  const [voiceSelections, setVoiceSelections] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('elhelb_speech_voices') || '{}'); } catch { return {}; }
-  });
-  const voiceSelectionsRef = useRef(voiceSelections);
-  const [systemVoiceVersion, setSystemVoiceVersion] = useState(0);
-  // الافتراضي: أصوات الجهاز المحلية فقط (خصوصية). المستخدم يقدر يسمح بالأصوات الأونلاين لو مفيش صوت عربي محلي.
-  const [allowRemoteVoices, setAllowRemoteVoices] = useState(() => {
-    try { return localStorage.getItem('elhelb_allow_remote_voices') === '1'; } catch { return false; }
-  });
-  const allowRemoteVoicesRef = useRef(allowRemoteVoices);
-  const callActiveRef = useRef(false);
-  const callRecRef = useRef(null);
-  const callRetryTimerRef = useRef(null);
-  const callGenerationRef = useRef(0);
-  const callFatalErrorRef = useRef(false);
+  const voiceRetryTimerRef = useRef(null);
+  const voiceBlobReadyRef = useRef(false);
+  const voiceRecognitionEndedRef = useRef(true);
+  const voiceObjectUrlsRef = useRef(new Set());
 
   const bottomRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -172,67 +128,17 @@ export default function ChatView({
   }, [input]);
 
   useEffect(() => {
-    if (!isMicListening && !isRecordingVoice) { setVoiceSeconds(0); return undefined; }
+    if (!isRecordingVoice) { setVoiceSeconds(0); return undefined; }
     const timer = window.setInterval(() => setVoiceSeconds((value) => value + 1), 1000);
     return () => window.clearInterval(timer);
-  }, [isMicListening, isRecordingVoice]);
+  }, [isRecordingVoice]);
 
-  const speechVoiceCounts = useMemo(
-    () => getSpeechVoiceCounts(voiceLanguage),
-    [voiceLanguage, systemVoiceVersion]
-  );
-  // لو مفيش أي صوت محلي للغة المختارة وفيه صوت أونلاين في المتصفح، استخدمه تلقائياً بدل ما الصوت يفشل.
-  const autoRemoteVoices = !allowRemoteVoices && speechVoiceCounts.local === 0 && speechVoiceCounts.remote > 0;
-  const effectiveAllowRemote = allowRemoteVoices || autoRemoteVoices;
-  const availableSpeechVoices = useMemo(
-    () => getAvailableSpeechVoices(voiceLanguage, { allowRemote: effectiveAllowRemote }),
-    [voiceLanguage, systemVoiceVersion, effectiveAllowRemote]
-  );
-  const activeSpeechVoiceURI = availableSpeechVoices.some((voice) => voice.voiceURI === voiceSelections[voiceLanguage])
-    ? voiceSelections[voiceLanguage]
-    : availableSpeechVoices[0]?.voiceURI || '';
-
-  useEffect(() => {
-    voiceLanguageRef.current = voiceLanguage;
-    try { localStorage.setItem('elhelb_voice_language', voiceLanguage); } catch {}
-  }, [voiceLanguage]);
-
-  useEffect(() => {
-    allowRemoteVoicesRef.current = effectiveAllowRemote;
-  }, [effectiveAllowRemote]);
-
-  useEffect(() => {
-    try { localStorage.setItem('elhelb_allow_remote_voices', allowRemoteVoices ? '1' : '0'); } catch {}
-  }, [allowRemoteVoices]);
-
-  useEffect(() => {
-    voiceSelectionsRef.current = voiceSelections;
-    try { localStorage.setItem('elhelb_speech_voices', JSON.stringify(voiceSelections)); } catch {}
-  }, [voiceSelections]);
-
-  useEffect(() => {
-    const synth = window.speechSynthesis;
-    if (!synth) return undefined;
-    const refreshVoices = () => setSystemVoiceVersion((version) => version + 1);
-    refreshVoices();
-    // أندرويد/كروم بيرجّعوا قائمة الأصوات فاضية في الأول؛ أعد المحاولة كذا مرة.
-    const retryTimers = [400, 1200, 3000].map((delay) => window.setTimeout(refreshVoices, delay));
-    if (synth.addEventListener) {
-      synth.addEventListener('voiceschanged', refreshVoices);
-      return () => {
-        retryTimers.forEach((timer) => window.clearTimeout(timer));
-        synth.removeEventListener?.('voiceschanged', refreshVoices);
-      };
-    }
-    const previousHandler = synth.onvoiceschanged;
-    synth.onvoiceschanged = (...args) => {
-      previousHandler?.(...args);
-      refreshVoices();
-    };
-    return () => {
-      retryTimers.forEach((timer) => window.clearTimeout(timer));
-      if (synth.onvoiceschanged) synth.onvoiceschanged = previousHandler || null;
-    };
+  useEffect(() => () => {
+    recordingRef.current = false;
+    clearTimeout(voiceRetryTimerRef.current);
+    micHandleRef.current?.abort();
+    recorderRef.current?.cancel();
+    voiceObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
   }, []);
 
   useEffect(() => {
@@ -250,245 +156,133 @@ export default function ChatView({
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
-  // إدارة دورة حياة وضع المكالمة: استمع، أرسل بعد الوقفة، انطق الرد، ثم استأنف الاستماع.
-  useEffect(() => {
-    if (voiceCallOpen) {
-      callActiveRef.current = true;
-      setCallError('');
-      setLastBotSubtitle('أهلاً بيك! اتفضل اتكلم بكلامك العادي؛ هبعت كلامك بعد ما تسكت لحظة، وبعدها هرد عليك بصوت.');
-      if (!voiceCallStartedRef.current) setCallStage('ready');
-    } else {
-      callActiveRef.current = false;
-      voiceCallStartedRef.current = false;
-      callGenerationRef.current += 1;
-      clearTimeout(callRetryTimerRef.current);
-      callRetryTimerRef.current = null;
-      callRecRef.current?.abort();
-      callRecRef.current = null;
-      stopSpeaking();
-      setCallStage('idle');
-      setLiveTranscript('');
+  function updateVoiceTranscript(finalText = '', interimText = '') {
+    const cleanedFinal = String(finalText || '').trim();
+    if (cleanedFinal && !voiceTranscriptRef.current.endsWith(cleanedFinal)) {
+      voiceTranscriptRef.current = [voiceTranscriptRef.current, cleanedFinal].filter(Boolean).join(' ').trim();
     }
-
-  }, [voiceCallOpen]);
-
-  useEffect(() => () => {
-    callActiveRef.current = false;
-    callGenerationRef.current += 1;
-    clearTimeout(callRetryTimerRef.current);
-    callRetryTimerRef.current = null;
-    callRecRef.current?.abort();
-    stopSpeaking();
-  }, []);
-
-  function scheduleCallRetry(delay = 700) {
-    if (!callActiveRef.current || callRetryTimerRef.current) return;
-    callRetryTimerRef.current = window.setTimeout(() => {
-      callRetryTimerRef.current = null;
-      if (callActiveRef.current) startCallListeningCycle();
-    }, delay);
+    setVoiceTranscript([voiceTranscriptRef.current, String(interimText || '').trim()].filter(Boolean).join(' ').trim());
   }
 
-  function selectedSpeechVoiceURI() {
-    const language = voiceLanguageRef.current;
-    const requestedURI = voiceSelectionsRef.current[language] || '';
-    return getAvailableSpeechVoices(language, { allowRemote: allowRemoteVoicesRef.current }).some((voice) => voice.voiceURI === requestedURI) ? requestedURI : '';
-  }
-
-  function openVoiceCall() {
-    voiceCallStartedRef.current = true;
-    callActiveRef.current = true;
-    setCallError('');
-    onOpenVoiceCall?.();
-    startCallListeningCycle();
-  }
-
-  function startCallListeningCycle({ preserveError = false } = {}) {
-    if (!callActiveRef.current) return;
-    clearTimeout(callRetryTimerRef.current);
-    callRetryTimerRef.current = null;
-    const generation = ++callGenerationRef.current;
-    callRecRef.current?.abort();
-    callRecRef.current = null;
-    stopSpeaking();
-    callFatalErrorRef.current = false;
-    if (!preserveError) setCallError('');
-    setLiveTranscript('');
-    setCallStage('starting');
-
+  function startVoiceRecognitionCycle() {
+    if (!recordingRef.current || micHandleRef.current) return;
     const handle = startArabicRecognition({
-      lang: voiceLanguageRef.current,
-      onStatus: (status) => {
-        if (!callActiveRef.current || generation !== callGenerationRef.current) return;
-        if (status === 'starting') setCallStage('starting');
-        if (status === 'listening' || status === 'audio') setCallStage('listening');
-        if (status === 'processing') setCallStage('thinking');
-      },
-      onInterim: (txt) => {
-        if (callActiveRef.current && generation === callGenerationRef.current) setLiveTranscript(txt);
-      },
-      onFinal: async (finalText) => {
-        if (!callActiveRef.current || generation !== callGenerationRef.current) return;
-        setLiveTranscript(finalText);
-        setCallStage('thinking');
-        const replyData = await sendTurn(finalText, { fromVoiceCall: true });
-        if (!callActiveRef.current || generation !== callGenerationRef.current) return;
-
-        if (replyData?.assistantMessage) {
-          const toSpeak = replyData.speechText || replyData.assistantMessage.content;
-          setLastBotSubtitle(replyData.assistantMessage.content);
-          setCallStage('speaking');
-          let speechFailed = false;
-          speakArabic(toSpeak, {
-            lang: voiceLanguageRef.current,
-            voiceURI: selectedSpeechVoiceURI(),
-            allowRemote: allowRemoteVoicesRef.current,
-            onStart: () => {
-              if (callActiveRef.current && generation === callGenerationRef.current) setCallStage('speaking');
-            },
-            onError: (err) => {
-              speechFailed = true;
-              if (callActiveRef.current && generation === callGenerationRef.current) {
-                setCallError(err?.message || 'تعذر تشغيل الرد الصوتي. اضغط «اختبار الصوت» لمعرفة السبب.');
-              }
-            },
-            onEnd: () => {
-              if (callActiveRef.current && generation === callGenerationRef.current) {
-                startCallListeningCycle({ preserveError: speechFailed });
-              }
-            },
-          });
-        } else {
-          setCallStage('ready');
-          if (callActiveRef.current && !callFatalErrorRef.current) scheduleCallRetry(900);
-        }
-      },
-      onError: (errMsg, code) => {
-        if (!callActiveRef.current || generation !== callGenerationRef.current) return;
-        setCallError(errMsg);
-        if (code === 'no-speech') {
-          // بعض هواتف أندرويد توقف جلسة التعرف بعد الصمت؛ أعد فتح الميكروفون تلقائياً.
-          scheduleCallRetry(800);
-        } else {
-          callFatalErrorRef.current = true;
-          setCallStage('ready');
-        }
-      },
-      onEnd: (resolvedText) => {
-        if (!callActiveRef.current || generation !== callGenerationRef.current) return;
-        if (!resolvedText && !callFatalErrorRef.current) scheduleCallRetry(500);
-      },
-    });
-
-    callRecRef.current = handle;
-  }
-
-  function testCallSpeaker() {
-    if (!callActiveRef.current) return;
-    const generation = ++callGenerationRef.current;
-    callRecRef.current?.abort();
-    callRecRef.current = null;
-    callFatalErrorRef.current = false;
-    setCallError('');
-    const testSpeech = voiceLanguageRef.current.startsWith('en')
-      ? 'This is a voice test. If you can hear me, speak after I finish.'
-      : 'هذا اختبار للصوت. إذا كنت تسمعني، فتحدث بعد انتهائي.';
-    setLastBotSubtitle(testSpeech);
-    setCallStage('speaking');
-    let speechFailed = false;
-    speakArabic(testSpeech, {
-      lang: voiceLanguageRef.current,
-      voiceURI: selectedSpeechVoiceURI(),
-            allowRemote: allowRemoteVoicesRef.current,
-      onStart: () => {
-        if (callActiveRef.current && generation === callGenerationRef.current) setCallStage('speaking');
-      },
-      onError: (err) => {
-        speechFailed = true;
-        if (callActiveRef.current && generation === callGenerationRef.current) {
-          setCallError(err?.message || 'تعذر تشغيل صوت الجهاز. تأكد من رفع صوت الوسائط وتفعيل صوت عربي.');
-          setCallStage('ready');
-        }
-      },
-      onEnd: () => {
-        if (callActiveRef.current && generation === callGenerationRef.current) {
-          startCallListeningCycle({ preserveError: speechFailed });
-        }
-      },
-    });
-  }
-
-  function toggleInlineMic() {
-    if (!isVoiceInputSupported() || (!window.SpeechRecognition && !window.webkitSpeechRecognition)) {
-      if (isRecordingVoice) {
-        recorderRef.current?.stop();
-        recorderRef.current = null;
+      lang: 'ar-EG',
+      onInterim: (text) => updateVoiceTranscript('', text),
+      onFinal: (text) => updateVoiceTranscript(text),
+      onError: (message, code) => {
+        if (code === 'no-speech' || code === 'aborted') return;
+        setError(message);
+        recordingRef.current = false;
         setIsRecordingVoice(false);
-        return;
-      }
-      setError('المتصفح الحالي لا يوفّر تفريغ الكلام العربي. افتح الموقع في Chrome أو Safari واسمح بالميكروفون؛ التسجيل الاحتياطي يُحفظ للاستماع فقط ولا يتحول لنص.');
-      startVoiceRecorder({
-        onReady: (blob) => {
-          setVoiceNoteUrl((previous) => { if (previous) URL.revokeObjectURL(previous); return URL.createObjectURL(blob); });
-          setError('تم تسجيل الملاحظة الصوتية. يمكنك الاستماع إليها، ثم اكتب ملخصها في مربع الرسالة لإرسالها للمساعد.');
-        },
-        onError: (message) => { setError(message); setIsRecordingVoice(false); },
-        onStop: () => setIsRecordingVoice(false),
-      }).then((handle) => {
-        recorderRef.current = handle;
-        if (handle) setIsRecordingVoice(true);
-      });
+        setIsFinalizingVoice(true);
+        recorderRef.current?.stop();
+      },
+      onEnd: () => {
+        micHandleRef.current = null;
+        if (recordingRef.current) {
+          voiceRetryTimerRef.current = window.setTimeout(startVoiceRecognitionCycle, 250);
+        } else {
+          voiceRecognitionEndedRef.current = true;
+          setVoiceTranscript(voiceTranscriptRef.current);
+          if (voiceBlobReadyRef.current) setIsFinalizingVoice(false);
+        }
+      },
+    });
+    micHandleRef.current = handle;
+  }
+
+  function clearPendingVoice({ keepUrl = false } = {}) {
+    if (pendingVoiceUrl && !keepUrl) {
+      URL.revokeObjectURL(pendingVoiceUrl);
+      voiceObjectUrlsRef.current.delete(pendingVoiceUrl);
+    }
+    setPendingVoiceFile(null);
+    setPendingVoiceUrl('');
+    setVoiceTranscript('');
+    voiceTranscriptRef.current = '';
+    voiceBlobReadyRef.current = false;
+    voiceRecognitionEndedRef.current = true;
+  }
+
+  function stopVoiceRecording() {
+    if (!recordingRef.current) return;
+    recordingRef.current = false;
+    setIsRecordingVoice(false);
+    setIsFinalizingVoice(true);
+    clearTimeout(voiceRetryTimerRef.current);
+    voiceRetryTimerRef.current = null;
+    const recognition = micHandleRef.current;
+    micHandleRef.current = null;
+    if (recognition) recognition.stop();
+    else voiceRecognitionEndedRef.current = true;
+    const recorder = recorderRef.current;
+    recorderRef.current = null;
+    if (recorder) recorder.stop();
+    else voiceBlobReadyRef.current = true;
+    window.setTimeout(() => setIsFinalizingVoice(false), 2500);
+  }
+
+  async function toggleVoiceRecording() {
+    if (recordingRef.current) {
+      stopVoiceRecording();
       return;
     }
-    if (isMicListening) {
-      micHandleRef.current?.stop();
-      setIsMicListening(false);
+    if (isFinalizingVoice) return;
+    if (!window.MediaRecorder || !navigator.mediaDevices?.getUserMedia) {
+      setError('تسجيل الفويس نوت غير متاح في المتصفح الحالي. افتح الموقع عبر HTTPS واستخدم Chrome أو Safari حديثاً.');
+      return;
+    }
+    if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
+      setError('المتصفح لا يدعم تفريغ الفويس نوت إلى نص. جرّب Chrome محدّثاً مع تفعيل إذن الميكروفون وخدمة التعرف على الكلام.');
       return;
     }
 
+    clearPendingVoice();
     setError('');
-    setIsMicListening(true);
-    const handle = startArabicRecognition({
-      lang: voiceLanguageRef.current,
-      onInterim: (txt) => {
-        setInput(txt);
+    recordingRef.current = true;
+    voiceBlobReadyRef.current = false;
+    voiceRecognitionEndedRef.current = false;
+    setIsRecordingVoice(true);
+    setIsFinalizingVoice(false);
+    startVoiceRecognitionCycle();
+
+    const handle = await startVoiceRecorder({
+      onReady: (blob) => {
+        if (!blob?.size) {
+          setError('التسجيل الصوتي فارغ؛ جرّب التسجيل مرة أخرى.');
+          setIsFinalizingVoice(false);
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        voiceObjectUrlsRef.current.add(url);
+        setPendingVoiceFile(blob);
+        setPendingVoiceUrl(url);
+        voiceBlobReadyRef.current = true;
+        if (voiceRecognitionEndedRef.current) setIsFinalizingVoice(false);
       },
-      onFinal: (finalText) => {
-        setIsMicListening(false);
-        setInput(finalText);
-        sendTurn(finalText, { autoSpeakReply: true, fromVoiceInput: true });
+      onError: (message) => {
+        recordingRef.current = false;
+        setIsRecordingVoice(false);
+        setIsFinalizingVoice(false);
+        micHandleRef.current?.abort();
+        micHandleRef.current = null;
+        setError(message);
       },
-      onError: (errMsg) => {
-        setIsMicListening(false);
-        setError(errMsg);
-      },
-      onEnd: () => {
-        setIsMicListening(false);
+      onStop: () => {
+        setIsRecordingVoice(false);
       },
     });
 
     if (!handle) {
-      setIsMicListening(false);
-    } else {
-      micHandleRef.current = handle;
-    }
-  }
-
-  function toggleSpeakMessage(msg) {
-    if (speakingMsgId === msg.id) {
-      stopSpeaking();
-      setSpeakingMsgId(null);
+      recordingRef.current = false;
+      setIsRecordingVoice(false);
+      micHandleRef.current?.abort();
+      micHandleRef.current = null;
       return;
     }
-    const textToRead = msg.speechText || msg.content;
-    setSpeakingMsgId(msg.id);
-    speakArabic(textToRead, {
-      lang: voiceLanguageRef.current,
-      voiceURI: selectedSpeechVoiceURI(),
-            allowRemote: allowRemoteVoicesRef.current,
-      onError: (err) => setError(err?.message || 'تعذر تشغيل الصوت؛ يمكنك قراءة الرد على الشاشة.'),
-      onEnd: () => setSpeakingMsgId(null),
-    });
+    if (!recordingRef.current) handle.cancel();
+    else recorderRef.current = handle;
   }
 
   function handleSelectImageFile(file) {
@@ -524,39 +318,48 @@ export default function ChatView({
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
-  async function sendTurn(customPrompt, opts = {}) {
-    const { autoSpeakReply = false, fromVoiceCall = false, fromVoiceInput = false } = opts;
-    const textToSend = customPrompt !== undefined ? customPrompt : input.trim();
+  async function sendTurn(customPrompt) {
+    const voiceFileToSend = customPrompt === undefined ? pendingVoiceFile : null;
+    const transcript = voiceFileToSend ? (voiceTranscriptRef.current || voiceTranscript).trim() : '';
+    const typedText = customPrompt !== undefined ? customPrompt : input.trim();
+    const textToSend = [typedText, transcript].filter(Boolean).join(typedText && transcript ? '\n\n' : '');
     const hasImg = Boolean(pendingImageFile || pendingImagePreview);
-    if ((!textToSend && !hasImg) || loading) return null;
-
-    stopSpeaking();
-    setSpeakingMsgId(null);
+    if ((!textToSend && !hasImg && !voiceFileToSend) || loading) return null;
+    if (voiceFileToSend && !transcript) {
+      setError('سجلت الفويس نوت، لكن المتصفح لم يستطع تفريغ الكلام. جرّب التسجيل مرة أخرى أو اكتب ملخصاً قصيراً.');
+      return null;
+    }
 
     const optimisticUser = {
       id: 'temp-' + Date.now(),
       role: 'user',
       content: textToSend || '📷 صورة مرفقة للتحليل',
       imageThumb: pendingImagePreview || null,
+      voiceNoteUrl: voiceFileToSend ? pendingVoiceUrl : null,
     };
 
     const fileToSend = pendingImageFile;
     const base64ToSend = pendingImagePreview;
+    const voiceUrlToKeep = voiceFileToSend ? pendingVoiceUrl : '';
 
     setError('');
     setLoading(true);
-    if (customPrompt === undefined || fromVoiceInput) setInput('');
+    setInput('');
     clearPendingImage();
     setMessages((prev) => [...prev, optimisticUser]);
 
     try {
       let res;
-      if (fileToSend) {
+      if (fileToSend || voiceFileToSend) {
         const fd = new FormData();
         fd.append('message', textToSend);
         fd.append('sessionId', sessionId);
-        fd.append('language', voiceLanguageRef.current.startsWith('en') ? 'en' : 'ar');
-        fd.append('image', fileToSend);
+        fd.append('language', 'ar');
+        if (fileToSend) fd.append('image', fileToSend);
+        if (voiceFileToSend) {
+          const extension = voiceFileToSend.type?.includes('mp4') ? 'm4a' : voiceFileToSend.type?.includes('ogg') ? 'ogg' : 'webm';
+          fd.append('voice', voiceFileToSend, `voice-note.${extension}`);
+        }
         res = await apiRequest('/api/chat/ask', { method: 'POST', formData: fd });
       } else {
         res = await apiRequest('/api/chat/ask', {
@@ -564,7 +367,7 @@ export default function ChatView({
           body: {
             message: textToSend,
             sessionId,
-            language: voiceLanguageRef.current.startsWith('en') ? 'en' : 'ar',
+            language: 'ar',
             imageBase64: base64ToSend || null,
           },
         });
@@ -572,31 +375,15 @@ export default function ChatView({
 
       setMessages((prev) => [
         ...prev.filter((m) => m.id !== optimisticUser.id),
-        res.userMessage,
+        { ...res.userMessage, voiceNoteUrl: voiceUrlToKeep || null },
         res.assistantMessage,
       ]);
-
-      if (autoSpeakReply && !fromVoiceCall && res.assistantMessage) {
-        setSpeakingMsgId(res.assistantMessage.id);
-        speakArabic(res.speechText || res.assistantMessage.content, {
-          lang: voiceLanguageRef.current,
-          voiceURI: selectedSpeechVoiceURI(),
-            allowRemote: allowRemoteVoicesRef.current,
-          onError: (err) => setError(err?.message || 'تعذر تشغيل الصوت؛ يمكنك قراءة الرد على الشاشة.'),
-          onEnd: () => setSpeakingMsgId(null),
-        });
-      }
-
+      if (voiceFileToSend) clearPendingVoice({ keepUrl: true });
       return res;
     } catch (err) {
       setMessages((prev) => prev.filter((m) => m.id !== optimisticUser.id));
-      const msg = err.message || 'تعذر إرسال الرسالة، يرجى المحاولة مرة أخرى.';
-      if (fromVoiceInput) setInput(textToSend);
-      if (fromVoiceCall) {
-        setCallError(msg);
-      } else {
-        setError(msg);
-      }
+      setError(err.message || 'تعذر إرسال الرسالة، يرجى المحاولة مرة أخرى.');
+      setInput(typedText);
       return null;
     } finally {
       setLoading(false);
@@ -610,8 +397,6 @@ export default function ChatView({
     }
   }
 
-  const lastMessage = messages[messages.length - 1];
-
   return (
     <div className="chat-stage" onPaste={handlePaste}>
       <div className="messages-viewport">
@@ -624,13 +409,9 @@ export default function ChatView({
 
               <h1 className="welcome-title">أهلاً بك في المساعد الذكي لمجموعة الهلب</h1>
               <p className="welcome-subtitle">
-                اتكلم بصوتك أو اكتب بكلامك العادي عن <strong>مشكلة محصولك، علاج الآفات، أو المبيدات المتوفرة</strong>، وهنساعدك خطوة بخطوة.
+                اكتب سؤالك أو سجّل فويس نوت عن <strong>محصولك أو مشكلة زراعية أو منتج من منتجات الهلب</strong>، وهنتابع معاك خطوة بخطوة.
               </p>
-
-              <button type="button" className="hero-voice-cta" onClick={openVoiceCall}>
-                <AudioLines size={20} />
-                <span>ابدأ محادثة صوتية مباشرة الآن</span>
-              </button>
+              <p className="voice-input-note">الفويس نوت بيتفرّغ لنص بمساعدة خدمة المتصفح؛ ردود المساعد كتابة فقط.</p>
 
               <div className="suggestions-grid">
                 {SUGGESTED_QUESTIONS.map((item, idx) => {
@@ -672,29 +453,14 @@ export default function ChatView({
                         {m.imageThumb && (
                           <img src={m.imageThumb} alt="مرفق" className="attached-photo" />
                         )}
+                        {m.voiceNoteUrl && (
+                          <div className="sent-voice-note">
+                            <span>🎙️ فويس نوت</span>
+                            <audio controls preload="metadata" src={m.voiceNoteUrl} />
+                          </div>
+                        )}
                         {m.role === 'assistant' ? (
-                          <>
-                            <FormattedMessage text={m.content} />
-                            {isVoiceOutputSupported() && (
-                              <div className="bubble-actions">
-                                <button
-                                  type="button"
-                                  className={`speak-reply-btn ${speakingMsgId === m.id ? 'active' : ''}`}
-                                  onClick={() => toggleSpeakMessage(m)}
-                                >
-                                  {speakingMsgId === m.id ? (
-                                    <>
-                                      <VolumeX size={14} /> إيقاف الصوت
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Volume2 size={14} /> استمع للرد بالصوت
-                                    </>
-                                  )}
-                                </button>
-                              </div>
-                            )}
-                          </>
+                          <FormattedMessage text={m.content} />
                         ) : (
                           <div className="user-text" dir="auto">{m.content}</div>
                         )}
@@ -745,16 +511,24 @@ export default function ChatView({
         <div className="composer-inner">
           {error && <div className="error-toast">{error}</div>}
 
-          {(isMicListening || isRecordingVoice) && (
+          {isRecordingVoice && (
             <div className="listening-banner">
               <div className="voice-wave-bars"><span /><span /><span /><span /></div>
-              <span>{`${isRecordingVoice ? 'جاري تسجيل الملاحظة' : 'جاري الاستماع'} · ${String(Math.floor(voiceSeconds / 60)).padStart(2, '0')}:${String(voiceSeconds % 60).padStart(2, '0')} — ${isRecordingVoice ? 'اضغط لإيقاف التسجيل' : 'سيُرسل النص تلقائياً بعد التوقف'}`}</span>
+              <span>جاري تسجيل الفويس نوت وتفريغ الكلام · {String(Math.floor(voiceSeconds / 60)).padStart(2, '0')}:{String(voiceSeconds % 60).padStart(2, '0')} — اضغط المايك للإيقاف</span>
             </div>
           )}
-          {voiceNoteUrl && (
+          {isFinalizingVoice && !isRecordingVoice && (
+            <div className="listening-banner">⏳ بنجهّز الفويس نوت والتفريغ النصي...</div>
+          )}
+          {pendingVoiceUrl && (
             <div className="image-preview-strip voice-note-strip">
-              <div><div style={{fontWeight:700, marginBottom:6}}>ملاحظة صوتية مسجلة</div><audio controls src={voiceNoteUrl} /></div>
-              <button type="button" className="remove-img-btn" onClick={() => { URL.revokeObjectURL(voiceNoteUrl); setVoiceNoteUrl(''); }} aria-label="حذف التسجيل"><X size={16} /></button>
+              <div className="voice-note-preview-content">
+                <strong>الفويس نوت جاهز</strong>
+                <audio controls preload="metadata" src={pendingVoiceUrl} />
+                {voiceTranscript && <div className="voice-note-transcript" dir="auto">التفريغ اللي هيوصل للمساعد: {voiceTranscript}</div>}
+                <small className="voice-note-transcript">يتبعت التسجيل مؤقتاً مع الطلب؛ المساعد يفهم التفريغ النصي فقط. التفريغ قد يعتمد على خدمة المتصفح، والنص فقط يُحفظ في السجل.</small>
+              </div>
+              <button type="button" className="remove-img-btn" onClick={() => clearPendingVoice()} aria-label="حذف الفويس نوت"><X size={16} /></button>
             </div>
           )}
 
@@ -763,7 +537,7 @@ export default function ChatView({
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <img src={pendingImagePreview} alt="معاينة" className="preview-mini-thumb" />
                 <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#0f172a' }}>
-                  الصورة جاهزة للتحليل — اكتب أو اتكلم أو اضغط إرسال
+                  الصورة جاهزة للتحليل — اكتب سؤالك واضغط إرسال
                 </span>
               </div>
               <button type="button" className="remove-img-btn" onClick={clearPendingImage}>
@@ -793,20 +567,20 @@ export default function ChatView({
               onClick={() => fileInputRef.current?.click()}
               title="تصوير بالكاميرا أو إرفاق صورة عبوة أو محصول"
               aria-label="إرفاق صورة"
-              disabled={loading || isMicListening}
+              disabled={loading || isRecordingVoice || isFinalizingVoice}
             >
               <ImagePlus size={20} />
             </button>
 
             <button
               type="button"
-              className={`mic-btn ${(isMicListening || isRecordingVoice) ? 'recording' : ''}`}
-              onClick={toggleInlineMic}
-              title={(isMicListening || isRecordingVoice) ? 'إيقاف التسجيل' : 'تكلم بصوتك بالعامية'}
-              aria-label={(isMicListening || isRecordingVoice) ? 'إيقاف التسجيل' : 'التحدث بالصوت'}
-              disabled={loading}
+              className={`mic-btn ${isRecordingVoice ? 'recording' : ''}`}
+              onClick={toggleVoiceRecording}
+              title={isRecordingVoice ? 'إيقاف تسجيل الفويس نوت' : 'تسجيل فويس نوت'}
+              aria-label={isRecordingVoice ? 'إيقاف تسجيل الفويس نوت' : 'تسجيل فويس نوت'}
+              disabled={loading || isFinalizingVoice}
             >
-              {(isMicListening || isRecordingVoice) ? <MicOff size={20} /> : <Mic size={20} />}
+              {isRecordingVoice ? <MicOff size={20} /> : <Mic size={20} />}
             </button>
 
             <textarea
@@ -822,18 +596,14 @@ export default function ChatView({
                   bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
                 }, 260);
               }}
-              placeholder={
-                isMicListening
-                  ? 'أنا سامعك... اتفضل اتكلم'
-                  : 'اكتب سؤالك أو اضغط المايك 🎙️ وتكلم...'
-              }
+              placeholder={pendingVoiceFile ? 'أضف توضيحاً مكتوباً (اختياري)...' : 'اكتب سؤالك أو سجّل فويس نوت 🎙️...'}
               disabled={loading}
             />
 
             <button
               type="submit"
               className="send-btn"
-              disabled={loading || (!input.trim() && !pendingImagePreview)}
+              disabled={loading || isRecordingVoice || isFinalizingVoice || (!input.trim() && !pendingImagePreview && !pendingVoiceFile)}
               aria-label="إرسال"
             >
               <Send size={18} />
@@ -842,158 +612,6 @@ export default function ChatView({
         </div>
       </div>
 
-      {/* شاشة المحادثة الصوتية التفاعلية المباشرة (Hands-Free Voice Call Mode) */}
-      {voiceCallOpen && (
-        <div className="voice-call-overlay">
-          <div className="voice-call-card">
-            <div className="voice-call-top">
-              <span className="voice-live-badge">
-                <span className="online-dot" /> محادثة صوتية مباشرة — ELHELB AI
-              </span>
-              <div className="voice-privacy-note">
-                تحويل كلامك لنص يعتمد على المتصفح والجهاز، وقد يستخدم خدمة النظام؛ تجنّب ذكر بيانات سرية.
-              </div>
-              <label className="voice-language-control">
-                لغة الرد والمحادثة
-                <select
-                  value={voiceLanguage}
-                  onChange={(event) => {
-                    const nextLanguage = ['en-US', 'ar-SA'].includes(event.target.value) ? event.target.value : 'ar-EG';
-                    voiceLanguageRef.current = nextLanguage;
-                    setVoiceLanguage(nextLanguage);
-                    if (callActiveRef.current && callStage === 'listening') startCallListeningCycle();
-                  }}
-                >
-                  <option value="ar-EG">العربية (مصر)</option>
-                  <option value="ar-SA">العربية الفصحى</option>
-                  <option value="en-US">English</option>
-                </select>
-              </label>
-              <label className="voice-language-control">
-                صوت الجهاز
-                <select
-                  value={activeSpeechVoiceURI}
-                  disabled={!availableSpeechVoices.length}
-                  onChange={(event) => setVoiceSelections((current) => ({ ...current, [voiceLanguage]: event.target.value }))}
-                >
-                  {availableSpeechVoices.length ? availableSpeechVoices.map((voice) => (
-                    <option key={voice.voiceURI} value={voice.voiceURI} dir="auto">
-                      {voice.name} ({voice.lang}){voice.localService === false ? ' — أونلاين' : ' — محلي'}
-                    </option>
-                  )) : <option value="">{effectiveAllowRemote ? 'لا يوجد صوت لهذه اللغة' : 'لا يوجد صوت محلي لهذه اللغة'}</option>}
-                </select>
-              </label>
-              <label className="voice-language-control" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <input
-                  type="checkbox"
-                  checked={effectiveAllowRemote}
-                  disabled={autoRemoteVoices}
-                  onChange={(event) => {
-                    allowRemoteVoicesRef.current = event.target.checked;
-                    setAllowRemoteVoices(event.target.checked);
-                  }}
-                />
-                {autoRemoteVoices
-                  ? 'مفيش صوت عربي على جهازك، فبنستخدم صوت المتصفح الأونلاين تلقائياً'
-                  : 'تفضيل أصوات المتصفح الأونلاين (جودتها غالباً أحسن من أصوات الجهاز)'}
-              </label>
-              <button type="button" className="voice-refresh-btn" onClick={() => setSystemVoiceVersion((version) => version + 1)}>
-                تحديث قائمة الأصوات
-              </button>
-              <div className="voice-privacy-note">
-                {availableSpeechVoices.length
-                  ? (effectiveAllowRemote
-                    ? 'غيّر الصوت من القائمة لو النطق غير واضح. الأصوات «أونلاين» بتمر عبر خدمة المتصفح.'
-                    : 'النطق يستخدم صوتاً محلياً مثبتاً على جهازك؛ غيّر الصوت من القائمة لو النطق غير واضح.')
-                  : (!effectiveAllowRemote && speechVoiceCounts.remote > 0
-                    ? 'فيه صوت عربي أونلاين متاح في المتصفح. فعّل «السماح بأصوات المتصفح الأونلاين» لتشغيله، أو نزّل صوتاً محلياً من إعدادات الجهاز.'
-                    : (speechVoiceCounts.total === 0
-                      ? 'قائمة الأصوات لسه فاضية. اضغط «تحديث قائمة الأصوات» أو افتح الصفحة في Chrome.'
-                      : 'لا يظهر صوت لهذه اللغة. نزّل بيانات صوت اللغة من إعدادات تحويل النص إلى كلام في الجهاز، ثم حدّث القائمة.'))}
-              </div>
-            </div>
-
-            <div className={`voice-orb-container ${callStage}`}>
-              <div className="orb-ring ring-1" />
-              <div className="orb-ring ring-2" />
-              <div className="voice-orb-core">
-                <img src="./logo.png" alt="ELHELB GROUP" />
-              </div>
-            </div>
-
-            <div className="voice-stage-label">
-              {callStage === 'starting' && '⏳ بفتح الميكروفون... اسمح للمتصفح لو طلب الإذن'}
-              {callStage === 'listening' && '🎙️ سامعك... اتكلم براحتك، وهبعت كلامك بعد الوقفة'}
-              {callStage === 'thinking' && '⏳ ثواني، بحلل كلامك وبجهز الرد...'}
-              {callStage === 'speaking' && '🔊 المساعد بيرد عليك بصوت'}
-              {callStage === 'ready' && 'اضغط «تحدث الآن» علشان أسمعك'}
-            </div>
-
-            {liveTranscript && (
-              <div className="voice-user-transcript">«{liveTranscript}»</div>
-            )}
-
-            {callError && (
-              <div className="voice-error-box">
-                <div>{callError}</div>
-                <div className="voice-device-check">
-                  حالة الجهاز: {getVoiceDiagnostics(voiceLanguage, { allowRemote: effectiveAllowRemote }).secureContext ? 'اتصال آمن' : 'افتح الرابط عبر HTTPS'}،{' '}
-                  {getVoiceDiagnostics(voiceLanguage, { allowRemote: effectiveAllowRemote }).recognition ? 'التعرف على الكلام متاح' : 'التعرف على الكلام غير مدعوم'}،{' '}
-                  {getVoiceDiagnostics(voiceLanguage, { allowRemote: effectiveAllowRemote }).synthesis ? 'النطق متاح' : 'النطق غير متاح'}،{' '}
-                  {getVoiceDiagnostics(voiceLanguage, { allowRemote: effectiveAllowRemote }).languageVoiceAvailable ? 'صوت اللغة المختارة مثبت' : 'لم يظهر صوت للغة المختارة في الجهاز'}.
-                </div>
-              </div>
-            )}
-
-            {!callError && lastBotSubtitle && (
-              <div className="voice-bot-subtitle">
-                <FormattedMessage text={lastBotSubtitle} />
-              </div>
-            )}
-
-            <div className="voice-call-controls">
-              {(callStage === 'speaking' || callStage === 'thinking') && (
-                <button
-                  type="button"
-                  className="voice-action-btn secondary"
-                  onClick={() => {
-                    stopSpeaking();
-                    startCallListeningCycle();
-                  }}
-                >
-                  <Mic size={18} /> مقاطعة والتحدث الآن
-                </button>
-              )}
-
-              {callStage === 'ready' && (
-                <button
-                  type="button"
-                  className="voice-action-btn primary"
-                  onClick={startCallListeningCycle}
-                >
-                  <Mic size={18} /> تحدث الآن
-                </button>
-              )}
-
-              <button
-                type="button"
-                className="voice-action-btn secondary"
-                onClick={testCallSpeaker}
-              >
-                <Volume2 size={18} /> اختبار الصوت
-              </button>
-
-              <button
-                type="button"
-                className="voice-action-btn end-call"
-                onClick={onCloseVoiceCall}
-              >
-                <PhoneOff size={18} /> إنهاء المحادثة الصوتية
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
