@@ -65,6 +65,43 @@ async function getOcrWorker() {
   return ocrWorkerPromise;
 }
 
+async function recognizeWithTimeout(imageBuffer, workerFactory = getOcrWorker, timeoutMs = 15000) {
+  let worker = null;
+  let timedOut = false;
+  let timer;
+  const recognitionTask = (async () => {
+    worker = await workerFactory();
+    if (timedOut) return null;
+    return await worker.recognize(imageBuffer);
+  })();
+
+  try {
+    return await Promise.race([
+      recognitionTask,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          const error = new Error('انتهت مهلة قراءة الصورة ضوئياً.');
+          error.code = 'ELHELB_OCR_TIMEOUT';
+          reject(error);
+        }, timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    if (timedOut) {
+      ocrWorkerPromise = null;
+      if (worker) {
+        Promise.resolve().then(() => worker.terminate()).catch(() => {});
+      } else {
+        recognitionTask.then(() => worker?.terminate()).catch(() => {});
+      }
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function parseImageInputToBuffer(imageInput) {
   if (!imageInput) return null;
   if (Buffer.isBuffer(imageInput)) {
@@ -381,8 +418,7 @@ async function analyzeImageBufferInternal(input) {
     }
     const ocrReadyPng = await ocrPipeline.grayscale().normalize().sharpen().png().toBuffer();
 
-    const worker = await getOcrWorker();
-    const { data } = await worker.recognize(ocrReadyPng);
+    const { data } = await recognizeWithTimeout(ocrReadyPng);
     rawOcrText = String(data?.text || '');
     ocrConfidence = Math.round(data?.confidence || 0);
   } catch {
@@ -440,4 +476,5 @@ module.exports = {
   analyzeImageBuffer,
   analyzePlantPathologyPixels,
   getOcrResizeDimensions,
+  recognizeWithTimeout,
 };
