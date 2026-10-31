@@ -70,12 +70,6 @@ const PUBLIC_NO_TOKEN_PATHS = new Set([
   '/api/auth/oauth/providers',
 ]);
 
-function attachTokenToUrl(path, token) {
-  if (!token || PUBLIC_NO_TOKEN_PATHS.has(path)) return path;
-  const sep = path.includes('?') ? '&' : '?';
-  return `${path}${sep}_t=${encodeURIComponent(token)}`;
-}
-
 export async function apiFetch(path, options = {}) {
   const {
     method = 'GET',
@@ -97,9 +91,7 @@ export async function apiFetch(path, options = {}) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const finalUrl = attachTokenToUrl(path, token);
-
-  const res = await fetch(finalUrl, {
+  const res = await fetch(path, {
     method,
     headers,
     credentials: 'include',

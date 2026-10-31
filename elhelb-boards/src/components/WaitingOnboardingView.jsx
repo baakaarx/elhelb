@@ -14,7 +14,7 @@ import {
   ArrowLeft,
   Edit3,
 } from 'lucide-react';
-import { apiFetch } from '../api';
+import { apiFetch, setStoredToken } from '../api';
 import { getInitials } from '../constants';
 
 export default function WaitingOnboardingView({
@@ -89,7 +89,7 @@ export default function WaitingOnboardingView({
 
     setSavingCreds(true);
     try {
-      await apiFetch('/api/onboarding/setup-credentials', {
+      const res = await apiFetch('/api/onboarding/setup-credentials', {
         method: 'POST',
         body: {
           username: username.trim().toLowerCase(),
@@ -97,6 +97,9 @@ export default function WaitingOnboardingView({
           fullName: fullName.trim(),
         },
       });
+      if (res && res.token) {
+        setStoredToken(res.token);
+      }
       setEditingCreds(false);
       setPassword('');
       setConfirmPassword('');

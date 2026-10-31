@@ -8,6 +8,7 @@ const {
   JWT_SECRET,
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
+  isSecureRequest,
   signUserToken,
   loadUserById,
   writeAudit,
@@ -38,15 +39,39 @@ function getGoogleCredentials() {
 }
 
 function getBaseOrigin(req) {
-  const proto = String(
-    req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http')
-  )
-    .split(',')[0]
-    .trim();
-  const host = String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000')
-    .split(',')[0]
-    .trim();
-  return `${proto}://${host}`;
+  const configuredOrigin = String(process.env.PUBLIC_BASE_URL || '').trim();
+  if (configuredOrigin) {
+    try {
+      const parsed = new URL(configuredOrigin);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return parsed.origin;
+      }
+    } catch (_) {}
+  }
+
+  const trustProxyEnabled = Boolean(req && req.app && req.app.get('trust proxy'));
+  const rawProto = trustProxyEnabled
+    ? String(req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http'))
+        .split(',')[0]
+        .trim()
+    : req.secure
+    ? 'https'
+    : 'http';
+  const proto = rawProto === 'https' ? 'https' : 'http';
+
+  const rawHost = trustProxyEnabled
+    ? String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000')
+        .split(',')[0]
+        .trim()
+    : String(req.headers.host || 'localhost:3000')
+        .split(',')[0]
+        .trim();
+
+  const safeHost = /^[a-zA-Z0-9.-]+(?::\d{1,5})?$/.test(rawHost)
+    ? rawHost
+    : 'localhost:3000';
+
+  return `${proto}://${safeHost}`;
 }
 
 function getOrCreatePendingRole() {
@@ -96,7 +121,19 @@ function findOrCreateGoogleEmployee({
     );
   }
   if (!existing && cleanEmail) {
-    existing = get(`SELECT * FROM users WHERE LOWER(email) = LOWER(?)`, [cleanEmail]);
+    existing = get(
+      `SELECT u.*, r.slug AS role_slug
+       FROM users u
+       JOIN roles r ON r.id = u.role_id
+       WHERE LOWER(u.email) = LOWER(?)`,
+      [cleanEmail]
+    );
+    // Sovereign protection: never auto-link external OAuth into Chairman account
+    if (existing && existing.role_slug === 'chairman') {
+      const err = new Error('حساب رئيس مجلس الإدارة محمي بالدخول المباشر فقط ولا يقبل الربط التلقائي الخارجي');
+      err.statusCode = 403;
+      throw err;
+    }
   }
 
   if (existing) {
@@ -215,9 +252,9 @@ router.post('/register', registerLimiter, async (req, res) => {
       });
     }
 
-    if (password.length < 6) {
+    if (password.length < 6 || password.length > 128) {
       return res.status(400).json({
-        error: 'كلمة المرور يجب أن تكون 6 أحرف أو أرقام على الأقل',
+        error: 'كلمة المرور يجب أن تكون بين 6 و128 حرفاً أو رقماً',
       });
     }
 
@@ -250,7 +287,7 @@ router.post('/register', registerLimiter, async (req, res) => {
       cleanEmail = rawEmail;
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(password, 12);
     const pendingRole = getOrCreatePendingRole();
 
     const newUserId = transaction(() =>
@@ -276,8 +313,7 @@ router.post('/register', registerLimiter, async (req, res) => {
 
     const rawRow = get(`SELECT * FROM users WHERE id = ?`, [newUserId]);
     const token = signUserToken(rawRow);
-    const isHttps =
-      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    const isHttps = isSecureRequest(req);
     for (const oldName of LEGACY_COOKIE_NAMES || []) res.clearCookie(oldName);
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
@@ -307,8 +343,26 @@ router.get('/oauth/google/start', (req, res) => {
     return res.redirect('/?oauth_error=google_not_configured');
   }
   const redirectUri = `${getBaseOrigin(req)}/api/auth/oauth/google/callback`;
-  const prefDept = req.query.dept ? Number(req.query.dept) : null;
-  const state = jwt.sign({ p: 'google', d: prefDept }, JWT_SECRET, { expiresIn: '15m' });
+  const rawDept = Number(req.query.dept);
+  const prefDept = Number.isInteger(rawDept) && rawDept > 0 ? rawDept : null;
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const isHttps =
+    req.secure ||
+    (Boolean(req.app && req.app.get('trust proxy')) &&
+      String(req.headers['x-forwarded-proto'] || '').includes('https'));
+
+  res.cookie('elhelb_oauth_nonce', nonce, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: isHttps,
+    maxAge: 15 * 60 * 1000,
+  });
+
+  const state = jwt.sign(
+    { p: 'google', d: prefDept, n: nonce },
+    JWT_SECRET,
+    { algorithm: 'HS256', expiresIn: '15m' }
+  );
 
   const params = new URLSearchParams({
     client_id: googleClientId,
@@ -327,7 +381,14 @@ router.get('/oauth/google/callback', async (req, res) => {
     const { code, state } = req.query;
     if (!code || !state) return res.redirect('/?oauth_error=cancelled');
 
-    const decodedState = jwt.verify(String(state), JWT_SECRET);
+    const decodedState = jwt.verify(String(state), JWT_SECRET, {
+      algorithms: ['HS256'],
+    });
+    const cookieNonce = req.cookies && req.cookies.elhelb_oauth_nonce;
+    res.clearCookie('elhelb_oauth_nonce');
+    if (!decodedState || !decodedState.n || cookieNonce !== decodedState.n) {
+      return res.redirect('/?oauth_error=state_mismatch');
+    }
     const { googleClientId, googleClientSecret } = getGoogleCredentials();
     const redirectUri = `${getBaseOrigin(req)}/api/auth/oauth/google/callback`;
 
@@ -355,10 +416,15 @@ router.get('/oauth/google/callback', async (req, res) => {
       return res.redirect('/?oauth_error=google_profile_failed');
     }
 
+    const verifiedGoogleEmail =
+      profile.email_verified === true || profile.email_verified === 'true'
+        ? profile.email || ''
+        : '';
+
     const { user } = findOrCreateGoogleEmployee({
       oauthId: profile.sub,
-      fullName: profile.name || profile.email || 'موظف Google',
-      email: profile.email || '',
+      fullName: profile.name || verifiedGoogleEmail || 'موظف Google',
+      email: verifiedGoogleEmail,
       avatarUrl: profile.picture || null,
       preferredDepartmentId: decodedState.d || null,
       req,
@@ -366,8 +432,7 @@ router.get('/oauth/google/callback', async (req, res) => {
 
     const rawRow = get(`SELECT * FROM users WHERE id = ?`, [user.id]);
     const token = signUserToken(rawRow);
-    const isHttps =
-      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    const isHttps = isSecureRequest(req);
     for (const oldName of LEGACY_COOKIE_NAMES || []) res.clearCookie(oldName);
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
@@ -376,7 +441,8 @@ router.get('/oauth/google/callback', async (req, res) => {
       maxAge: 12 * 3600 * 1000,
     });
 
-    return res.redirect(`/?oauth_token=${encodeURIComponent(token)}`);
+    // Deliver token in URL fragment (#) so it is never sent in HTTP GET requests or access logs
+    return res.redirect(`/#oauth_token=${encodeURIComponent(token)}`);
   } catch (err) {
     console.error('Google OAuth callback error:', err);
     return res.redirect('/?oauth_error=google_exception');

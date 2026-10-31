@@ -124,17 +124,25 @@ function buildArabicEmailHtml({
 </html>`;
 }
 
-function logEmailAttempt({ toEmail, subject, eventType, status, errorMessage = '' }) {
+function logEmailAttempt({
+  toEmail,
+  subject,
+  eventType,
+  status,
+  errorMessage = '',
+  isChairmanExclusive = false,
+}) {
   try {
     run(
-      `INSERT INTO email_logs (to_email, subject, event_type, status, error_message)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO email_logs (to_email, subject, event_type, status, error_message, is_chairman_exclusive)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       [
         String(toEmail || '').slice(0, 240),
         String(subject || '').slice(0, 240),
         String(eventType || 'notification').slice(0, 60),
         status,
         String(errorMessage || '').slice(0, 500),
+        isChairmanExclusive ? 1 : 0,
       ]
     );
   } catch (_) {}
@@ -158,6 +166,7 @@ function createGmailTransport(cfg) {
 async function sendElhelbEmail({
   to = [],
   ccAdmin = false,
+  isChairmanExclusive = false,
   subject,
   heading,
   badgeText = '',
@@ -168,7 +177,7 @@ async function sendElhelbEmail({
 }) {
   const cfg = getGmailConfig();
   const rawList = Array.isArray(to) ? [...to] : [to];
-  if (ccAdmin && cfg.adminNotifyEmail) {
+  if (ccAdmin && !isChairmanExclusive && cfg.adminNotifyEmail) {
     rawList.push(cfg.adminNotifyEmail);
   }
 
@@ -195,6 +204,7 @@ async function sendElhelbEmail({
       errorMessage: !cfg.enabled
         ? 'الإرسال عبر Gmail متوقف مؤقتاً من الإعدادات'
         : 'لم يتم إدخال بريد Gmail وكلمة مرور التطبيقات بعد',
+      isChairmanExclusive,
     });
     return { sent: false, reason: 'NOT_CONFIGURED' };
   }
@@ -209,10 +219,12 @@ async function sendElhelbEmail({
 
   try {
     const transporter = createGmailTransport(cfg);
+    const safeSender = cfg.senderName.replace(/[\r\n"]+/g, ' ').trim();
+    const safeSubject = String(subject || '').replace(/[\r\n]+/g, ' ').trim();
     const info = await transporter.sendMail({
-      from: `"${cfg.senderName.replace(/"/g, '')}" <${cfg.gmailUser}>`,
+      from: `"${safeSender}" <${cfg.gmailUser}>`,
       to: toHeader,
-      subject,
+      subject: safeSubject,
       html,
     });
 
@@ -221,6 +233,7 @@ async function sendElhelbEmail({
       subject,
       eventType,
       status: 'SENT',
+      isChairmanExclusive,
     });
 
     return { sent: true, messageId: info.messageId };
@@ -231,6 +244,7 @@ async function sendElhelbEmail({
       eventType,
       status: 'FAILED',
       errorMessage: err.message || 'SMTP Error',
+      isChairmanExclusive,
     });
     return { sent: false, reason: 'SMTP_ERROR', error: err.message };
   }
@@ -396,8 +410,13 @@ async function verifyGmailCredentials({ gmailUser, gmailAppPassword }) {
   }
 }
 
-function getRecentEmailLogs(limit = 50) {
-  return all(`SELECT * FROM email_logs ORDER BY id DESC LIMIT ?`, [Number(limit)]);
+function getRecentEmailLogs(limit = 50, { includeChairmanExclusive = false } = {}) {
+  return all(
+    `SELECT * FROM email_logs
+     WHERE is_chairman_exclusive = 0 OR ? = 1
+     ORDER BY id DESC LIMIT ?`,
+    [includeChairmanExclusive ? 1 : 0, Number(limit)]
+  );
 }
 
 module.exports = {

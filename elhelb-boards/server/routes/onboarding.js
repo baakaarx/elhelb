@@ -1,7 +1,15 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { all, get, run, transaction } = require('../db');
-const { authenticate, userHasPermission, writeAudit } = require('../rbac');
+const {
+  COOKIE_NAME,
+  LEGACY_COOKIE_NAMES,
+  isSecureRequest,
+  signUserToken,
+  authenticate,
+  userHasPermission,
+  writeAudit,
+} = require('../rbac');
 const { sendElhelbEmail } = require('../mailer');
 const { getStorageStatus } = require('../cloudSync');
 const adminRoutes = require('./admin');
@@ -28,9 +36,9 @@ router.post('/setup-credentials', async (req, res) => {
           'اسم المستخدم يجب أن يتكون من 3 إلى 36 حرفاً إنجليزياً أو رقماً (بدون مسافات، مثل: ahmed.ali)',
       });
     }
-    if (password.length < 4 || password.length > 100) {
+    if (password.length < 4 || password.length > 128) {
       return res.status(400).json({
-        error: 'كلمة المرور يجب ألا تقل عن 4 أحرف أو أرقام',
+        error: 'كلمة المرور يجب أن تكون بين 4 و128 حرفاً أو رقماً',
       });
     }
     if (fullName.length < 2 || fullName.length > 100) {
@@ -49,17 +57,29 @@ router.post('/setup-credentials', async (req, res) => {
       });
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(password, 12);
 
     run(
       `UPDATE users
        SET username = ?,
            password_hash = ?,
            full_name = ?,
-           has_custom_credentials = 1
+           has_custom_credentials = 1,
+           token_version = token_version + 1
        WHERE id = ?`,
       [username, passwordHash, fullName, req.user.id]
     );
+
+    const updatedSelf = get(`SELECT * FROM users WHERE id = ?`, [req.user.id]);
+    const refreshedToken = signUserToken(updatedSelf);
+    const isHttps = isSecureRequest(req);
+    for (const oldName of LEGACY_COOKIE_NAMES || []) res.clearCookie(oldName);
+    res.cookie(COOKIE_NAME, refreshedToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isHttps,
+      maxAge: 12 * 3600 * 1000,
+    });
 
     writeAudit({
       user: { ...req.user, full_name: fullName },
@@ -71,6 +91,7 @@ router.post('/setup-credentials', async (req, res) => {
 
     return res.json({
       ok: true,
+      token: refreshedToken,
       username,
       fullName,
     });
@@ -83,6 +104,12 @@ router.post('/setup-credentials', async (req, res) => {
 // Step 2: Employee selects their Department -> notifies HR (الموارد البشرية) & Top Management!
 router.patch('/my-preference', async (req, res) => {
   try {
+    if (req.user.onboarding_status !== 'pending') {
+      return res.status(403).json({
+        error: 'تم اعتماد حسابك وتسكينك بالفعل؛ لتعديل القسم أو المسمى الوظيفي يرجى مراجعة إدارة الموارد البشرية (HR)',
+      });
+    }
+
     const { preferredDepartmentId, jobTitle } = req.body || {};
 
     if (!preferredDepartmentId) {
@@ -99,6 +126,8 @@ router.patch('/my-preference', async (req, res) => {
     const cleanJobTitle =
       typeof jobTitle === 'string' ? jobTitle.trim().slice(0, 100) : req.user.job_title;
 
+    const isExclusiveDept = Boolean(Number(dept.is_chairman_exclusive));
+
     run(
       `UPDATE users
        SET preferred_department_id = ?,
@@ -107,11 +136,13 @@ router.patch('/my-preference', async (req, res) => {
        WHERE id = ?`,
       [dept.id, cleanJobTitle || '', req.user.id]
     );
+    if (isExclusiveDept) {
+      run(`UPDATE audit_logs SET is_chairman_exclusive = 1 WHERE actor_id = ?`, [req.user.id]);
+    }
 
     const managerEmails = [];
 
     if (req.user.onboarding_status === 'pending') {
-      const isExclusiveDept = Boolean(Number(dept.is_chairman_exclusive));
       const notifyManagers = all(
         `SELECT u.id, u.email, u.department_id, r.slug AS role_slug,
                 MAX(CASE WHEN rp.permission_key = 'users.manage' THEN 1 ELSE 0 END) AS has_global_users_manage
@@ -144,10 +175,11 @@ router.patch('/my-preference', async (req, res) => {
         }
       }
 
-      // Optional background Gmail notification to HR & Admin
+      // Optional background Gmail notification (strictly Chairman-only if department is sovereign)
       await sendElhelbEmail({
         to: managerEmails,
-        ccAdmin: true,
+        ccAdmin: !isExclusiveDept,
+        isChairmanExclusive: isExclusiveDept,
         eventType: 'onboarding_request',
         subject: `👤 طلب تسكين موظف جديد في (${dept.name}) — ${req.user.full_name}`,
         badgeText: 'طلب تسكين موظف جديد (HR)',
@@ -235,12 +267,11 @@ router.get('/pending', (req, res) => {
          WHERE u.onboarding_status = 'pending'
            AND u.is_active = 1
            AND COALESCE(pd.is_chairman_exclusive, 0) = 0
-           AND (u.preferred_department_id IS NULL OR u.preferred_department_id = ?)
+           AND u.preferred_department_id = ?
          ORDER BY
-           CASE WHEN u.preferred_department_id = ? THEN 0 ELSE 1 END ASC,
            u.department_confirmed DESC,
            u.id DESC`,
-        [myDeptId || -1, myDeptId || -1]
+        [myDeptId || -1]
       );
 
   const assignableDepartments = canManageAll
@@ -323,7 +354,7 @@ router.get('/pending', (req, res) => {
     assignableRoles,
     teamMembers,
     canManageAll,
-    storageStatus: getStorageStatus(),
+    storageStatus: getStorageStatus(canManageAll),
   });
 });
 
@@ -355,6 +386,17 @@ router.post('/:userId(\\d+)/claim', async (req, res) => {
     }
     if (targetUser.onboarding_status !== 'pending') {
       return res.status(400).json({ error: 'هذا الموظف تم اعتماده وتسكينه بالفعل سابقاً' });
+    }
+
+    if (targetUser.preferred_department_id && req.user.role_slug !== 'chairman') {
+      const prefDept = get(`SELECT is_chairman_exclusive FROM departments WHERE id = ?`, [
+        targetUser.preferred_department_id,
+      ]);
+      if (prefDept && Number(prefDept.is_chairman_exclusive)) {
+        return res.status(403).json({
+          error: 'حماية سيادية: طلبات الانضمام للقسم الخاص برئيس مجلس الإدارة تُعتمد من رئيس مجلس الإدارة فقط',
+        });
+      }
     }
 
     const body = req.body || {};
@@ -426,19 +468,25 @@ router.post('/:userId(\\d+)/claim', async (req, res) => {
       });
     }
 
+    let alreadyClaimedRace = false;
     transaction(() => {
-      run(
+      const updated = run(
         `UPDATE users
          SET department_id = ?,
+             preferred_department_id = ?,
              role_id = ?,
              job_title = ?,
              department_confirmed = 1,
              onboarding_status = 'approved',
              approved_by = ?,
              approved_at = datetime('now')
-         WHERE id = ?`,
-        [dept.id, role.id, jobTitle || role.name, req.user.id, targetUser.id]
+         WHERE id = ? AND onboarding_status = 'pending'`,
+        [dept.id, dept.id, role.id, jobTitle || role.name, req.user.id, targetUser.id]
       );
+      if (updated.changes === 0) {
+        alreadyClaimedRace = true;
+        return;
+      }
 
       run(
         `INSERT INTO notifications (user_id, type, title, message, link_tab)
@@ -450,6 +498,12 @@ router.post('/:userId(\\d+)/claim', async (req, res) => {
       );
     });
 
+    if (alreadyClaimedRace) {
+      return res.status(400).json({ error: 'هذا الموظف تم اعتماده وتسكينه بالفعل سابقاً' });
+    }
+
+    const isExclusiveClaim = Boolean(Number(dept.is_chairman_exclusive));
+
     writeAudit({
       user: req.user,
       action: `اعتماد وتسكين موظف جديد: ${targetUser.full_name}`,
@@ -457,11 +511,14 @@ router.post('/:userId(\\d+)/claim', async (req, res) => {
       status: 'ALLOWED',
       req,
       details: `القسم: ${dept.name} — الدور: ${role.name}`,
+      departmentId: dept.id,
+      isChairmanExclusive: isExclusiveClaim,
     });
 
     await sendElhelbEmail({
       to: targetUser.email ? [targetUser.email] : [],
-      ccAdmin: true,
+      ccAdmin: !isExclusiveClaim,
+      isChairmanExclusive: isExclusiveClaim,
       eventType: 'onboarding_approved',
       subject: `🎉 تم اعتماد انضمامك إلى (${dept.name}) — مجموعة الهلب`,
       badgeText: 'تم اعتماد حسابك وتسكينك',
@@ -515,19 +572,21 @@ router.delete('/:userId(\\d+)', (req, res) => {
 
   if (
     !canManageAll &&
-    targetUser.preferred_department_id &&
-    Number(targetUser.preferred_department_id) !== Number(req.user.department_id)
+    (!targetUser.preferred_department_id ||
+      Number(targetUser.preferred_department_id) !== Number(req.user.department_id))
   ) {
     return res.status(403).json({
-      error: 'لا يمكنك حذف طلب انضمام موجه لقسم آخر',
+      error: 'لا يمكنك حذف طلب انضمام موجه لقسم آخر أو غير محدد لقسمك بعد',
     });
   }
 
-  if (targetUser.preferred_department_id && req.user.role_slug !== 'chairman') {
+  let isExclusivePref = false;
+  if (targetUser.preferred_department_id) {
     const prefDept = get(`SELECT is_chairman_exclusive FROM departments WHERE id = ?`, [
       targetUser.preferred_department_id,
     ]);
-    if (prefDept && Number(prefDept.is_chairman_exclusive)) {
+    isExclusivePref = Boolean(prefDept && Number(prefDept.is_chairman_exclusive));
+    if (isExclusivePref && req.user.role_slug !== 'chairman') {
       return res.status(403).json({
         error: 'حماية سيادية: طلبات الانضمام للقسم الخاص برئيس مجلس الإدارة تُراجع من رئيس مجلس الإدارة فقط',
       });
@@ -543,6 +602,8 @@ router.delete('/:userId(\\d+)', (req, res) => {
     status: 'ALLOWED',
     req,
     details: `${targetUser.full_name} (@${targetUser.username})`,
+    departmentId: targetUser.preferred_department_id,
+    isChairmanExclusive: isExclusivePref,
   });
 
   return res.json({

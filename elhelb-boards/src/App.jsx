@@ -63,12 +63,15 @@ export default function App() {
   }, [refreshMe]);
 
   useEffect(() => {
-    // Handle OAuth 2.0 callback token or error in URL query, and strip any stray auth params
-    if (typeof window !== 'undefined' && window.location.search) {
-      const params = new URLSearchParams(window.location.search);
-      const oauthToken = params.get('oauth_token');
-      const oauthErr = params.get('oauth_error');
-      const hasStrayToken = params.has('_t');
+    // Handle OAuth 2.0 callback token (via secure URL #hash fragment or legacy query) and strip immediately
+    if (typeof window !== 'undefined' && (window.location.hash || window.location.search)) {
+      const hashParams = new URLSearchParams(
+        window.location.hash.startsWith('#') ? window.location.hash.slice(1) : ''
+      );
+      const searchParams = new URLSearchParams(window.location.search);
+      const oauthToken = hashParams.get('oauth_token') || searchParams.get('oauth_token');
+      const oauthErr = hashParams.get('oauth_error') || searchParams.get('oauth_error');
+      const hasStrayToken = searchParams.has('_t') || hashParams.has('_t');
       if (oauthToken) {
         setStoredToken(oauthToken);
       }

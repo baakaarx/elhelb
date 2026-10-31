@@ -343,6 +343,7 @@ function initSchema() {
       endpoint TEXT NOT NULL DEFAULT '',
       details TEXT NOT NULL DEFAULT '',
       ip TEXT NOT NULL DEFAULT '',
+      is_chairman_exclusive INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS email_logs (
@@ -352,6 +353,7 @@ function initSchema() {
       event_type TEXT NOT NULL DEFAULT 'notification',
       status TEXT NOT NULL CHECK(status IN ('SENT', 'SKIPPED_NOT_CONFIGURED', 'FAILED')),
       error_message TEXT NOT NULL DEFAULT '',
+      is_chairman_exclusive INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -365,10 +367,17 @@ function initSchema() {
       verified_at TEXT DEFAULT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS revoked_tokens (
+      jti TEXT PRIMARY KEY,
+      expires_epoch INTEGER NOT NULL
+    );
   `);
 
   // Safe migrations for existing local DB files
   ensureColumn('departments', 'is_chairman_exclusive', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('audit_logs', 'is_chairman_exclusive', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('email_logs', 'is_chairman_exclusive', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('roles', 'rank_level', 'INTEGER NOT NULL DEFAULT 20');
   ensureColumn('users', 'email', 'TEXT DEFAULT NULL');
   ensureColumn('users', 'avatar_url', 'TEXT DEFAULT NULL');
@@ -418,6 +427,7 @@ const SNAPSHOT_TABLES_FORWARD = [
   'audit_logs',
   'email_logs',
   'email_verifications',
+  'revoked_tokens',
 ];
 
 const SNAPSHOT_TABLES_REVERSE = [...SNAPSHOT_TABLES_FORWARD].reverse();
@@ -442,6 +452,12 @@ function exportDatabaseSnapshot() {
       tables[table] = all(
         `SELECT * FROM (SELECT * FROM email_verifications ORDER BY id DESC LIMIT 100) ORDER BY id ASC`
       );
+    } else if (table === 'revoked_tokens') {
+      const nowSec = Math.floor(Date.now() / 1000);
+      tables[table] = all(
+        `SELECT * FROM revoked_tokens WHERE expires_epoch > ? LIMIT 500`,
+        [nowSec]
+      );
     } else {
       tables[table] = all(`SELECT * FROM "${table}"`);
     }
@@ -460,10 +476,11 @@ function exportDatabaseSnapshot() {
   };
 }
 
-function importDatabaseSnapshot(snapshot) {
+function importDatabaseSnapshot(snapshot, options = {}) {
   if (!snapshot || typeof snapshot !== 'object' || !snapshot.tables) {
     throw new Error('Invalid database snapshot payload');
   }
+  const requireActiveChairman = Boolean(options && options.requireActiveChairman);
 
   runUntracked(() => {
     db.exec('PRAGMA foreign_keys = OFF;');
@@ -481,7 +498,15 @@ function importDatabaseSnapshot(snapshot) {
           const rows = snapshot.tables[table];
           if (!Array.isArray(rows) || rows.length === 0) continue;
           const validCols = getTableColumnSet(table);
-          const cols = Object.keys(rows[0]).filter((c) => validCols.has(c));
+          const colSet = new Set();
+          for (const r of rows) {
+            if (r && typeof r === 'object') {
+              for (const k of Object.keys(r)) {
+                if (validCols.has(k)) colSet.add(k);
+              }
+            }
+          }
+          const cols = Array.from(colSet);
           if (cols.length === 0) continue;
 
           const colSql = cols.map((c) => `"${c}"`).join(', ');
@@ -490,6 +515,7 @@ function importDatabaseSnapshot(snapshot) {
             `INSERT INTO "${table}" (${colSql}) VALUES (${placeholders})`
           );
           for (const row of rows) {
+            if (!row || typeof row !== 'object') continue;
             stmt.run(...cols.map((c) => normalizeParam(row[c])));
           }
         }
@@ -502,6 +528,28 @@ function importDatabaseSnapshot(snapshot) {
             if (item && item.name && item.seq !== undefined && item.seq !== null) {
               seqStmt.run(String(item.name), Number(item.seq));
             }
+          }
+        }
+
+        const fkViolations = db.prepare('PRAGMA foreign_key_check').all();
+        if (Array.isArray(fkViolations) && fkViolations.length > 0) {
+          throw new Error('SNAPSHOT_FOREIGN_KEY_VIOLATION');
+        }
+
+        if (requireActiveChairman) {
+          const validChairman = db
+            .prepare(
+              `SELECT u.id
+               FROM users u
+               JOIN roles r ON r.id = u.role_id
+               WHERE r.slug = 'chairman'
+                 AND u.is_active = 1
+                 AND u.onboarding_status = 'approved'
+               LIMIT 1`
+            )
+            .get();
+          if (!validChairman) {
+            throw new Error('SNAPSHOT_MISSING_ACTIVE_CHAIRMAN');
           }
         }
 
@@ -518,6 +566,17 @@ function importDatabaseSnapshot(snapshot) {
   });
 }
 
+function markCoreDataModified() {
+  localWriteCounter += 1;
+  coreWriteCounter += 1;
+}
+
+function checkpointDatabase() {
+  try {
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+  } catch (_) {}
+}
+
 module.exports = {
   db,
   DB_PATH,
@@ -526,10 +585,12 @@ module.exports = {
   run,
   runUntracked,
   getWriteCounters,
+  markCoreDataModified,
   transaction,
   initSchema,
   getSetting,
   setSetting,
   exportDatabaseSnapshot,
   importDatabaseSnapshot,
+  checkpointDatabase,
 };

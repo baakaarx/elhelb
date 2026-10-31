@@ -377,7 +377,7 @@ function RolesMatrixPanel({ onRefreshMe, showToast }) {
               {currentRole.slug === 'chairman' ? <Crown size={17} /> : <Lock size={16} />}
               <span>
                 {currentRole.slug === 'pending_onboarding'
-                  ? 'هذا الدور مخصص أمنياً للموظفين الجدد المؤكد بريدهم الإلكتروني بدون أي صلاحيات حتى يضمهم رئيس القسم.'
+                  ? 'هذا الدور مخصص أمنياً للموظفين الجدد بدون أي صلاحيات تشغيلية حتى تقوم إدارة الموارد البشرية (HR) أو الإدارة العليا بقبولهم وتسكينهم.'
                   : currentRole.slug === 'chairman'
                   ? 'حماية سيادية: دور (رئيس مجلس الإدارة) هو الأعلى في النظام ومغلق ضد التعديل من أي رتبة أدنى.'
                   : `هذا الدور (${currentRole.name}) يماثل أو يعلو رتبتك الإدارية الحالية — يمكنك استعراض صلاحياته فقط.`}
@@ -1877,7 +1877,7 @@ function OAuthSettingsPanel({ showToast }) {
         إعدادات الربط الاختياري مع Google OAuth 2.0 (لقسم الـ IT)
       </h3>
       <p style={{ margin: '0 0 18px', fontSize: 13, color: '#475569', lineHeight: 1.7 }}>
-        يتم تأكيد البريد الإلكتروني للموظفين الجدد عبر <strong>كود تحقق من 6 أرقام</strong> يُرسل إلى البريد الإلكتروني عبر تبويب (إشعارات البريد Gmail). ويمكن لقسم الـ IT اختيارياً تفعيل زر الدخول المباشر عبر Google Cloud OAuth من هنا:
+        يسجل الموظفون حساباتهم مباشرةً باسم المستخدم وكلمة المرور دون تعقيد أكواد التحقق، وتقوم إدارة الـ HR بتسكينهم. ويمكن لقسم الـ IT اختيارياً تفعيل زر الدخول المباشر عبر Google Cloud OAuth من هنا:
       </p>
 
       <form onSubmit={handleSave}>
@@ -1899,7 +1899,7 @@ function OAuthSettingsPanel({ showToast }) {
                 color: settings.googleConfigured ? '#166534' : '#475569',
               }}
             >
-              {settings.googleConfigured ? 'مربوط ومفعل ✅' : 'غير مفعل (يُستخدم كود تأكيد البريد)'}
+              {settings.googleConfigured ? 'مربوط ومفعل ✅' : 'اختياري — غير مفعل حالياً'}
             </span>
           </div>
 
@@ -2141,6 +2141,9 @@ function SovereignBackupPanel({ onRefreshMe, showToast }) {
         method: 'POST',
         body: { snapshot: parsed.snapshot || parsed },
       });
+      if (res && res.token) {
+        setStoredToken(res.token);
+      }
       await onRefreshMe();
       showToast(res.message || 'تم استعادة كافة بيانات الشركة بنجاح', 'success');
     } catch (err) {

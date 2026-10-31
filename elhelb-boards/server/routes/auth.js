@@ -5,7 +5,9 @@ const { get, all, run } = require('../db');
 const {
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
+  isSecureRequest,
   signUserToken,
+  revokeTokenPayload,
   loadUserById,
   authenticate,
   writeAudit,
@@ -133,10 +135,25 @@ const loginLimiter = rateLimit({
   message: { error: 'محاولات تسجيل دخول فاشلة كثيرة، يرجى الانتظار 15 دقيقة والمحاولة مرة أخرى' },
 });
 
-// Per-account brute-force protection (blocks distributed IP rotation attacks on admin)
+// Per-account brute-force protection with bounded memory cap (blocks IP-rotation & RAM DoS)
 const failedAccountAttempts = new Map();
 const ACCOUNT_LOCK_WINDOW_MS = 15 * 60 * 1000;
 const ACCOUNT_MAX_FAILS = 8;
+const MAX_TRACKED_ACCOUNTS = 4096;
+
+function pruneFailedAccountsMap(now) {
+  if (failedAccountAttempts.size < MAX_TRACKED_ACCOUNTS) return;
+  for (const [k, v] of failedAccountAttempts.entries()) {
+    if (now - v.firstAt > ACCOUNT_LOCK_WINDOW_MS) {
+      failedAccountAttempts.delete(k);
+    }
+  }
+  while (failedAccountAttempts.size >= MAX_TRACKED_ACCOUNTS) {
+    const oldestKey = failedAccountAttempts.keys().next().value;
+    if (oldestKey === undefined) break;
+    failedAccountAttempts.delete(oldestKey);
+  }
+}
 
 function isAccountLocked(accountKey) {
   const rec = failedAccountAttempts.get(accountKey);
@@ -149,9 +166,11 @@ function isAccountLocked(accountKey) {
 }
 
 function recordAccountFailure(accountKey) {
+  if (!accountKey) return;
   const now = Date.now();
   const rec = failedAccountAttempts.get(accountKey);
   if (!rec || now - rec.firstAt > ACCOUNT_LOCK_WINDOW_MS) {
+    pruneFailedAccountsMap(now);
     failedAccountAttempts.set(accountKey, { count: 1, firstAt: now });
   } else {
     rec.count += 1;
@@ -165,6 +184,9 @@ router.post('/login', loginLimiter, async (req, res) => {
 
     if (!username || !password) {
       return res.status(400).json({ error: 'يرجى إدخال اسم المستخدم وكلمة المرور' });
+    }
+    if (username.length > 128 || password.length > 128) {
+      return res.status(400).json({ error: 'طول اسم المستخدم أو كلمة المرور يتجاوز الحد المسموح (128 حرفاً)' });
     }
 
     const accountKey = username.toLowerCase();
@@ -232,8 +254,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     failedAccountAttempts.delete(String(row.username || '').toLowerCase());
 
     const token = signUserToken(row);
-    const isHttps =
-      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    const isHttps = isSecureRequest(req);
     for (const oldName of LEGACY_COOKIE_NAMES || []) res.clearCookie(oldName);
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
@@ -263,6 +284,7 @@ router.post('/login', loginLimiter, async (req, res) => {
 });
 
 router.post('/logout', authenticate, (req, res) => {
+  revokeTokenPayload(req.tokenPayload);
   writeAudit({
     user: req.user,
     action: 'تسجيل خروج',

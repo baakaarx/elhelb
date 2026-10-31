@@ -51,35 +51,78 @@ const GLOBAL_PERMISSIONS = new Set([
   'audit.view',
 ]);
 
+function isSecureRequest(req) {
+  if (!req) return false;
+  if (req.secure) return true;
+  if (req.app && req.app.get('trust proxy')) {
+    const proto = String(req.headers['x-forwarded-proto'] || '')
+      .split(',')[0]
+      .trim()
+      .toLowerCase();
+    return proto === 'https';
+  }
+  return false;
+}
+
 function signUserToken(user) {
   return jwt.sign(
     {
       uid: Number(user.id),
       uname: String(user.username || '').trim().toLowerCase(),
       tv: Number(user.token_version || 1),
+      jti: crypto.randomUUID(),
     },
     JWT_SECRET,
-    { expiresIn: '12h' }
+    { algorithm: 'HS256', expiresIn: '12h' }
   );
 }
+
+function revokeTokenPayload(payload) {
+  if (!payload || typeof payload.jti !== 'string' || !payload.jti) return;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const expSec = Number.isFinite(Number(payload.exp))
+    ? Number(payload.exp)
+    : nowSec + 12 * 3600;
+  try {
+    run(`DELETE FROM revoked_tokens WHERE expires_epoch <= ?`, [nowSec]);
+    run(
+      `INSERT OR IGNORE INTO revoked_tokens (jti, expires_epoch) VALUES (?, ?)`,
+      [payload.jti.slice(0, 64), expSec]
+    );
+  } catch (_) {}
+}
+
+function isTokenJtiRevoked(jti) {
+  if (!jti || typeof jti !== 'string') return false;
+  const nowSec = Math.floor(Date.now() / 1000);
+  try {
+    const row = get(
+      `SELECT 1 AS revoked FROM revoked_tokens WHERE jti = ? AND expires_epoch > ?`,
+      [jti, nowSec]
+    );
+    return Boolean(row);
+  } catch (_) {
+    return false;
+  }
+}
+
+const SAFE_READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 function extractCandidateTokens(req) {
   const candidates = [];
   const customHeader = req.headers['x-elhelb-token'];
   if (typeof customHeader === 'string' && customHeader.trim()) {
-    candidates.push(customHeader.trim());
+    candidates.push({ token: customHeader.trim(), source: 'header' });
   }
   const authHeader = req.headers.authorization || '';
   if (authHeader.startsWith('Bearer ')) {
     const bearer = authHeader.slice(7).trim();
-    if (bearer) candidates.push(bearer);
+    if (bearer) candidates.push({ token: bearer, source: 'header' });
   }
   if (req.cookies && req.cookies[COOKIE_NAME]) {
-    candidates.push(String(req.cookies[COOKIE_NAME]).trim());
+    candidates.push({ token: String(req.cookies[COOKIE_NAME]).trim(), source: 'cookie' });
   }
-  if (req.query && typeof req.query._t === 'string' && req.query._t.trim()) {
-    candidates.push(req.query._t.trim());
-  }
+  // Never accept session tokens via URL query string (prevents log/Referer token leakage)
   return candidates;
 }
 
@@ -161,9 +204,15 @@ function authenticate(req, res, next) {
   }
 
   let payload = null;
-  for (const token of candidates) {
+  let verifiedSource = null;
+  for (const item of candidates) {
     try {
-      payload = jwt.verify(token, JWT_SECRET);
+      const decoded = jwt.verify(item.token, JWT_SECRET, { algorithms: ['HS256'] });
+      if (decoded && decoded.jti && isTokenJtiRevoked(decoded.jti)) {
+        continue;
+      }
+      payload = decoded;
+      verifiedSource = item.source;
       break;
     } catch (_) {
       // Try next candidate token in case a proxy injected an unrelated header
@@ -176,6 +225,15 @@ function authenticate(req, res, next) {
     return res.status(401).json({
       error: 'انتهت صلاحية الجلسة، يرجى تسجيل الدخول مرة أخرى',
       code: 'INVALID_TOKEN',
+    });
+  }
+
+  // Strict CSRF Defense: state-changing requests MUST include an explicit custom/Bearer header
+  // (cross-origin forms/subdomains cannot attach custom headers without CORS preflight approval)
+  if (!SAFE_READ_METHODS.has(String(req.method || '').toUpperCase()) && verifiedSource !== 'header') {
+    return res.status(403).json({
+      error: 'تم رفض الطلب لحماية الجلسة من التزوير العابر للمواقع (CSRF) — يرجى التحديث وإعادة المحاولة',
+      code: 'CSRF_BLOCKED',
     });
   }
 
@@ -194,6 +252,7 @@ function authenticate(req, res, next) {
   }
 
   req.user = user;
+  req.tokenPayload = payload;
   next();
 }
 
@@ -335,6 +394,50 @@ function consumeGrantIfOneTime(grant) {
   }
 }
 
+function detectExclusiveAuditScope({ user, req, details, action, departmentId, isChairmanExclusive }) {
+  if (isChairmanExclusive) return 1;
+  if (departmentId && isChairmanExclusiveDepartment(departmentId)) return 1;
+  if (user && user.department_id && isChairmanExclusiveDepartment(user.department_id)) return 1;
+  if (user && user.preferred_department_id && isChairmanExclusiveDepartment(user.preferred_department_id)) {
+    return 1;
+  }
+
+  const cleanPath = req ? String(req.originalUrl || req.url || '').split('?')[0] : '';
+  if (cleanPath.startsWith('/api/admin/backup')) return 1;
+
+  let m = cleanPath.match(/^\/api\/boards\/(\d+)\b/);
+  if (m) {
+    const b = resolveBoardHierarchy(Number(m[1]));
+    if (b && Number(b.department_chairman_exclusive)) return 1;
+  }
+  m = cleanPath.match(/^\/api\/lists\/(\d+)\b/);
+  if (m) {
+    const l = resolveListHierarchy(Number(m[1]));
+    if (l && Number(l.department_chairman_exclusive)) return 1;
+  }
+  m = cleanPath.match(/^\/api\/cards\/(\d+)\b/);
+  if (m) {
+    const c = resolveCardHierarchy(Number(m[1]));
+    if (c && Number(c.department_chairman_exclusive)) return 1;
+  }
+
+  const exclusiveDepts = all(`SELECT id, name FROM departments WHERE is_chairman_exclusive = 1`);
+  if (exclusiveDepts.length > 0) {
+    const combinedText = `${action || ''} ${details || ''}`;
+    for (const d of exclusiveDepts) {
+      if (d.name && combinedText.includes(d.name)) return 1;
+    }
+    const exclusiveBoards = all(
+      `SELECT b.title FROM boards b JOIN departments d ON d.id = b.department_id WHERE d.is_chairman_exclusive = 1`
+    );
+    for (const b of exclusiveBoards) {
+      if (b.title && combinedText.includes(b.title)) return 1;
+    }
+  }
+
+  return 0;
+}
+
 function writeAudit({
   user = null,
   actorName = 'زائر',
@@ -343,13 +446,29 @@ function writeAudit({
   status = 'ALLOWED',
   req = null,
   details = '',
+  departmentId = null,
+  isChairmanExclusive = false,
 }) {
   try {
+    const cleanEndpoint = req
+      ? String(req.originalUrl || req.url || '')
+          .split('?')[0]
+          .slice(0, 240)
+      : '';
+    const exclusiveFlag = detectExclusiveAuditScope({
+      user,
+      req,
+      details,
+      action,
+      departmentId,
+      isChairmanExclusive,
+    });
+
     run(
       `INSERT INTO audit_logs (
         actor_id, actor_name, actor_role, department_name,
-        action, permission_key, status, method, endpoint, details, ip
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        action, permission_key, status, method, endpoint, details, ip, is_chairman_exclusive
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         user ? user.id : null,
         user ? user.full_name : actorName,
@@ -359,9 +478,10 @@ function writeAudit({
         permissionKey,
         status,
         req ? req.method : '',
-        req ? req.originalUrl : '',
+        cleanEndpoint,
         details,
         req ? req.ip || '' : '',
+        exclusiveFlag,
       ]
     );
   } catch (e) {
@@ -424,7 +544,8 @@ function denyPermission(req, res, {
     permissionKey,
     status: 'DENIED',
     req,
-    details: `${perm ? perm.name : permissionKey}${dept ? ' — ' + dept.name : ''}`,
+    details: `${perm ? perm.name : permissionKey}${safeDeptLabel ? ' — ' + safeDeptLabel : ''}`,
+    departmentId: dept ? dept.id : departmentId,
   });
 
   return res.status(403).json({
@@ -501,7 +622,9 @@ module.exports = {
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
   GLOBAL_PERMISSIONS,
+  isSecureRequest,
   signUserToken,
+  revokeTokenPayload,
   loadUserById,
   getActiveGrantsForUser,
   authenticate,

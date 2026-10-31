@@ -9,10 +9,13 @@ const {
   setSetting,
   exportDatabaseSnapshot,
   importDatabaseSnapshot,
+  markCoreDataModified,
 } = require('../db');
 const { seedIfNeeded } = require('../seed');
 const {
   COOKIE_NAME,
+  LEGACY_COOKIE_NAMES,
+  isSecureRequest,
   signUserToken,
   authenticate,
   evaluatePermission,
@@ -22,6 +25,7 @@ const {
 const { getOAuthCredentials, getBaseOrigin } = require('./oauth');
 const {
   getGmailConfig,
+  isDeliverableEmail,
   sendTestGmail,
   getRecentEmailLogs,
 } = require('../mailer');
@@ -31,7 +35,17 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get('/storage-status', (req, res) => {
-  res.json(getStorageStatus());
+  const canViewStorage =
+    evaluatePermission(req.user, 'roles.manage').allowed ||
+    evaluatePermission(req.user, 'users.manage').allowed;
+  if (!canViewStorage) {
+    return denyPermission(req, res, {
+      permissionKey: 'roles.manage',
+      actionLabel: 'عرض حالة التخزين بالسيرفر',
+      canRequestElevation: false,
+    });
+  }
+  res.json(getStorageStatus(true));
 });
 
 function makeSlug(text, prefix = 'item') {
@@ -50,6 +64,19 @@ function canCallerModifyRank(caller, targetRank) {
 
 function deleteUserCompletely(targetId) {
   transaction(() => {
+    const sovereignMembership = get(
+      `SELECT 1 AS ok
+       FROM users u
+       LEFT JOIN departments d ON d.id = u.department_id
+       LEFT JOIN departments pd ON pd.id = u.preferred_department_id
+       WHERE u.id = ?
+         AND (COALESCE(d.is_chairman_exclusive, 0) = 1 OR COALESCE(pd.is_chairman_exclusive, 0) = 1)`,
+      [targetId]
+    );
+    if (sovereignMembership) {
+      run(`UPDATE audit_logs SET is_chairman_exclusive = 1 WHERE actor_id = ?`, [targetId]);
+    }
+
     run(`UPDATE users SET approved_by = NULL WHERE approved_by = ?`, [targetId]);
     run(`UPDATE boards SET created_by = NULL WHERE created_by = ?`, [targetId]);
     run(`UPDATE cards SET created_by = NULL WHERE created_by = ?`, [targetId]);
@@ -90,12 +117,21 @@ router.get('/roles', (req, res) => {
     });
   }
 
+  const isChairman = req.user.role_slug === 'chairman';
   const permissions = all(`SELECT * FROM permissions ORDER BY sort_order ASC`);
   const roles = all(
     `SELECT r.*,
-            (SELECT COUNT(*) FROM users u WHERE u.role_id = r.id) AS users_count
+            (
+              SELECT COUNT(*)
+              FROM users u
+              LEFT JOIN departments d ON d.id = u.department_id
+              LEFT JOIN departments pd ON pd.id = u.preferred_department_id
+              WHERE u.role_id = r.id
+                AND (? = 1 OR (COALESCE(d.is_chairman_exclusive, 0) = 0 AND COALESCE(pd.is_chairman_exclusive, 0) = 0))
+            ) AS users_count
      FROM roles r
-     ORDER BY r.rank_level DESC, r.id ASC`
+     ORDER BY r.rank_level DESC, r.id ASC`,
+    [isChairman ? 1 : 0]
   );
   const rpRows = all(`SELECT role_id, permission_key FROM role_permissions`);
   const mapByRole = new Map();
@@ -437,16 +473,25 @@ router.post('/users', async (req, res) => {
       error: 'اسم المستخدم يجب أن يكون من 3 إلى 64 حرفاً إنجليزياً أو رقماً أو بريداً إلكترونياً بدون مسافات',
     });
   }
-  if (password.length < 4) {
-    return res.status(400).json({ error: 'كلمة المرور يجب ألا تقل عن 4 أحرف' });
+  if (password.length < 4 || password.length > 128) {
+    return res.status(400).json({ error: 'كلمة المرور يجب أن تكون بين 4 و128 حرفاً' });
   }
   if (fullName.length < 2 || fullName.length > 100) {
     return res.status(400).json({ error: 'الاسم الكامل للموظف مطلوب' });
   }
 
-  const dup = get(`SELECT id FROM users WHERE username = ?`, [username]);
+  const dup = get(`SELECT id FROM users WHERE LOWER(username) = LOWER(?)`, [username]);
   if (dup) {
     return res.status(409).json({ error: 'اسم المستخدم مسجل مسبقاً لموظف آخر' });
+  }
+  if (email) {
+    if (!isDeliverableEmail(email)) {
+      return res.status(400).json({ error: 'صيغة البريد الإلكتروني غير صحيحة' });
+    }
+    const dupEmail = get(`SELECT id FROM users WHERE LOWER(email) = LOWER(?)`, [email]);
+    if (dupEmail) {
+      return res.status(409).json({ error: 'البريد الإلكتروني مسجل مسبقاً لحساب آخر' });
+    }
   }
 
   const role = get(`SELECT * FROM roles WHERE id = ?`, [roleId]);
@@ -459,7 +504,13 @@ router.post('/users', async (req, res) => {
   }
 
   let dept = null;
-  if (departmentId !== null) {
+  if (departmentId === null) {
+    if (!req.user.permissionSet.has('boards.view_all')) {
+      return res.status(403).json({
+        error: 'لا تملك صلاحية إنشاء حساب عام بدون قسم؛ يرجى اختيار القسم المختص للموظف',
+      });
+    }
+  } else {
     dept = get(`SELECT * FROM departments WHERE id = ?`, [departmentId]);
     if (!dept) return res.status(400).json({ error: 'القسم المحدد غير موجود' });
     if (Number(dept.is_chairman_exclusive) && req.user.role_slug !== 'chairman') {
@@ -469,7 +520,7 @@ router.post('/users', async (req, res) => {
     }
   }
 
-  const hash = await bcrypt.hash(password, 10);
+  const hash = await bcrypt.hash(password, 12);
   const onboardingStatus = role.slug === 'pending_onboarding' ? 'pending' : 'approved';
   const newUserId = run(
     `INSERT INTO users (
@@ -497,6 +548,8 @@ router.post('/users', async (req, res) => {
     status: 'ALLOWED',
     req,
     details: `${fullName} (@${username}) — دور: ${role.name} — قسم: ${dept ? dept.name : 'عام'}`,
+    departmentId: dept ? dept.id : null,
+    isChairmanExclusive: Boolean(dept && Number(dept.is_chairman_exclusive)),
   });
 
   res.status(201).json({ id: newUserId, ok: true });
@@ -514,17 +567,19 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
   const targetId = Number(req.params.id);
   const existing = get(
     `SELECT u.*, r.rank_level AS current_rank, r.slug AS current_role_slug, r.name AS current_role_name,
-            d.is_chairman_exclusive AS current_dept_exclusive
+            d.is_chairman_exclusive AS current_dept_exclusive,
+            pd.is_chairman_exclusive AS pref_dept_exclusive
      FROM users u
      JOIN roles r ON r.id = u.role_id
      LEFT JOIN departments d ON d.id = u.department_id
+     LEFT JOIN departments pd ON pd.id = u.preferred_department_id
      WHERE u.id = ?`,
     [targetId]
   );
   if (!existing) return res.status(404).json({ error: 'الموظف غير موجود' });
 
   if (
-    Number(existing.current_dept_exclusive) &&
+    (Number(existing.current_dept_exclusive) || Number(existing.pref_dept_exclusive)) &&
     req.user.role_slug !== 'chairman' &&
     targetId !== req.user.id
   ) {
@@ -569,6 +624,22 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
   const isActive =
     body.isActive !== undefined ? (body.isActive ? 1 : 0) : existing.is_active;
 
+  if (fullName.length < 2 || fullName.length > 100) {
+    return res.status(400).json({ error: 'الاسم الكامل للموظف مطلوب (بين حرفين و100 حرف)' });
+  }
+  if (email) {
+    if (!isDeliverableEmail(email)) {
+      return res.status(400).json({ error: 'صيغة البريد الإلكتروني غير صحيحة' });
+    }
+    const dupEmail = get(
+      `SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id != ?`,
+      [email, existing.id]
+    );
+    if (dupEmail) {
+      return res.status(409).json({ error: 'البريد الإلكتروني مسجل مسبقاً لحساب آخر' });
+    }
+  }
+
   if (targetId === req.user.id && !isActive) {
     return res.status(400).json({ error: 'لا يمكنك إيقاف حسابك الشخصي أثناء تسجيل دخولك' });
   }
@@ -590,7 +661,16 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
     });
   }
 
-  if (departmentId !== null) {
+  if (departmentId === null) {
+    if (
+      existing.department_id !== null &&
+      !req.user.permissionSet.has('boards.view_all')
+    ) {
+      return res.status(403).json({
+        error: 'لا تملك صلاحية نقل حساب إلى الإدارة العليا بدون قسم؛ يرجى اختيار قسم محدد للموظف',
+      });
+    }
+  } else {
     const dept = get(`SELECT * FROM departments WHERE id = ?`, [departmentId]);
     if (!dept) return res.status(400).json({ error: 'القسم المحدد غير موجود' });
     if (
@@ -633,38 +713,50 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
   let bumpToken = !isActive && existing.is_active ? 1 : 0;
 
   if (body.newPassword && String(body.newPassword).length > 0) {
-    if (String(body.newPassword).length < 6) {
-      return res.status(400).json({ error: 'كلمة المرور الجديدة يجب ألا تقل عن 6 أحرف' });
+    const nextPass = String(body.newPassword);
+    if (nextPass.length < 6 || nextPass.length > 128) {
+      return res.status(400).json({ error: 'كلمة المرور الجديدة يجب أن تكون بين 6 و128 حرفاً' });
     }
-    passwordHash = await bcrypt.hash(String(body.newPassword), 10);
+    passwordHash = await bcrypt.hash(nextPass, 12);
     bumpToken = 1;
   }
 
   const nextOnboardingStatus =
     role.slug === 'pending_onboarding' ? 'pending' : 'approved';
+  const departmentChanged =
+    Number(departmentId || 0) !== Number(existing.department_id || 0);
 
-  run(
-    `UPDATE users
-     SET full_name = ?, email = ?, job_title = ?, role_id = ?, department_id = ?,
-         onboarding_status = ?,
-         approved_by = COALESCE(approved_by, ?),
-         approved_at = COALESCE(approved_at, datetime('now')),
-         is_active = ?, password_hash = ?, token_version = token_version + ?
-     WHERE id = ?`,
-    [
-      fullName,
-      email,
-      jobTitle,
-      role.id,
-      departmentId,
-      nextOnboardingStatus,
-      req.user.id,
-      isActive,
-      passwordHash,
-      bumpToken,
-      existing.id,
-    ]
-  );
+  transaction(() => {
+    run(
+      `UPDATE users
+       SET full_name = ?, email = ?, job_title = ?, role_id = ?,
+           department_id = ?, preferred_department_id = ?,
+           onboarding_status = ?,
+           approved_by = COALESCE(approved_by, ?),
+           approved_at = COALESCE(approved_at, datetime('now')),
+           is_active = ?, password_hash = ?, token_version = token_version + ?
+       WHERE id = ?`,
+      [
+        fullName,
+        email,
+        jobTitle,
+        role.id,
+        departmentId,
+        departmentId,
+        nextOnboardingStatus,
+        req.user.id,
+        isActive,
+        passwordHash,
+        bumpToken,
+        existing.id,
+      ]
+    );
+    if (departmentChanged) {
+      run(`UPDATE permission_grants SET is_revoked = 1 WHERE user_id = ? AND is_revoked = 0`, [
+        existing.id,
+      ]);
+    }
+  });
 
   writeAudit({
     user: req.user,
@@ -673,6 +765,10 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
     status: 'ALLOWED',
     req,
     details: `${fullName} — الدور: ${role.name} — الحالة: ${isActive ? 'نشط' : 'موقوف'}`,
+    departmentId: departmentId || existing.department_id,
+    isChairmanExclusive: Boolean(
+      Number(existing.current_dept_exclusive) || Number(existing.pref_dept_exclusive)
+    ),
   });
 
   // If caller rotated their own password, issue a fresh token immediately so their session stays active
@@ -680,8 +776,7 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
   if (existing.id === req.user.id && bumpToken > 0) {
     const updatedSelf = get(`SELECT * FROM users WHERE id = ?`, [existing.id]);
     refreshedToken = signUserToken(updatedSelf);
-    const isHttps =
-      req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+    const isHttps = isSecureRequest(req);
     res.cookie(COOKIE_NAME, refreshedToken, {
       httpOnly: true,
       sameSite: 'lax',
@@ -709,10 +804,12 @@ router.delete('/users/:id(\\d+)', (req, res) => {
 
   const existing = get(
     `SELECT u.*, r.rank_level AS current_rank, r.slug AS current_role_slug, r.name AS current_role_name,
-            d.name AS current_department_name, d.is_chairman_exclusive AS current_dept_exclusive
+            d.name AS current_department_name, d.is_chairman_exclusive AS current_dept_exclusive,
+            pd.is_chairman_exclusive AS pref_dept_exclusive
      FROM users u
      JOIN roles r ON r.id = u.role_id
      LEFT JOIN departments d ON d.id = u.department_id
+     LEFT JOIN departments pd ON pd.id = u.preferred_department_id
      WHERE u.id = ?`,
     [targetId]
   );
@@ -733,13 +830,17 @@ router.delete('/users/:id(\\d+)', (req, res) => {
     });
   }
 
-  if (Number(existing.current_dept_exclusive) && req.user.role_slug !== 'chairman') {
+  if (
+    (Number(existing.current_dept_exclusive) || Number(existing.pref_dept_exclusive)) &&
+    req.user.role_slug !== 'chairman'
+  ) {
     writeAudit({
       user: req.user,
-      action: `محاولة حذف حساب يتبع قسماً خاصاً برئيس مجلس الإدارة (${existing.full_name})`,
+      action: `محاولة حذف حساب يتبع قسماً خاصاً برئيس مجلس الإدارة`,
       permissionKey: 'users.manage',
       status: 'DENIED',
       req,
+      isChairmanExclusive: true,
     });
     return res.status(403).json({
       error: 'حماية سيادية: هذا الحساب يتبع قسماً خاصاً برئيس مجلس الإدارة ولا يمكن حذفه إلا من رئيس مجلس الإدارة شخصياً.',
@@ -787,6 +888,10 @@ router.delete('/users/:id(\\d+)', (req, res) => {
     details: `${existing.full_name} (@${existing.username}) — الدور: ${existing.current_role_name} — القسم: ${
       existing.current_department_name || 'غير مسكن'
     }`,
+    departmentId: existing.department_id,
+    isChairmanExclusive: Boolean(
+      Number(existing.current_dept_exclusive) || Number(existing.pref_dept_exclusive)
+    ),
   });
 
   return res.json({
@@ -869,6 +974,8 @@ router.post('/departments', (req, res) => {
     status: 'ALLOWED',
     req,
     details: name,
+    departmentId: id,
+    isChairmanExclusive: Boolean(isChairmanExclusive),
   });
 
   res.status(201).json(get(`SELECT * FROM departments WHERE id = ?`, [id]));
@@ -929,6 +1036,8 @@ router.patch('/departments/:id(\\d+)', (req, res) => {
     status: 'ALLOWED',
     req,
     details: name,
+    departmentId: dept.id,
+    isChairmanExclusive: Boolean(Number(dept.is_chairman_exclusive) || isChairmanExclusive),
   });
 
   res.json(get(`SELECT * FROM departments WHERE id = ?`, [dept.id]));
@@ -961,6 +1070,7 @@ router.delete('/departments/:id(\\d+)', (req, res) => {
     });
   }
 
+  const wasExclusive = Boolean(Number(dept.is_chairman_exclusive));
   run(`DELETE FROM departments WHERE id = ?`, [dept.id]);
 
   writeAudit({
@@ -970,6 +1080,8 @@ router.delete('/departments/:id(\\d+)', (req, res) => {
     status: 'ALLOWED',
     req,
     details: dept.name,
+    departmentId: dept.id,
+    isChairmanExclusive: wasExclusive,
   });
 
   res.json({ ok: true });
@@ -1061,7 +1173,9 @@ router.get('/gmail-settings', (req, res) => {
     enabled: cfg.enabled,
     senderName: cfg.senderName,
     adminNotifyEmail: cfg.adminNotifyEmail,
-    emailLogs: getRecentEmailLogs(40),
+    emailLogs: getRecentEmailLogs(40, {
+      includeChairmanExclusive: req.user.role_slug === 'chairman',
+    }),
   });
 });
 
@@ -1076,7 +1190,11 @@ router.put('/gmail-settings', (req, res) => {
 
   const body = req.body || {};
   if (body.gmailUser !== undefined) {
-    setSetting('gmail_user', String(body.gmailUser || '').trim().toLowerCase());
+    const cleanGmail = String(body.gmailUser || '').trim().toLowerCase();
+    if (cleanGmail && !isDeliverableEmail(cleanGmail)) {
+      return res.status(400).json({ error: 'صيغة بريد Gmail المرسل غير صحيحة' });
+    }
+    setSetting('gmail_user', cleanGmail);
   }
   if (
     body.gmailAppPassword !== undefined &&
@@ -1084,20 +1202,27 @@ router.put('/gmail-settings', (req, res) => {
   ) {
     setSetting(
       'gmail_app_password',
-      String(body.gmailAppPassword).replace(/\s+/g, '')
+      String(body.gmailAppPassword).replace(/\s+/g, '').slice(0, 128)
     );
   }
   if (body.clearAppPassword) {
     setSetting('gmail_app_password', '');
   }
   if (body.senderName !== undefined) {
-    setSetting('gmail_sender_name', String(body.senderName || '').trim());
+    setSetting(
+      'gmail_sender_name',
+      String(body.senderName || '')
+        .replace(/[\r\n]+/g, ' ')
+        .trim()
+        .slice(0, 100)
+    );
   }
   if (body.adminNotifyEmail !== undefined) {
-    setSetting(
-      'gmail_admin_cc',
-      String(body.adminNotifyEmail || '').trim().toLowerCase()
-    );
+    const cleanAdminCc = String(body.adminNotifyEmail || '').trim().toLowerCase();
+    if (cleanAdminCc && !isDeliverableEmail(cleanAdminCc)) {
+      return res.status(400).json({ error: 'صيغة بريد استلام إشعارات الإدارة غير صحيحة' });
+    }
+    setSetting('gmail_admin_cc', cleanAdminCc);
   }
   if (body.enabled !== undefined) {
     setSetting('gmail_enabled', body.enabled ? '1' : '0');
@@ -1159,26 +1284,43 @@ router.get('/audit-logs', (req, res) => {
     });
   }
 
+  const isChairman = req.user.role_slug === 'chairman';
   const statusFilter = String(req.query.status || 'ALL').toUpperCase();
   const q = String(req.query.q || '').trim();
 
   const where = [];
   const params = [];
 
+  if (!isChairman) {
+    where.push('al.is_chairman_exclusive = 0');
+    where.push(
+      `NOT EXISTS (
+        SELECT 1 FROM users u
+        LEFT JOIN departments d ON d.id = u.department_id
+        LEFT JOIN departments pd ON pd.id = u.preferred_department_id
+        WHERE u.id = al.actor_id
+          AND (COALESCE(d.is_chairman_exclusive, 0) = 1 OR COALESCE(pd.is_chairman_exclusive, 0) = 1)
+      )`
+    );
+  }
+
   if (statusFilter === 'ALLOWED' || statusFilter === 'DENIED') {
-    where.push('status = ?');
+    where.push('al.status = ?');
     params.push(statusFilter);
   }
   if (q) {
-    where.push('(actor_name LIKE ? OR action LIKE ? OR details LIKE ? OR permission_key LIKE ?)');
-    const p = `%${q}%`;
+    where.push(
+      "(al.actor_name LIKE ? ESCAPE '\\' OR al.action LIKE ? ESCAPE '\\' OR al.details LIKE ? ESCAPE '\\' OR al.permission_key LIKE ? ESCAPE '\\')"
+    );
+    const escapedQ = q.slice(0, 100).replace(/[\\%_]/g, '\\$&');
+    const p = `%${escapedQ}%`;
     params.push(p, p, p, p);
   }
 
   const sql = `
-    SELECT * FROM audit_logs
+    SELECT al.* FROM audit_logs al
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY id DESC
+    ORDER BY al.id DESC
     LIMIT 150
   `;
 
@@ -1242,8 +1384,36 @@ router.post('/backup/import', (req, res) => {
     });
   }
 
-  importDatabaseSnapshot(snapshot);
-  seedIfNeeded();
+  try {
+    importDatabaseSnapshot(snapshot, { requireActiveChairman: true });
+    seedIfNeeded();
+    markCoreDataModified();
+  } catch (err) {
+    return res.status(400).json({
+      error: 'تعذر استعادة النسخة الاحتياطية — تأكد من سلامة بنية ملف الـ JSON وتكامل العلاقات وعدم تلفه',
+    });
+  }
+
+  const restoredChairman = get(
+    `SELECT u.*
+     FROM users u
+     JOIN roles r ON r.id = u.role_id
+     WHERE r.slug = 'chairman' AND u.is_active = 1
+     ORDER BY u.id ASC LIMIT 1`
+  );
+
+  let refreshedToken = null;
+  if (restoredChairman) {
+    refreshedToken = signUserToken(restoredChairman);
+    const isHttps = isSecureRequest(req);
+    for (const oldName of LEGACY_COOKIE_NAMES || []) res.clearCookie(oldName);
+    res.cookie(COOKIE_NAME, refreshedToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isHttps,
+      maxAge: 12 * 3600 * 1000,
+    });
+  }
 
   writeAudit({
     user: req.user,
@@ -1251,10 +1421,12 @@ router.post('/backup/import', (req, res) => {
     status: 'ALLOWED',
     req,
     details: `عدد المستخدمين: ${snapshot.tables.users.length} — عدد اللوحات: ${(snapshot.tables.boards || []).length}`,
+    isChairmanExclusive: true,
   });
 
   res.json({
     ok: true,
+    token: refreshedToken,
     message: 'تم استعادة كافة بيانات الشركة والموظفين واللوحات بنجاح 100%',
   });
 });
