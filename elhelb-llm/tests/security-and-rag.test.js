@@ -36,6 +36,8 @@ const offlineBundle = esbuild.buildSync({
 }).outputFiles[0].text;
 const offlineModule = { exports: {} };
 new Function('module', 'exports', offlineBundle)(offlineModule, offlineModule.exports);
+assert.match(offlineModule.exports.expandDialect('يا باشا الورق بيصفر'), /اصفرار/);
+assert.doesNotMatch(offlineModule.exports.expandDialect('يا باشا الورق بيصفر'), /باشا/);
 global.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 
 async function testBrowserVoiceEngineWiring() {
@@ -70,6 +72,17 @@ async function testBrowserVoiceEngineWiring() {
   assert.ok(transcript.includes('final:ازيك يا هندسة'), 'يجب دمج نتائج التعرف التراكمية بدون تكرار الكلام');
   assert.equal(voiceModule.exports.deduplicateSpeechTranscript('عندي عندي عندي مشكلة عندي مشكلة عندي مشكلة'), 'عندي مشكلة');
   assert.equal(voiceModule.exports.deduplicateSpeechTranscript('عندي مشكلة عايزك عندي مشكلة'), 'عندي مشكلة عايزك');
+  const screenshotTranscript = 'عندي عندي عندي مشكله عندي مشكله عندي مشكله عندي مشكله عايزك مشكله عندي مشكله عايزك عندي مشكله عايزك مشكله عندي مشكله عايزك تحل عندي مشكله عايزك تحل بقى';
+  assert.equal(
+    voiceModule.exports.deduplicateSpeechTranscript(screenshotTranscript),
+    'عندي مشكله عايزك تحل بقى',
+    'يجب ضغط التكرار الشديد الظاهر في لقطة الهاتف إلى العبارة الأساسية',
+  );
+  assert.equal(
+    voiceModule.exports.mergeTranscriptParts(['عندي عندي مشكلة في ورق البطاطس', 'في ورق البطاطس تالف']),
+    'عندي مشكلة في ورق البطاطس تالف',
+    'يجب دمج مقاطع التعرف المتداخلة دون تكرار النص السابق',
+  );
   assert.ok(statuses.includes('listening'));
   const alternateRecognition = voiceModule.exports.startArabicRecognition({ lang: 'en-US' });
   assert.equal(recognitionInstances[1].lang, 'en-US', 'يجب تمرير اختيار اللغة الإنجليزية إلى محرك الميكروفون');
@@ -82,6 +95,7 @@ async function testBrowserVoiceEngineWiring() {
     cancel() {},
     getVoices: () => [
       { name: 'Arabic', lang: 'ar-SA', voiceURI: 'ar-sa-local', localService: true },
+      { name: 'Google Arabic', lang: 'ar-EG', voiceURI: 'ar-eg-online', localService: false },
       { name: 'English Standard', lang: 'en-US', voiceURI: 'en-standard', localService: true },
       { name: 'English Natural', lang: 'en-US', voiceURI: 'en-natural', localService: true },
       { name: 'Remote English', lang: 'en-US', voiceURI: 'en-remote', localService: false },
@@ -96,6 +110,11 @@ async function testBrowserVoiceEngineWiring() {
   };
   function MockUtterance(text) { this.text = text; }
   global.window = { speechSynthesis: synth, SpeechSynthesisUtterance: MockUtterance, isSecureContext: true };
+  const voiceCounts = voiceModule.exports.getSpeechVoiceCounts('ar-SA');
+  assert.equal(voiceCounts.local, 1);
+  assert.equal(voiceCounts.remote, 1);
+  assert.ok(!voiceModule.exports.getAvailableSpeechVoices('ar-SA').some((voice) => voice.localService === false));
+  assert.ok(voiceModule.exports.getAvailableSpeechVoices('ar-SA', { allowRemote: true }).some((voice) => voice.voiceURI === 'ar-eg-online'));
   const availableEnglishVoices = voiceModule.exports.getAvailableSpeechVoices('en-US');
   assert.equal(availableEnglishVoices[0].name, 'English Natural', 'يجب تفضيل الصوت المحلي الأحدث عند توفره');
   assert.ok(!availableEnglishVoices.some((voice) => voice.localService === false), 'يجب عدم إرسال النص إلى صوت خارجي');
@@ -130,6 +149,16 @@ async function testBrowserVoiceEngineWiring() {
     });
   });
   assert.equal(utterances[2].voice.voiceURI, 'en-standard', 'يجب احترام اختيار المستخدم للصوت المثبت');
+  await new Promise((resolve, reject) => {
+    voiceModule.exports.speakArabic('Arabic device fallback test.', {
+      lang: 'ar-SA',
+      voiceURI: 'ar-eg-online',
+      allowRemote: true,
+      onError: reject,
+      onEnd: resolve,
+    });
+  });
+  assert.equal(utterances[3].voice.voiceURI, 'ar-eg-online', 'يجب استخدام صوت المتصفح الأونلاين عند السماح بذلك');
   const savedGetVoices = synth.getVoices;
   synth.getVoices = () => [];
   let missingArabicVoiceError = '';
@@ -138,7 +167,7 @@ async function testBrowserVoiceEngineWiring() {
     onError: (error) => { missingArabicVoiceError = error.message; },
   });
   assert.match(missingArabicVoiceError, /لا يوجد صوت محلي مثبت للغة العربية/);
-  assert.equal(utterances.length, 3, 'لا يُسمح بالرجوع إلى صوت غير محلي عند غياب العربية');
+  assert.equal(utterances.length, 4, 'لا يُسمح بالرجوع إلى صوت غير محلي عند غياب العربية');
   synth.getVoices = savedGetVoices;
   global.window = previousWindow;
 }
@@ -391,6 +420,11 @@ async function runTests() {
       message: 'إيه الأسمدة المتاحة عندكم في شركة الهلب؟',
     });
     assert.ok(offlineFertilizers.reply.includes('نيو فروتي') && offlineFertilizers.reply.includes('توب فيلم'));
+    const dialectTurn = await offlineModule.exports.runStandaloneClientTurn({
+      sessionId: 'offline_dialect_yellow_test',
+      message: 'يا باشا الورق بيصفر',
+    });
+    assert.match(dialectTurn.reply, /الاصفرار والذبول ليهم أسباب كتير/);
     const englishTurn = await offlineModule.exports.runStandaloneClientTurn({
       sessionId: 'offline_english_test',
       language: 'en',

@@ -17,6 +17,18 @@ export function normalizeArabicClient(text = '') {
     .trim();
 }
 
+// يفهم الكلام العامي قبل المطابقة: يشيل كلمات المناداة ("يا باشا"، "يا هندسة") من أول الجملة،
+// ويضيف الكلمة الفصيحة المقابلة للأعراض العامية (بيصفر ← اصفرار، بيدبل ← ذبول) بدون ما يمسح كلام المستخدم.
+export function expandDialect(text = '') {
+  let norm = normalizeArabicClient(text);
+  const fillers = /^(?:(?:يا|ي)\s+(?:باشا|هندسه|بشمهندس|بشمهندسه|استاذ|دكتور|فندم|معلم|حاج|حاجه|برنس|غالي|صاحبي|عم|ريس|كبير)|طيب|طب|بقولك|اسمع|بص|يعني|لو سمحت|من فضلك|ممكن|معلش)\s+/;
+  for (let i = 0; i < 3 && fillers.test(norm); i++) norm = norm.replace(fillers, '');
+  const extras = [];
+  if (/(?:بيصفر|بتصفر|بيصفرو|بتصفرو|اصفرت|صفرت|اصفرار|مصفر|صفرا|صفراء|الورق اصفر|ورقه اصفر|لونه اصفر)/.test(norm)) extras.push('اصفرار');
+  if (/(?:بيدبل|بتدبل|بيدبلو|دبلان|دبلت|دابل|بيدوب|بيدبل)/.test(norm)) extras.push('ذبول');
+  return extras.length ? `${norm} ${extras.join(' ')}` : norm;
+}
+
 export function formatForSpeechClient(text = '', language = 'ar') {
   const isEnglish = String(language).toLowerCase().startsWith('en');
   return String(text || '')
@@ -465,6 +477,7 @@ export function getLocalHistoryResponse(sessionId) {
 export async function runStandaloneClientTurn({ sessionId, message = '', imageFile = null, imageBase64 = null, language = 'ar' }) {
   const history = loadLocalHistory(sessionId);
   const cleanMsg = String(message || '').trim();
+  const understoodMsg = expandDialect(cleanMsg);
 
   let dataUrl = imageBase64 || null;
   if (!dataUrl && imageFile) {
@@ -528,21 +541,21 @@ export async function runStandaloneClientTurn({ sessionId, message = '', imageFi
       ];
     }
   } else {
-    const catalogReply = getStandaloneKnowledgeReply(cleanMsg, language);
+    const catalogReply = getStandaloneKnowledgeReply(String(language).toLowerCase().startsWith('en') ? cleanMsg : understoodMsg, language);
     if (catalogReply) {
       reply = catalogReply;
       suggestions = String(language).toLowerCase().startsWith('en')
         ? ['Tell me your crop and growth stage', 'What products are available?', 'How can I contact ELHELB support?']
         : ['اذكر المحصول والآفة لتوصية أدق', 'ما المنتجات المتاحة لمشكلة أخرى؟', 'تحدث عن المحاصيل التي أزرعها'];
     } else {
-      const answerObj = generateStandaloneTextReply(cleanMsg, history, language);
+      const answerObj = generateStandaloneTextReply(String(language).toLowerCase().startsWith('en') ? cleanMsg : understoodMsg, history, language);
       reply = answerObj.reply;
       suggestions = answerObj.suggestions;
     }
   }
 
   if (dataUrl && cleanMsg) {
-    const contextReply = getStandaloneKnowledgeReply(cleanMsg, language);
+    const contextReply = getStandaloneKnowledgeReply(String(language).toLowerCase().startsWith('en') ? cleanMsg : understoodMsg, language);
     const isEnglish = String(language).toLowerCase().startsWith('en');
     reply += isEnglish
       ? `\n\nYour description: “${cleanMsg}”.`
@@ -627,6 +640,73 @@ function generateStandaloneTextReply(rawText, history = [], language = 'ar') {
         '- أو اسألني عن **أي مبيد أو مغذي من منتجات مجموعة الهلب**.\n\n' +
         'تحب نبدأ بإيه؟',
       suggestions: GENERAL_STARTER_SUGGESTIONS,
+    };
+  }
+
+  // 2b) كلام عادي: تحية بصيغة تانية، مين انت، بتعمل إيه، بتفهم عربي، مش فاهم
+  if (!hasAgriTopic && wordCount <= 8) {
+    if (/(?:انت مين|مين انت|انت ايه|اسمك|اسمك ايه|انت روبوت|انت انسان|انت بني ادم|انت ذكاء|انت شات)/.test(norm)) {
+      return {
+        reply:
+          'أنا **المساعد الذكي لمجموعة الهلب (ELHELB GROUP)** 🌱\n' +
+          'مساعد متخصص في **منتجات الهلب ومشاكل المحاصيل**: بجاوب على أسئلة المبيدات والأسمدة، وبرشحلك المنتج المناسب لمشكلتك. ' +
+          'أنا برنامج مش إنسان، ومعلوماتي محدودة بدليل الشركة، فأي جرعة لازم تتأكد منها من ملصق العبوة.',
+        suggestions: GENERAL_STARTER_SUGGESTIONS.slice(0, 3),
+      };
+    }
+    if (/(?:بتعمل ايه|بتعمل اي|تعمل ايه|تقدر تعمل|بتعرف تعمل|تساعدني في ايه|تقدر تساعدني|بتفيد في ايه|وظيفتك|مجالك|بتشتغل ايه|تساعدني|تفيدني|تنفعني|بتنفع في ايه)/.test(norm)) {
+      return {
+        reply:
+          'أقدر أساعدك في 3 حاجات 🌱\n' +
+          '1. **تشخيص مشكلة في الزرع**: احكيلي بكلامك العادي أو ابعتلي صورة، وأرشحلك المنتج المناسب من الهلب.\n' +
+          '2. **معلومات عن أي منتج**: المادة الفعالة وأحجام العبوات والاستخدام.\n' +
+          '3. **التواصل مع الشركة**: أرقام المبيعات والتصدير والموزعين.',
+        suggestions: GENERAL_STARTER_SUGGESTIONS.slice(0, 3),
+      };
+    }
+    if (/(?:بتفهم عربي|بتتكلم عربي|بتعرف عربي|بتفهمني|فاهمني|سامعني|بتسمعني|بتفهم كلامي|بتفهم مصري|بتفهم عامي)/.test(norm)) {
+      return {
+        reply:
+          'أيوه، بفهم عربي وبالعامية المصرية كمان 👍 قولي مشكلتك زي ما بتحكيها لمهندس زراعي، مثلاً: *"الطماطم عليها بقع بني"* أو *"الورق بيصفر"*. ' +
+          'ولو فهمت حاجة غلط قولي وأنا أعدّل.',
+        suggestions: GENERAL_STARTER_SUGGESTIONS.slice(0, 3),
+      };
+    }
+    if (/(?:مش فاهم|مفهمتش|مفهمتك|فهمتش|ماسمعتش|مسمعتش|مش مفهوم|مش واضح|اعد|كرر|قول تاني|مش فاهمك)/.test(norm)) {
+      return {
+        reply:
+          'معلش، ممكن أكون ما فهمتش قصدك 🙏 جرّب تقولي بالشكل ده:\n' +
+          '- **المحصول** + **اللي شايفه**: *"البطاطس عليها بقع بني"*\n' +
+          '- أو **اسم المنتج** اللي عايز تسأل عنه: *"كابيتول"*\n' +
+          '- أو *"عايز أكلم المبيعات"*',
+        suggestions: GENERAL_STARTER_SUGGESTIONS.slice(0, 3),
+      };
+    }
+    // تحية أو سؤال "ازيك/عامل ايه" في أي مكان من الجملة القصيرة (مثلاً "اهلا ازيك" أو "ازيك يا باشا عامل ايه")
+    if (/(?:^|\s)(?:ازيك|ازيكم|عامل ايه|عاملين ايه|اخبارك|ايه الاخبار|ايه اخبارك|كيف حالك|كيفك|شلونك|صباح الخير|صباح الفل|مساء الخير|مساء النور|اهلا|اهلين|مرحبا|هلا|السلام عليكم|سلام عليكم)(?=\s|$)/.test(norm)) {
+      return {
+        reply:
+          'أهلاً بحضرتك، أنا تمام الحمد لله 🌱 نورتنا!\n' +
+          'أنا المساعد الذكي لمجموعة الهلب. قولي عندك مشكلة في أنهي محصول، أو عايز تسأل عن أنهي منتج؟',
+        suggestions: GENERAL_STARTER_SUGGESTIONS,
+      };
+    }
+  }
+
+  // 2c) شكوى اصفرار أو ذبول عامة بدون تحديد: اسأل الأول، لأن الأسباب كتير والتشخيص بالتخمين غلط
+  if (/(?:اصفرار|ذبول)/.test(norm) && !SYMPTOM_RULES.some((r) => r.pattern.test(norm))) {
+    return {
+      reply:
+        '🌿 **الاصفرار والذبول ليهم أسباب كتير**، ومش هخمّن علاج قبل ما أتأكد. قولي:\n' +
+        '1. **المحصول إيه**؟ وعمره كام؟\n' +
+        '2. الاصفرار في **الورق القديم (تحت)** ولا **الورق الجديد (فوق)**؟ وهل **بين العروق** ولا على الورقة كلها؟\n' +
+        '3. فيه **عنكبوت أو حشرات** ورا الورقة؟ و**الجذور** شكلها إيه (عقد أو تعفن)؟\n\n' +
+        'لو السبب نقص عناصر، دليل الهلب بيرشح مغذيات زي **Super Plant Care 20-20-20** أو **Fine 19-19-19**، أو عناصر صغرى (**زنك، منجنيز، حديد**) حسب الاحتياج، والجرعة بتتحدد من ملصق المنتج.',
+      suggestions: [
+        'الاصفرار في الورق الجديد بين العروق',
+        'فيه عنكبوت أحمر ورا الورقة',
+        'الجذور فيها عقد',
+      ],
     };
   }
 

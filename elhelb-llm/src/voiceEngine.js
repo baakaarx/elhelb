@@ -80,18 +80,31 @@ function voiceQualityRank(voice, language) {
   return (exactLocale ? 100 : 0) + (voice?.localService === false ? 0 : 30) + (modernLabel ? 20 : 0);
 }
 
-export function getAvailableSpeechVoices(language = 'ar-SA') {
+// allowRemote=false (الافتراضي): أصوات الجهاز المحلية فقط حفاظاً على الخصوصية.
+// allowRemote=true: يسمح أيضاً بأصوات المتصفح الأونلاين (مثل Google العربية) عندما لا يوجد صوت محلي.
+export function getAvailableSpeechVoices(language = 'ar-SA', { allowRemote = false } = {}) {
   if (typeof window === 'undefined' || !window.speechSynthesis?.getVoices) return [];
   return (window.speechSynthesis.getVoices() || [])
-    .filter((voice) => voiceLanguageMatches(voice, language) && voice.localService !== false)
+    .filter((voice) => voiceLanguageMatches(voice, language) && (allowRemote || voice.localService !== false))
     .sort((a, b) => voiceQualityRank(b, language) - voiceQualityRank(a, language));
 }
 
-export function getVoiceDiagnostics(language = 'ar-SA') {
+export function getSpeechVoiceCounts(language = 'ar-SA') {
+  if (typeof window === 'undefined' || !window.speechSynthesis?.getVoices) return { total: 0, local: 0, remote: 0 };
+  const all = window.speechSynthesis.getVoices() || [];
+  const matching = all.filter((voice) => voiceLanguageMatches(voice, language));
+  return {
+    total: all.length,
+    local: matching.filter((voice) => voice.localService !== false).length,
+    remote: matching.filter((voice) => voice.localService === false).length,
+  };
+}
+
+export function getVoiceDiagnostics(language = 'ar-SA', options = {}) {
   if (typeof window === 'undefined') {
     return { secureContext: false, recognition: false, synthesis: false, languageVoiceAvailable: false, voices: [] };
   }
-  const languageVoices = getAvailableSpeechVoices(language);
+  const languageVoices = getAvailableSpeechVoices(language, options);
   return {
     secureContext: Boolean(window.isSecureContext),
     recognition: Boolean(window.SpeechRecognition || window.webkitSpeechRecognition),
@@ -144,8 +157,8 @@ export function cleanTextForClientSpeech(text = '', { lang = 'ar-SA' } = {}) {
     .trim();
 }
 
-function pickBestVoice(language = 'ar-SA', voiceURI = '') {
-  const voices = getAvailableSpeechVoices(language);
+function pickBestVoice(language = 'ar-SA', voiceURI = '', allowRemote = false) {
+  const voices = getAvailableSpeechVoices(language, { allowRemote });
   return voices.find((voice) => voice.voiceURI === voiceURI) || voices[0] || null;
 }
 
@@ -183,9 +196,10 @@ export function deduplicateSpeechTranscript(text = '') {
       }
       if (collapsed) continue;
       // خفّف تكرار المقاطع القصيرة التي يعيدها أحياناً محرك التعرّف مع كلمة أو كلمتين فاصلتين.
-      const maxPhrase = Math.min(5, Math.floor(output.length / 2));
+      const maxPhrase = Math.min(8, Math.floor(output.length / 2));
       for (let size = maxPhrase; size >= 2 && !collapsed; size--) {
-        for (let gap = 1; gap <= 2; gap++) {
+        // بعض خدمات الهاتف تعيد مقاطع كاملة وبين النسخ كلمات حشو أو جزءاً ناقصاً؛ افحص فجوة أوسع.
+        for (let gap = 0; gap <= 4; gap++) {
           const rightStart = output.length - size;
           const leftStart = rightStart - gap - size;
           if (leftStart < 0) continue;
@@ -203,7 +217,16 @@ export function deduplicateSpeechTranscript(text = '') {
   return output.join(' ');
 }
 
-function mergeTranscriptParts(parts = []) {
+function transcriptOverlapMatches(left, right) {
+  const leftKeys = left.map(speechTokenKey);
+  const rightKeys = right.map(speechTokenKey);
+  if (leftKeys.every((word, index) => word === rightKeys[index])) return true;
+  if (leftKeys.length < 4 || leftKeys.length !== rightKeys.length) return false;
+  const mismatches = leftKeys.reduce((count, word, index) => count + (word === rightKeys[index] ? 0 : 1), 0);
+  return mismatches <= Math.max(1, Math.floor(leftKeys.length * 0.2));
+}
+
+export function mergeTranscriptParts(parts = []) {
   let merged = [];
   for (const part of parts) {
     const next = String(part || '').trim().split(/\s+/).filter(Boolean);
@@ -218,9 +241,9 @@ function mergeTranscriptParts(parts = []) {
     if (merged.length && nextKeys.length <= mergedKeys.length && nextKeys.every((word, index) => word === mergedKeys[index])) continue;
     let overlap = Math.min(12, merged.length, next.length);
     while (overlap > 0) {
-      const left = merged.slice(-overlap).map(speechTokenKey);
-      const right = next.slice(0, overlap).map(speechTokenKey);
-      if (left.every((word, index) => word === right[index])) break;
+      const left = merged.slice(-overlap);
+      const right = next.slice(0, overlap);
+      if (transcriptOverlapMatches(left, right)) break;
       overlap--;
     }
     merged.push(...next.slice(overlap));
@@ -265,7 +288,7 @@ function splitSpeech(text, maxLength = 150) {
   return chunks;
 }
 
-export function speakArabic(text, { onStart, onEnd, onError, lang = 'ar-SA', voiceURI = '' } = {}) {
+export function speakArabic(text, { onStart, onEnd, onError, lang = 'ar-SA', voiceURI = '', allowRemote = false } = {}) {
   if (!isVoiceOutputSupported()) {
     onError?.(new Error('ميزة النطق الصوتي غير متاحة في هذا المتصفح.'));
     onEnd?.();
@@ -273,8 +296,10 @@ export function speakArabic(text, { onStart, onEnd, onError, lang = 'ar-SA', voi
   }
   const clean = cleanTextForClientSpeech(text, { lang });
   if (!clean) { onEnd?.(); return; }
-  const availableVoices = getAvailableSpeechVoices(lang);
-  if (!availableVoices.length) {
+  const availableVoices = getAvailableSpeechVoices(lang, { allowRemote });
+  // بعض أجهزة أندرويد ترجع قائمة أصوات فارغة تماماً رغم أن النطق يعمل؛ في هذه الحالة جرّب النطق بدل الفشل المبكر.
+  const voiceListEmpty = !(window.speechSynthesis.getVoices?.() || []).length;
+  if (!availableVoices.length && !(allowRemote && voiceListEmpty)) {
     const languageName = String(lang).toLowerCase().startsWith('en') ? 'الإنجليزية' : 'العربية';
     onError?.(new Error(`لا يوجد صوت محلي مثبت للغة ${languageName}. نزّل بيانات صوتها من إعدادات تحويل النص إلى كلام، ثم حدّث قائمة الأصوات.`));
     onEnd?.();
@@ -305,7 +330,7 @@ export function speakArabic(text, { onStart, onEnd, onError, lang = 'ar-SA', voi
     if (finished) return;
     if (index >= chunks.length) { finish(); return; }
     const utterance = new window.SpeechSynthesisUtterance(chunks[index++]);
-    const voice = pickBestVoice(lang, voiceURI);
+    const voice = pickBestVoice(lang, voiceURI, allowRemote);
     // ابدأ النطق فوراً داخل نقرة المستخدم قدر الإمكان؛ تأخير SpeechSynthesis قد يمنعه على متصفحات الهاتف.
     const languageName = String(lang).toLowerCase().startsWith('en') ? 'الإنجليزية' : 'العربية';
     startWatchdog = setTimeout(() => finish(new Error(`لم يبدأ الصوت ${languageName}. افحص محرك تحويل النص إلى كلام والصوت المثبت في إعدادات الجهاز.`)), 8000);

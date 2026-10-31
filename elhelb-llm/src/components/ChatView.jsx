@@ -19,6 +19,7 @@ import { apiRequest } from '../api';
 import {
   isVoiceOutputSupported,
   getAvailableSpeechVoices,
+  getSpeechVoiceCounts,
   getVoiceDiagnostics,
   speakArabic,
   stopSpeaking,
@@ -134,11 +135,11 @@ export default function ChatView({
   const [callError, setCallError] = useState('');
   const [voiceLanguage, setVoiceLanguage] = useState(() => {
     try {
-      return ['ar-SA', 'en-US'].includes(localStorage.getItem('elhelb_voice_language'))
+      return ['ar-EG', 'ar-SA', 'en-US'].includes(localStorage.getItem('elhelb_voice_language'))
         ? localStorage.getItem('elhelb_voice_language')
-        : 'ar-SA';
+        : 'ar-EG';
     } catch {
-      return 'ar-SA';
+      return 'ar-EG';
     }
   });
   const voiceLanguageRef = useRef(voiceLanguage);
@@ -147,6 +148,11 @@ export default function ChatView({
   });
   const voiceSelectionsRef = useRef(voiceSelections);
   const [systemVoiceVersion, setSystemVoiceVersion] = useState(0);
+  // الافتراضي: أصوات الجهاز المحلية فقط (خصوصية). المستخدم يقدر يسمح بالأصوات الأونلاين لو مفيش صوت عربي محلي.
+  const [allowRemoteVoices, setAllowRemoteVoices] = useState(() => {
+    try { return localStorage.getItem('elhelb_allow_remote_voices') === '1'; } catch { return false; }
+  });
+  const allowRemoteVoicesRef = useRef(allowRemoteVoices);
   const callActiveRef = useRef(false);
   const callRecRef = useRef(null);
   const callRetryTimerRef = useRef(null);
@@ -171,9 +177,16 @@ export default function ChatView({
     return () => window.clearInterval(timer);
   }, [isMicListening, isRecordingVoice]);
 
-  const availableSpeechVoices = useMemo(
-    () => getAvailableSpeechVoices(voiceLanguage),
+  const speechVoiceCounts = useMemo(
+    () => getSpeechVoiceCounts(voiceLanguage),
     [voiceLanguage, systemVoiceVersion]
+  );
+  // لو مفيش أي صوت محلي للغة المختارة وفيه صوت أونلاين في المتصفح، استخدمه تلقائياً بدل ما الصوت يفشل.
+  const autoRemoteVoices = !allowRemoteVoices && speechVoiceCounts.local === 0 && speechVoiceCounts.remote > 0;
+  const effectiveAllowRemote = allowRemoteVoices || autoRemoteVoices;
+  const availableSpeechVoices = useMemo(
+    () => getAvailableSpeechVoices(voiceLanguage, { allowRemote: effectiveAllowRemote }),
+    [voiceLanguage, systemVoiceVersion, effectiveAllowRemote]
   );
   const activeSpeechVoiceURI = availableSpeechVoices.some((voice) => voice.voiceURI === voiceSelections[voiceLanguage])
     ? voiceSelections[voiceLanguage]
@@ -185,6 +198,14 @@ export default function ChatView({
   }, [voiceLanguage]);
 
   useEffect(() => {
+    allowRemoteVoicesRef.current = effectiveAllowRemote;
+  }, [effectiveAllowRemote]);
+
+  useEffect(() => {
+    try { localStorage.setItem('elhelb_allow_remote_voices', allowRemoteVoices ? '1' : '0'); } catch {}
+  }, [allowRemoteVoices]);
+
+  useEffect(() => {
     voiceSelectionsRef.current = voiceSelections;
     try { localStorage.setItem('elhelb_speech_voices', JSON.stringify(voiceSelections)); } catch {}
   }, [voiceSelections]);
@@ -194,16 +215,24 @@ export default function ChatView({
     if (!synth) return undefined;
     const refreshVoices = () => setSystemVoiceVersion((version) => version + 1);
     refreshVoices();
+    // أندرويد/كروم بيرجّعوا قائمة الأصوات فاضية في الأول؛ أعد المحاولة كذا مرة.
+    const retryTimers = [400, 1200, 3000].map((delay) => window.setTimeout(refreshVoices, delay));
     if (synth.addEventListener) {
       synth.addEventListener('voiceschanged', refreshVoices);
-      return () => synth.removeEventListener?.('voiceschanged', refreshVoices);
+      return () => {
+        retryTimers.forEach((timer) => window.clearTimeout(timer));
+        synth.removeEventListener?.('voiceschanged', refreshVoices);
+      };
     }
     const previousHandler = synth.onvoiceschanged;
     synth.onvoiceschanged = (...args) => {
       previousHandler?.(...args);
       refreshVoices();
     };
-    return () => { if (synth.onvoiceschanged) synth.onvoiceschanged = previousHandler || null; };
+    return () => {
+      retryTimers.forEach((timer) => window.clearTimeout(timer));
+      if (synth.onvoiceschanged) synth.onvoiceschanged = previousHandler || null;
+    };
   }, []);
 
   useEffect(() => {
@@ -263,7 +292,7 @@ export default function ChatView({
   function selectedSpeechVoiceURI() {
     const language = voiceLanguageRef.current;
     const requestedURI = voiceSelectionsRef.current[language] || '';
-    return getAvailableSpeechVoices(language).some((voice) => voice.voiceURI === requestedURI) ? requestedURI : '';
+    return getAvailableSpeechVoices(language, { allowRemote: allowRemoteVoicesRef.current }).some((voice) => voice.voiceURI === requestedURI) ? requestedURI : '';
   }
 
   function openVoiceCall() {
@@ -313,6 +342,7 @@ export default function ChatView({
           speakArabic(toSpeak, {
             lang: voiceLanguageRef.current,
             voiceURI: selectedSpeechVoiceURI(),
+            allowRemote: allowRemoteVoicesRef.current,
             onStart: () => {
               if (callActiveRef.current && generation === callGenerationRef.current) setCallStage('speaking');
             },
@@ -369,6 +399,7 @@ export default function ChatView({
     speakArabic(testSpeech, {
       lang: voiceLanguageRef.current,
       voiceURI: selectedSpeechVoiceURI(),
+            allowRemote: allowRemoteVoicesRef.current,
       onStart: () => {
         if (callActiveRef.current && generation === callGenerationRef.current) setCallStage('speaking');
       },
@@ -454,6 +485,7 @@ export default function ChatView({
     speakArabic(textToRead, {
       lang: voiceLanguageRef.current,
       voiceURI: selectedSpeechVoiceURI(),
+            allowRemote: allowRemoteVoicesRef.current,
       onError: (err) => setError(err?.message || 'تعذر تشغيل الصوت؛ يمكنك قراءة الرد على الشاشة.'),
       onEnd: () => setSpeakingMsgId(null),
     });
@@ -549,6 +581,7 @@ export default function ChatView({
         speakArabic(res.speechText || res.assistantMessage.content, {
           lang: voiceLanguageRef.current,
           voiceURI: selectedSpeechVoiceURI(),
+            allowRemote: allowRemoteVoicesRef.current,
           onError: (err) => setError(err?.message || 'تعذر تشغيل الصوت؛ يمكنك قراءة الرد على الشاشة.'),
           onEnd: () => setSpeakingMsgId(null),
         });
@@ -825,13 +858,14 @@ export default function ChatView({
                 <select
                   value={voiceLanguage}
                   onChange={(event) => {
-                    const nextLanguage = event.target.value === 'en-US' ? 'en-US' : 'ar-SA';
+                    const nextLanguage = ['en-US', 'ar-SA'].includes(event.target.value) ? event.target.value : 'ar-EG';
                     voiceLanguageRef.current = nextLanguage;
                     setVoiceLanguage(nextLanguage);
                     if (callActiveRef.current && callStage === 'listening') startCallListeningCycle();
                   }}
                 >
-                  <option value="ar-SA">العربية الرسمية</option>
+                  <option value="ar-EG">العربية (مصر)</option>
+                  <option value="ar-SA">العربية الفصحى</option>
                   <option value="en-US">English</option>
                 </select>
               </label>
@@ -843,19 +877,39 @@ export default function ChatView({
                   onChange={(event) => setVoiceSelections((current) => ({ ...current, [voiceLanguage]: event.target.value }))}
                 >
                   {availableSpeechVoices.length ? availableSpeechVoices.map((voice) => (
-                    <option key={voice.voiceURI} value={voice.voiceURI}>
-                      {voice.name} ({voice.lang}) — محلي
+                    <option key={voice.voiceURI} value={voice.voiceURI} dir="auto">
+                      {voice.name} ({voice.lang}){voice.localService === false ? ' — أونلاين' : ' — محلي'}
                     </option>
-                  )) : <option value="">لا يوجد صوت محلي لهذه اللغة</option>}
+                  )) : <option value="">{effectiveAllowRemote ? 'لا يوجد صوت لهذه اللغة' : 'لا يوجد صوت محلي لهذه اللغة'}</option>}
                 </select>
+              </label>
+              <label className="voice-language-control" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={effectiveAllowRemote}
+                  disabled={autoRemoteVoices}
+                  onChange={(event) => {
+                    allowRemoteVoicesRef.current = event.target.checked;
+                    setAllowRemoteVoices(event.target.checked);
+                  }}
+                />
+                {autoRemoteVoices
+                  ? 'مفيش صوت عربي على جهازك، فبنستخدم صوت المتصفح الأونلاين تلقائياً'
+                  : 'تفضيل أصوات المتصفح الأونلاين (جودتها غالباً أحسن من أصوات الجهاز)'}
               </label>
               <button type="button" className="voice-refresh-btn" onClick={() => setSystemVoiceVersion((version) => version + 1)}>
                 تحديث قائمة الأصوات
               </button>
               <div className="voice-privacy-note">
                 {availableSpeechVoices.length
-                  ? 'النطق يستخدم صوتاً محلياً مثبتاً على جهازك؛ غيّر الصوت من القائمة لو النطق غير واضح.'
-                  : 'لا يظهر صوت محلي لهذه اللغة. نزّل بيانات صوت اللغة من إعدادات تحويل النص إلى كلام في الجهاز، ثم حدّث القائمة أو أعد فتح الصفحة.'}
+                  ? (effectiveAllowRemote
+                    ? 'غيّر الصوت من القائمة لو النطق غير واضح. الأصوات «أونلاين» بتمر عبر خدمة المتصفح.'
+                    : 'النطق يستخدم صوتاً محلياً مثبتاً على جهازك؛ غيّر الصوت من القائمة لو النطق غير واضح.')
+                  : (!effectiveAllowRemote && speechVoiceCounts.remote > 0
+                    ? 'فيه صوت عربي أونلاين متاح في المتصفح. فعّل «السماح بأصوات المتصفح الأونلاين» لتشغيله، أو نزّل صوتاً محلياً من إعدادات الجهاز.'
+                    : (speechVoiceCounts.total === 0
+                      ? 'قائمة الأصوات لسه فاضية. اضغط «تحديث قائمة الأصوات» أو افتح الصفحة في Chrome.'
+                      : 'لا يظهر صوت لهذه اللغة. نزّل بيانات صوت اللغة من إعدادات تحويل النص إلى كلام في الجهاز، ثم حدّث القائمة.'))}
               </div>
             </div>
 
@@ -883,10 +937,10 @@ export default function ChatView({
               <div className="voice-error-box">
                 <div>{callError}</div>
                 <div className="voice-device-check">
-                  حالة الجهاز: {getVoiceDiagnostics(voiceLanguage).secureContext ? 'اتصال آمن' : 'افتح الرابط عبر HTTPS'}،{' '}
-                  {getVoiceDiagnostics(voiceLanguage).recognition ? 'التعرف على الكلام متاح' : 'التعرف على الكلام غير مدعوم'}،{' '}
-                  {getVoiceDiagnostics(voiceLanguage).synthesis ? 'النطق متاح' : 'النطق غير متاح'}،{' '}
-                  {getVoiceDiagnostics(voiceLanguage).languageVoiceAvailable ? 'صوت اللغة المختارة مثبت' : 'لم يظهر صوت للغة المختارة في الجهاز'}.
+                  حالة الجهاز: {getVoiceDiagnostics(voiceLanguage, { allowRemote: effectiveAllowRemote }).secureContext ? 'اتصال آمن' : 'افتح الرابط عبر HTTPS'}،{' '}
+                  {getVoiceDiagnostics(voiceLanguage, { allowRemote: effectiveAllowRemote }).recognition ? 'التعرف على الكلام متاح' : 'التعرف على الكلام غير مدعوم'}،{' '}
+                  {getVoiceDiagnostics(voiceLanguage, { allowRemote: effectiveAllowRemote }).synthesis ? 'النطق متاح' : 'النطق غير متاح'}،{' '}
+                  {getVoiceDiagnostics(voiceLanguage, { allowRemote: effectiveAllowRemote }).languageVoiceAvailable ? 'صوت اللغة المختارة مثبت' : 'لم يظهر صوت للغة المختارة في الجهاز'}.
                 </div>
               </div>
             )}
