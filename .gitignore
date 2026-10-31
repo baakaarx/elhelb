@@ -2,7 +2,6 @@
 my-agent/config.js
 
 node_modules/
-elhelb-boards-server.zip
 elhelb-boards/data/*.db
 elhelb-boards/data/*.db-shm
 elhelb-boards/data/*.db-wal
