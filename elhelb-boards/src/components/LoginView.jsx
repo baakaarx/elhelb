@@ -335,7 +335,7 @@ export default function LoginView({ onLoginSuccess, initialOAuthError = '' }) {
                       className="form-input"
                       dir="ltr"
                       style={{ textAlign: 'left', paddingRight: 32, fontWeight: 700 }}
-                      placeholder="6+ أحرف"
+                      placeholder="10+ أحرف أو أرقام"
                       value={regPassword}
                       onChange={(e) => setRegPassword(e.target.value)}
                       autoComplete="new-password"

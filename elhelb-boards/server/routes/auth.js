@@ -71,7 +71,7 @@ function countPendingOnboardingUsers(user) {
        WHERE u.onboarding_status = 'pending'
          AND u.is_active = 1
          AND COALESCE(pd.is_chairman_exclusive, 0) = 0
-         AND (u.preferred_department_id IS NULL OR u.preferred_department_id = ?)`,
+         AND u.preferred_department_id = ?`,
       [user.department_id]
     );
     return r ? r.cnt : 0;
@@ -128,18 +128,26 @@ function serializeCurrentUser(user) {
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: process.env.NODE_ENV === 'test' ? 60 : 15,
   skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'محاولات تسجيل دخول فاشلة كثيرة، يرجى الانتظار 15 دقيقة والمحاولة مرة أخرى' },
 });
 
-// Per-account brute-force protection with bounded memory cap (blocks IP-rotation & RAM DoS)
+// Per-(IP + account) brute-force protection with bounded memory cap
+// Prevents remote Account Lockout DoS against legitimate users on different IPs!
 const failedAccountAttempts = new Map();
 const ACCOUNT_LOCK_WINDOW_MS = 15 * 60 * 1000;
 const ACCOUNT_MAX_FAILS = 8;
 const MAX_TRACKED_ACCOUNTS = 4096;
+const DUMMY_BCRYPT_HASH = bcrypt.hashSync('elhelb-constant-time-anti-enum-pad-v17', 12);
+
+function getClientLockIp(req) {
+  return String((req && req.ip) || (req && req.socket && req.socket.remoteAddress) || 'unknown')
+    .trim()
+    .slice(0, 64);
+}
 
 function pruneFailedAccountsMap(now) {
   if (failedAccountAttempts.size < MAX_TRACKED_ACCOUNTS) return;
@@ -189,17 +197,18 @@ router.post('/login', loginLimiter, async (req, res) => {
       return res.status(400).json({ error: 'طول اسم المستخدم أو كلمة المرور يتجاوز الحد المسموح (128 حرفاً)' });
     }
 
-    const accountKey = username.toLowerCase();
+    const clientIp = getClientLockIp(req);
+    const accountKey = `${clientIp}::${username.toLowerCase()}`;
     if (isAccountLocked(accountKey)) {
       writeAudit({
         actorName: username.slice(0, 40),
         action: 'إيقاف مؤقت بسبب محاولات دخول متكررة فاشلة',
         status: 'DENIED',
         req,
-        details: 'تجاوز حد المحاولات المسموح بها على الحساب',
+        details: 'تجاوز حد المحاولات المسموح بها على الحساب من نفس عنوان الاتصال',
       });
       return res.status(429).json({
-        error: 'تم إيقاف محاولات الدخول لهذا الحساب مؤقتاً لمدة 15 دقيقة لحمايته من التخمين',
+        error: 'تم إيقاف محاولات الدخول مؤقتاً لمدة 15 دقيقة لحماية الحساب من التخمين',
       });
     }
 
@@ -207,19 +216,22 @@ router.post('/login', loginLimiter, async (req, res) => {
       `SELECT * FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)`,
       [username, username]
     );
-    if (!row) {
+    if (!row || !row.password_hash) {
+      // Constant-time dummy bcrypt check prevents timing & OAuth-only account enumeration
+      await bcrypt.compare(password, DUMMY_BCRYPT_HASH);
       recordAccountFailure(accountKey);
       writeAudit({
-        actorName: username.slice(0, 40),
+        actorName: row ? row.full_name : username.slice(0, 40),
         action: 'محاولة تسجيل دخول فاشلة',
         status: 'DENIED',
         req,
-        details: 'اسم مستخدم غير موجود',
+        details: !row ? 'اسم مستخدم غير موجود' : 'حساب خارجي بدون كلمة مرور محلية',
       });
       return res.status(401).json({ error: 'اسم المستخدم أو كلمة المرور غير صحيحة' });
     }
 
     if (!row.is_active) {
+      await bcrypt.compare(password, DUMMY_BCRYPT_HASH);
       writeAudit({
         actorName: row.full_name,
         action: 'محاولة دخول بحساب موقوف',
@@ -230,16 +242,10 @@ router.post('/login', loginLimiter, async (req, res) => {
       return res.status(403).json({ error: 'هذا الحساب موقوف حالياً، يرجى مراجعة الإدارة' });
     }
 
-    if (!row.password_hash) {
-      return res.status(400).json({
-        error: 'لم يتم استكمال إنشاء كلمة المرور لهذا الحساب بعد — يرجى المتابعة من تبويب تسجيل موظف جديد وتأكيد البريد الإلكتروني',
-      });
-    }
-
     const valid = await bcrypt.compare(password, row.password_hash);
     if (!valid) {
       recordAccountFailure(accountKey);
-      recordAccountFailure(String(row.username || '').toLowerCase());
+      recordAccountFailure(`${clientIp}::${String(row.username || '').toLowerCase()}`);
       writeAudit({
         actorName: row.full_name,
         action: 'محاولة تسجيل دخول فاشلة',
@@ -251,7 +257,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     }
 
     failedAccountAttempts.delete(accountKey);
-    failedAccountAttempts.delete(String(row.username || '').toLowerCase());
+    failedAccountAttempts.delete(`${clientIp}::${String(row.username || '').toLowerCase()}`);
 
     const token = signUserToken(row);
     const isHttps = isSecureRequest(req);

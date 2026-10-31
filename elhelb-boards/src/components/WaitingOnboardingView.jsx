@@ -28,6 +28,7 @@ export default function WaitingOnboardingView({
   // Step 1 state: Create Username & Password
   const [fullName, setFullName] = useState(user.fullName || '');
   const [username, setUsername] = useState(user.username || '');
+  const [currentPassword, setCurrentPassword] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
@@ -82,8 +83,8 @@ export default function WaitingOnboardingView({
       setCredsError('كلمتا المرور غير متطابقتين، يرجى التأكد من كتابتهما بشكل متطابق');
       return;
     }
-    if (password.length < 4) {
-      setCredsError('كلمة المرور يجب ألا تقل عن 4 أحرف أو أرقام');
+    if (password.length < 10) {
+      setCredsError('كلمة المرور يجب ألا تقل عن 10 أحرف أو أرقام لتأمين حسابك');
       return;
     }
 
@@ -93,6 +94,7 @@ export default function WaitingOnboardingView({
         method: 'POST',
         body: {
           username: username.trim().toLowerCase(),
+          currentPassword: user.hasCustomCredentials ? currentPassword : '',
           password,
           fullName: fullName.trim(),
         },
@@ -101,6 +103,7 @@ export default function WaitingOnboardingView({
         setStoredToken(res.token);
       }
       setEditingCreds(false);
+      setCurrentPassword('');
       setPassword('');
       setConfirmPassword('');
       await onRefreshMe();
@@ -330,6 +333,22 @@ export default function WaitingOnboardingView({
                 />
               </div>
 
+              {user.hasCustomCredentials && (
+                <div className="form-group">
+                  <label className="form-label">كلمة المرور الحالية (لتأكيد التعديل) *</label>
+                  <input
+                    type={showPass ? 'text' : 'password'}
+                    className="form-input"
+                    dir="ltr"
+                    style={{ textAlign: 'left' }}
+                    placeholder="أدخل كلمة المرور الحالية"
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                    required
+                  />
+                </div>
+              )}
+
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
                 <div className="form-group">
                   <label className="form-label">كلمة المرور الجديدة *</label>
@@ -339,7 +358,7 @@ export default function WaitingOnboardingView({
                       className="form-input"
                       dir="ltr"
                       style={{ textAlign: 'left', paddingRight: 38 }}
-                      placeholder="4 أحرف أو أرقام على الأقل"
+                      placeholder="10 أحرف أو أرقام على الأقل"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       required

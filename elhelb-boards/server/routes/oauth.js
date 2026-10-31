@@ -9,6 +9,8 @@ const {
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
   isSecureRequest,
+  validatePasswordStrength,
+  decryptSecretValue,
   signUserToken,
   loadUserById,
   writeAudit,
@@ -30,7 +32,8 @@ function getGoogleCredentials() {
   const googleClientId =
     process.env.GOOGLE_CLIENT_ID || getSetting('google_client_id', '');
   const googleClientSecret =
-    process.env.GOOGLE_CLIENT_SECRET || getSetting('google_client_secret', '');
+    process.env.GOOGLE_CLIENT_SECRET ||
+    decryptSecretValue(getSetting('google_client_secret', ''));
 
   return {
     googleClientId: googleClientId.trim(),
@@ -106,11 +109,14 @@ function findOrCreateGoogleEmployee({
   oauthId,
   fullName,
   email,
+  emailVerifiedByGoogle = true,
   avatarUrl = null,
   preferredDepartmentId = null,
   req = null,
 }) {
-  const cleanEmail = String(email || '').trim().toLowerCase();
+  const cleanEmail = emailVerifiedByGoogle
+    ? String(email || '').trim().toLowerCase()
+    : '';
   const cleanName = String(fullName || '').trim();
 
   let existing = null;
@@ -121,18 +127,30 @@ function findOrCreateGoogleEmployee({
     );
   }
   if (!existing && cleanEmail) {
-    existing = get(
+    const candidate = get(
       `SELECT u.*, r.slug AS role_slug
        FROM users u
        JOIN roles r ON r.id = u.role_id
        WHERE LOWER(u.email) = LOWER(?)`,
       [cleanEmail]
     );
-    // Sovereign protection: never auto-link external OAuth into Chairman account
-    if (existing && existing.role_slug === 'chairman') {
-      const err = new Error('حساب رئيس مجلس الإدارة محمي بالدخول المباشر فقط ولا يقبل الربط التلقائي الخارجي');
-      err.statusCode = 403;
-      throw err;
+    if (candidate) {
+      // Sovereign protection: never auto-link external OAuth into Chairman account
+      if (candidate.role_slug === 'chairman') {
+        const err = new Error('حساب رئيس مجلس الإدارة محمي بالدخول المباشر فقط ولا يقبل الربط التلقائي الخارجي');
+        err.statusCode = 403;
+        throw err;
+      }
+      // Anti-Pre-Hijacking: NEVER auto-link Google login into a local account whose email was never verified!
+      // Detach the unverified squatter claim so the real verified Google owner gets a clean independent account.
+      if (Number(candidate.email_verified) === 1) {
+        existing = candidate;
+      } else {
+        run(
+          `UPDATE users SET email = NULL, email_verified = 0 WHERE id = ? AND email_verified = 0`,
+          [candidate.id]
+        );
+      }
     }
   }
 
@@ -252,10 +270,9 @@ router.post('/register', registerLimiter, async (req, res) => {
       });
     }
 
-    if (password.length < 6 || password.length > 128) {
-      return res.status(400).json({
-        error: 'كلمة المرور يجب أن تكون بين 6 و128 حرفاً أو رقماً',
-      });
+    const pwErr = validatePasswordStrength(password, rawUsername);
+    if (pwErr) {
+      return res.status(400).json({ error: pwErr });
     }
 
     const existingUsername = get(
@@ -297,7 +314,7 @@ router.post('/register', registerLimiter, async (req, res) => {
           avatar_color, auth_provider, email_verified,
           has_custom_credentials, department_confirmed,
           onboarding_status, preferred_department_id, role_id, department_id
-        ) VALUES (?, ?, ?, ?, '', '#15803d', 'local', 1, 1, 0, 'pending', NULL, ?, NULL)`,
+        ) VALUES (?, ?, ?, ?, '', '#15803d', 'local', 0, 1, 0, 'pending', NULL, ?, NULL)`,
         [rawUsername, cleanEmail, passwordHash, fullName, pendingRole.id]
       ).lastInsertRowid
     );
@@ -425,6 +442,7 @@ router.get('/oauth/google/callback', async (req, res) => {
       oauthId: profile.sub,
       fullName: profile.name || verifiedGoogleEmail || 'موظف Google',
       email: verifiedGoogleEmail,
+      emailVerifiedByGoogle: Boolean(verifiedGoogleEmail),
       avatarUrl: profile.picture || null,
       preferredDepartmentId: decodedState.d || null,
       req,
@@ -453,4 +471,5 @@ router.router = router;
 router.getGoogleCredentials = getGoogleCredentials;
 router.getOAuthCredentials = getGoogleCredentials;
 router.getBaseOrigin = getBaseOrigin;
+router.findOrCreateGoogleEmployee = findOrCreateGoogleEmployee;
 module.exports = router;

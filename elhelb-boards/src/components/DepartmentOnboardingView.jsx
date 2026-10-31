@@ -635,7 +635,7 @@ export default function DepartmentOnboardingView({ user, onRefreshMe, showToast 
                       className="form-input"
                       dir="ltr"
                       style={{ textAlign: 'left' }}
-                      placeholder="4+ أحرف أو أرقام"
+                      placeholder="10+ أحرف أو أرقام"
                       value={uForm.password}
                       onChange={(e) => setUForm({ ...uForm, password: e.target.value })}
                       required

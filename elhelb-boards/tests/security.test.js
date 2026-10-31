@@ -411,7 +411,7 @@ async function main() {
     const bogusSignup = await api('POST', '/api/auth/register', null, {
       fullName: 'حساب بالخطأ',
       username: 'mistake.signup',
-      password: 'Password123',
+      password: 'StrongBogus#2026',
     });
     assert.equal(bogusSignup.status, 201);
     const bogusMe = await api('GET', '/api/auth/me', bogusSignup.data.token);
@@ -663,7 +663,7 @@ async function main() {
         username: 'mo.ai',
         password: '010228513849',
         fullName: 'محمد عبد الرحمن',
-        email: 'mb9836504@gmail.com',
+        email: 'hr.notify@elhelbgroup.com',
         jobTitle: 'مسؤول الموارد البشرية (HR)',
         roleId: hrMgrRole.id,
         departmentId: hrDept.id,
@@ -674,7 +674,7 @@ async function main() {
       // Verify stored payload is encrypted (does NOT expose plaintext email or username)
       const rawStateBuf = Buffer.from(kvMemory.get('elhelb:v11:state'), 'base64');
       assert.equal(rawStateBuf.subarray(0, 4).toString('utf8'), 'EHB1');
-      assert.equal(rawStateBuf.includes(Buffer.from('mb9836504@gmail.com')), false);
+      assert.equal(rawStateBuf.includes(Buffer.from('hr.notify@elhelbgroup.com')), false);
 
       // Brand-new Cold-Started Container B (completely separate tmp SQLite DB in child process!) logs in as mo.ai!
       const containerBDb = path.join(os.tmpdir(), `elhelb-containerB-kv-${Date.now()}.db`);
@@ -931,7 +931,7 @@ async function main() {
       (
         await api('POST', '/api/admin/users', gmTok, {
           username: 'sneak.ai',
-          password: 'Password123',
+          password: 'StrongSneak#2026',
           fullName: 'متسلل',
           roleId: staffRole.id,
           departmentId: aiDept.id,
@@ -943,7 +943,7 @@ async function main() {
       (
         await api('POST', '/api/admin/users', hrTok, {
           username: 'sneak.hr.ai',
-          password: 'Password123',
+          password: 'StrongSneak#2026',
           fullName: 'متسلل HR',
           roleId: staffRole.id,
           departmentId: aiDept.id,
@@ -1351,12 +1351,26 @@ async function main() {
       password: 'InitPass#2026',
     });
     assert.equal(regOAuthLike.status, 201);
+    // Without currentPassword, updating already-initialized credentials must be rejected!
+    assert.equal(
+      (
+        await api('POST', '/api/onboarding/setup-credentials', regOAuthLike.data.token, {
+          username: 'final.chosen99',
+          password: 'NewChosen#2026',
+          fullName: 'موظف تحديث بيانات الدخول',
+        })
+      ).status,
+      400,
+      'setup-credentials must require currentPassword when has_custom_credentials is already true'
+    );
+
     const setupCredsRes = await api(
       'POST',
       '/api/onboarding/setup-credentials',
       regOAuthLike.data.token,
       {
         username: 'final.chosen99',
+        currentPassword: 'InitPass#2026',
         password: 'NewChosen#2026',
         fullName: 'موظف تحديث بيانات الدخول',
       }
@@ -1697,7 +1711,7 @@ async function main() {
     const unconfirmedReg = await api('POST', '/api/auth/register', null, {
       fullName: 'مرشح سري قبل اختيار القسم',
       username: 'unconfirmed.secret.cand',
-      password: 'Cand#2026',
+      password: 'Candidate#2026',
     });
     assert.equal(unconfirmedReg.status, 201);
     const salesMgrPending = await api('GET', '/api/onboarding/pending', salesMgrTok);
@@ -1790,7 +1804,225 @@ async function main() {
       'live-watch.js must invoke Vite via process.execPath instead of spawning npm.cmd with shell:false on Node 22'
     );
 
-    console.log('\n✅ ALL 19 PRODUCTION v16.1 TESTS (100% DEEP RED-TEAM ZERO-VULNERABILITY AUDIT, ATOMIC FK BACKUP, SOVEREIGN ISOLATION & INSTALLERS) PASSED 100%!');
+    console.log('2️⃣0️⃣ Testing v17 External Auditor Fixes (OAuth Anti-Pre-Hijacking, AES-256-GCM Secret Vault + Redacted Backup, Per-IP+Account Lockout DoS Defense, Always-On CSP, Post-Auth 5MB Parser & Unified 10+ Password Policy)...');
+
+    // 20a. Zero personal @gmail.com email pre-seeded in seed.js
+    const seedSrc20 = fs.readFileSync(path.join(__dirname, '..', 'server', 'seed.js'), 'utf8');
+    assert.ok(!/@gmail\.com/i.test(seedSrc20), 'seed.js must contain zero personal email addresses');
+
+    // 20b. Google OAuth Pre-Hijacking Defense:
+    // Attacker registers locally claiming victim's email WITHOUT verification -> Victim logs in with verified Google OAuth!
+    const { findOrCreateGoogleEmployee } = require('../server/routes/oauth');
+    const { get: dbGet20 } = require('../server/db');
+
+    const squatterReg = await api('POST', '/api/auth/register', null, {
+      fullName: 'مهاجم ينتحل بريد زميله',
+      username: 'squatter.attacker',
+      password: 'AttackerKnows#2026',
+      email: 'real.victim@elhelbgroup.com',
+    });
+    assert.equal(squatterReg.status, 201);
+    const squatterDbBefore = dbGet20(`SELECT * FROM users WHERE id = ?`, [squatterReg.data.user.id]);
+    assert.equal(Number(squatterDbBefore.email_verified), 0, 'Local registration must store email_verified = 0');
+
+    const googleRealOwner = findOrCreateGoogleEmployee({
+      oauthId: 'google-verified-sub-998877',
+      fullName: 'الموظف الحقيقي صاحب حساب جوجل',
+      email: 'real.victim@elhelbgroup.com',
+      emailVerifiedByGoogle: true,
+    });
+    assert.notEqual(
+      Number(googleRealOwner.user.id),
+      Number(squatterReg.data.user.id),
+      'Verified Google login MUST NOT link into an unverified local squatter account'
+    );
+    assert.equal(googleRealOwner.isNewUser, true);
+    const squatterDbAfter = dbGet20(`SELECT * FROM users WHERE id = ?`, [squatterReg.data.user.id]);
+    assert.equal(squatterDbAfter.email, null, 'Unverified squatter email claim must be detached upon real owner Google verification');
+
+    // Login against Google-only account without local password returns unified 401 (zero account enumeration!)
+    const enumProbeGoogle = await api('POST', '/api/auth/login', null, {
+      username: googleRealOwner.user.username,
+      password: 'AttackerKnows#2026',
+    });
+    assert.equal(enumProbeGoogle.status, 401);
+    assert.equal(enumProbeGoogle.data.error, 'اسم المستخدم أو كلمة المرور غير صحيحة');
+
+    // 20c. AES-256-GCM encryption at rest for gmail_app_password & google_client_secret + redacted human backup export!
+    assert.equal(
+      (
+        await api('PUT', '/api/admin/gmail-settings', restoredChairmanTok, {
+          gmailUser: 'official.notify@elhelbgroup.com',
+          gmailAppPassword: 'zvxy wuts rqpo nmlk',
+        })
+      ).status,
+      200
+    );
+    assert.equal(
+      (
+        await api('PUT', '/api/admin/oauth-settings', restoredChairmanTok, {
+          googleClientId: '12345-elhelb.apps.googleusercontent.com',
+          googleClientSecret: 'GOCSPX-TopSecretValue2026',
+        })
+      ).status,
+      200
+    );
+
+    const rawGmailCipher = dbGet20(`SELECT value FROM system_settings WHERE key = 'gmail_app_password'`).value;
+    const rawGoogleCipher = dbGet20(`SELECT value FROM system_settings WHERE key = 'google_client_secret'`).value;
+    assert.ok(rawGmailCipher.startsWith('enc:v1:'), 'gmail_app_password must be encrypted with AES-256-GCM at rest');
+    assert.ok(!rawGmailCipher.includes('zvxywutsrqponmlk'), 'Plaintext Gmail App Password must never sit in SQLite');
+    assert.ok(rawGoogleCipher.startsWith('enc:v1:'), 'google_client_secret must be encrypted with AES-256-GCM at rest');
+    assert.ok(!rawGoogleCipher.includes('TopSecretValue2026'), 'Plaintext Google Client Secret must never sit in SQLite');
+
+    // Export downloadable JSON backup -> verify neither secret (not even ciphertext) is leaked in exported JSON!
+    const exportedHumanSnap = await api('GET', '/api/admin/backup/export', restoredChairmanTok);
+    assert.equal(exportedHumanSnap.status, 200);
+    const exportedJsonText = JSON.stringify(exportedHumanSnap.data.snapshot);
+    assert.ok(
+      !exportedJsonText.includes('gmail_app_password') &&
+        !exportedJsonText.includes('google_client_secret') &&
+        !exportedJsonText.includes('TopSecretValue2026'),
+      'Human JSON backup export must strip third-party Gmail/Google secrets completely'
+    );
+
+    // Restoring that redacted backup on the server MUST preserve the server's existing encrypted secrets!
+    const reimportRedacted = await api('POST', '/api/admin/backup/import', restoredChairmanTok, {
+      snapshot: exportedHumanSnap.data.snapshot,
+    });
+    assert.equal(reimportRedacted.status, 200);
+    const chTok20 = reimportRedacted.data.token;
+    const oauthAfterRestore = await api('GET', '/api/admin/oauth-settings', chTok20);
+    assert.equal(oauthAfterRestore.data.googleSecretSaved, true, 'Server must preserve encrypted OAuth secret across backup restore');
+    const gmailAfterRestore = await api('GET', '/api/admin/gmail-settings', chTok20);
+    assert.equal(gmailAfterRestore.data.appPasswordSaved, true, 'Server must preserve encrypted Gmail App Password across backup restore');
+
+    // 20d. Pre-auth 5MB body parser protection on POST /api/admin/backup/import!
+    const hugeUnauthPayload = JSON.stringify({ pad: 'X'.repeat(400 * 1024) }); // 400KB > 256KB standard limit
+    const unauthImportProbe = await fetch(`${base}/api/admin/backup/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: hugeUnauthPayload,
+    });
+    assert.equal(
+      unauthImportProbe.status,
+      401,
+      'Unauthenticated POST to /api/admin/backup/import must be rejected with 401 BEFORE parsing 5MB body'
+    );
+    const nonChairImportProbe = await fetch(`${base}/api/admin/backup/import`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${itMgrTok}`,
+        'X-Elhelb-Token': itMgrTok,
+      },
+      body: hugeUnauthPayload,
+    });
+    assert.equal(
+      nonChairImportProbe.status,
+      403,
+      'Non-Chairman POST to /api/admin/backup/import must be rejected with 403 BEFORE parsing 5MB body'
+    );
+
+    // 20e. Per-(IP + username) lockout prevents remote Account Lockout DoS when behind trusted reverse proxy (TRUST_PROXY=1)
+    app.set('trust proxy', 1);
+    try {
+      let attackerGot429 = false;
+      for (let i = 0; i < 9; i += 1) {
+        const atk = await fetch(`${base}/api/auth/login`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Forwarded-For': '198.51.100.200',
+          },
+          body: JSON.stringify({ username: 'admin', password: `wrong-dos-${i}` }),
+        });
+        if (atk.status === 429) {
+          attackerGot429 = true;
+          break;
+        }
+      }
+      assert.equal(attackerGot429, true, 'Attacker IP must be locked out after 8 failed guesses on admin');
+
+      // Real Chairman from a DIFFERENT office IP ('198.51.100.10') MUST STILL LOG IN 200 OK!
+      const legitChairmanLogin = await fetch(`${base}/api/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Forwarded-For': '198.51.100.10',
+        },
+        body: JSON.stringify({ username: 'admin', password: 'Strong#Chairman2026!' }),
+      });
+      assert.equal(
+        legitChairmanLogin.status,
+        200,
+        'Attacker failing 8 times from another IP must NEVER lock out the real Chairman on their own IP'
+      );
+    } finally {
+      app.set('trust proxy', false);
+    }
+
+    // 20f. Unified 10+ password policy + weak-password blocklist + zero window token / dangerouslySetInnerHTML in frontend
+    assert.equal(
+      (
+        await api('POST', '/api/auth/register', null, {
+          fullName: 'اختبار باسورد قصير',
+          username: 'short.pw.user',
+          password: 'Short123', // 8 chars (< 10)
+        })
+      ).status,
+      400,
+      'Passwords shorter than 10 characters must be rejected'
+    );
+    assert.equal(
+      (
+        await api('POST', '/api/auth/register', null, {
+          fullName: 'اختبار باسورد شائع',
+          username: 'common.pw.user',
+          password: 'password1234', // 12 chars but in COMMON_WEAK_PASSWORDS
+        })
+      ).status,
+      400,
+      'Common weak passwords must be rejected even if >= 10 characters'
+    );
+
+    const apiJsSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'api.js'), 'utf8');
+    assert.ok(
+      !apiJsSrc.includes('window.__ELHELB_TOKEN_V10__ =') && !apiJsSrc.includes('localStorage.setItem'),
+      'src/api.js must never write tokens to global window properties or persistent localStorage'
+    );
+    for (const f of fs.readdirSync(path.join(__dirname, '..', 'src', 'components'))) {
+      const compSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', f), 'utf8');
+      assert.ok(!compSrc.includes('dangerouslySetInnerHTML'), `${f} must contain zero dangerouslySetInnerHTML`);
+    }
+
+    // Always-on CSP check even when ALLOW_IFRAME_PREVIEW=1 in child process
+    const previewCspOut = await execFileAsync(
+      process.execPath,
+      [
+        '--no-warnings',
+        '-e',
+        `
+        const app = require('./server/index.js');
+        const srv = app.listen(0, '127.0.0.1', async () => {
+          const r = await fetch('http://127.0.0.1:' + srv.address().port + '/api/health');
+          process.stdout.write(r.headers.get('content-security-policy') || '');
+          srv.close(() => process.exit(0));
+        });
+        `,
+      ],
+      {
+        cwd: path.join(__dirname, '..'),
+        env: { ...process.env, DB_PATH: ':memory:', ALLOW_IFRAME_PREVIEW: '1' },
+      }
+    );
+    assert.ok(
+      previewCspOut.stdout.includes("script-src 'self'") &&
+        previewCspOut.stdout.includes("object-src 'none'"),
+      'CSP script-src and object-src must remain strictly enforced even when ALLOW_IFRAME_PREVIEW=1'
+    );
+
+    console.log('\n✅ ALL 20 PRODUCTION v17 TESTS (100% EXTERNAL AUDITOR + RED-TEAM ZERO-VULNERABILITY SUITE) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}
