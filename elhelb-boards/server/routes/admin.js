@@ -16,6 +16,7 @@ const {
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
   isSecureRequest,
+  validateEmployeeFullName,
   validatePasswordStrength,
   encryptSecretValue,
   signUserToken,
@@ -69,10 +70,10 @@ function deleteUserCompletely(targetId) {
     const sovereignMembership = get(
       `SELECT 1 AS ok
        FROM users u
-       LEFT JOIN departments d ON d.id = u.department_id
-       LEFT JOIN departments pd ON pd.id = u.preferred_department_id
+       JOIN departments d ON d.id = u.department_id
        WHERE u.id = ?
-         AND (COALESCE(d.is_chairman_exclusive, 0) = 1 OR COALESCE(pd.is_chairman_exclusive, 0) = 1)`,
+         AND u.onboarding_status = 'approved'
+         AND COALESCE(d.is_chairman_exclusive, 0) = 1`,
       [targetId]
     );
     if (sovereignMembership) {
@@ -185,6 +186,24 @@ router.post('/roles', (req, res) => {
 
   const validKeys = new Set(all(`SELECT key FROM permissions`).map((p) => p.key));
   const filteredKeys = [...new Set(permKeys.filter((k) => validKeys.has(k)))];
+
+  // Anti-Privilege-Amplification: non-Chairman callers cannot grant permissions they do not possess
+  if (
+    req.user.role_slug !== 'chairman' &&
+    !filteredKeys.every((k) => req.user.permissionSet.has(k))
+  ) {
+    writeAudit({
+      user: req.user,
+      action: `محاولة إنشاء دور بصلاحيات لا يملكها المعدّل (${name})`,
+      permissionKey: 'roles.manage',
+      status: 'DENIED',
+      req,
+    });
+    return res.status(403).json({
+      error: 'حماية الصلاحيات: لا يمكنك منح صلاحيات لدور جديد لا يملكها دورك الوظيفي الحالي',
+    });
+  }
+
   const slug = `${makeSlug(body.slug || name, 'role')}-${Date.now().toString(36).slice(-4)}`;
 
   let roleId;
@@ -275,11 +294,33 @@ router.put('/roles/:id(\\d+)', (req, res) => {
   }
 
   const validKeys = new Set(all(`SELECT key FROM permissions`).map((p) => p.key));
+  const currentRolePerms = all(`SELECT permission_key FROM role_permissions WHERE role_id = ?`, [
+    role.id,
+  ]).map((r) => r.permission_key);
+  const currentRolePermSet = new Set(currentRolePerms);
   const nextKeys = Array.isArray(body.permissions)
     ? [...new Set(body.permissions.map(String).filter((k) => validKeys.has(k)))]
-    : all(`SELECT permission_key FROM role_permissions WHERE role_id = ?`, [role.id]).map(
-        (r) => r.permission_key
-      );
+    : currentRolePerms;
+
+  // Anti-Privilege-Amplification: non-Chairman callers cannot add any permission they do not hold themselves
+  if (req.user.role_slug !== 'chairman') {
+    const unauthorizedAdditions = nextKeys.filter(
+      (k) => !currentRolePermSet.has(k) && !req.user.permissionSet.has(k)
+    );
+    if (unauthorizedAdditions.length > 0) {
+      writeAudit({
+        user: req.user,
+        action: `محاولة تضخيم صلاحيات دور (${role.name}) بإضافة صلاحية لا يملكها المعدّل`,
+        permissionKey: 'roles.manage',
+        status: 'DENIED',
+        req,
+        details: unauthorizedAdditions.join(', '),
+      });
+      return res.status(403).json({
+        error: 'حماية الصلاحيات: لا يمكنك إضافة صلاحية لدور آخر لا يملكها حسابك الحالي',
+      });
+    }
+  }
 
   // Sovereign protection: Chairman role can NEVER lose core sovereign permissions
   if (role.slug === 'chairman') {
@@ -479,9 +520,14 @@ router.post('/users', async (req, res) => {
   if (pwErr) {
     return res.status(400).json({ error: pwErr });
   }
-  if (fullName.length < 2 || fullName.length > 100) {
-    return res.status(400).json({ error: 'الاسم الكامل للموظف مطلوب' });
+  const nameCheck = validateEmployeeFullName(fullName, {
+    allowExecutiveTitles: req.user.role_slug === 'chairman',
+    minLen: 2,
+  });
+  if (!nameCheck.ok) {
+    return res.status(400).json({ error: nameCheck.error });
   }
+  const safeFullName = nameCheck.clean;
 
   const dup = get(`SELECT id FROM users WHERE LOWER(username) = LOWER(?)`, [username]);
   if (dup) {
@@ -534,7 +580,7 @@ router.post('/users', async (req, res) => {
       username,
       email,
       hash,
-      fullName,
+      safeFullName,
       jobTitle,
       avatarColor,
       onboardingStatus,
@@ -551,7 +597,7 @@ router.post('/users', async (req, res) => {
     permissionKey: 'users.manage',
     status: 'ALLOWED',
     req,
-    details: `${fullName} (@${username}) — دور: ${role.name} — قسم: ${dept ? dept.name : 'عام'}`,
+    details: `${safeFullName} (@${username}) — دور: ${role.name} — قسم: ${dept ? dept.name : 'عام'}`,
     departmentId: dept ? dept.id : null,
     isChairmanExclusive: Boolean(dept && Number(dept.is_chairman_exclusive)),
   });
@@ -628,9 +674,14 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
   const isActive =
     body.isActive !== undefined ? (body.isActive ? 1 : 0) : existing.is_active;
 
-  if (fullName.length < 2 || fullName.length > 100) {
-    return res.status(400).json({ error: 'الاسم الكامل للموظف مطلوب (بين حرفين و100 حرف)' });
+  const nameCheck = validateEmployeeFullName(fullName, {
+    allowExecutiveTitles: req.user.role_slug === 'chairman',
+    minLen: 2,
+  });
+  if (!nameCheck.ok) {
+    return res.status(400).json({ error: nameCheck.error });
   }
+  const safeFullName = nameCheck.clean;
   if (email) {
     if (!isDeliverableEmail(email)) {
       return res.status(400).json({ error: 'صيغة البريد الإلكتروني غير صحيحة' });
@@ -646,6 +697,20 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
 
   if (targetId === req.user.id && !isActive) {
     return res.status(400).json({ error: 'لا يمكنك إيقاف حسابك الشخصي أثناء تسجيل دخولك' });
+  }
+
+  // Prevent self-modification of role or department to stop department-isolated admins (e.g. HR) from hopping departments!
+  if (targetId === req.user.id && req.user.role_slug !== 'chairman') {
+    if (Number(roleId) !== Number(existing.role_id)) {
+      return res.status(403).json({
+        error: 'حماية الصلاحيات: لا يمكنك تغيير دورك الوظيفي بنفسك؛ يرجى مراجعة مستوى إداري أعلى',
+      });
+    }
+    if (Number(departmentId || 0) !== Number(existing.department_id || 0)) {
+      return res.status(403).json({
+        error: 'حماية عزل الأقسام: لا يمكنك نقل حسابك إلى قسم آخر بنفسك للحفاظ على سرية لوحات الأقسام',
+      });
+    }
   }
 
   if (existing.current_role_slug === 'chairman' && !isActive) {
@@ -717,6 +782,26 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
   let bumpToken = !isActive && existing.is_active ? 1 : 0;
 
   if (body.newPassword && String(body.newPassword).length > 0) {
+    // Department-isolated managers (e.g. HR without boards.view_all) cannot reset passwords of approved employees in other departments
+    if (
+      targetId !== req.user.id &&
+      !req.user.permissionSet.has('boards.view_all') &&
+      existing.onboarding_status === 'approved' &&
+      Number(existing.department_id || 0) !== Number(req.user.department_id || -1)
+    ) {
+      writeAudit({
+        user: req.user,
+        action: `محاولة إعادة تعيين كلمة مرور موظف في قسم آخر (${existing.full_name} — @${existing.username})`,
+        permissionKey: 'users.manage',
+        status: 'DENIED',
+        req,
+      });
+      return res.status(403).json({
+        error:
+          'حماية عزل الأقسام: إعادة تعيين كلمة مرور موظف معتمد خارج قسمك متاحة لمسؤولي الـ IT والإدارة العليا فقط لمنع كشف لوحات الأقسام',
+      });
+    }
+
     const nextPass = String(body.newPassword);
     const pwErr = validatePasswordStrength(nextPass, existing.username);
     if (pwErr) {
@@ -746,7 +831,7 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
            is_active = ?, password_hash = ?, token_version = token_version + ?
        WHERE id = ?`,
       [
-        fullName,
+        safeFullName,
         email,
         nextEmailVerified,
         jobTitle,
@@ -774,7 +859,7 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
     permissionKey: 'users.manage',
     status: 'ALLOWED',
     req,
-    details: `${fullName} — الدور: ${role.name} — الحالة: ${isActive ? 'نشط' : 'موقوف'}`,
+    details: `${safeFullName} (@${existing.username}) — الدور: ${role.name} — الحالة: ${isActive ? 'نشط' : 'موقوف'}`,
     departmentId: departmentId || existing.department_id,
     isChairmanExclusive: Boolean(
       Number(existing.current_dept_exclusive) || Number(existing.pref_dept_exclusive)
@@ -1309,10 +1394,10 @@ router.get('/audit-logs', (req, res) => {
     where.push(
       `NOT EXISTS (
         SELECT 1 FROM users u
-        LEFT JOIN departments d ON d.id = u.department_id
-        LEFT JOIN departments pd ON pd.id = u.preferred_department_id
+        JOIN departments d ON d.id = u.department_id
         WHERE u.id = al.actor_id
-          AND (COALESCE(d.is_chairman_exclusive, 0) = 1 OR COALESCE(pd.is_chairman_exclusive, 0) = 1)
+          AND u.onboarding_status = 'approved'
+          AND COALESCE(d.is_chairman_exclusive, 0) = 1
       )`
     );
   }

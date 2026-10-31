@@ -9,6 +9,8 @@ const {
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
   isSecureRequest,
+  sanitizeDisplayText,
+  validateEmployeeFullName,
   validatePasswordStrength,
   decryptSecretValue,
   signUserToken,
@@ -22,7 +24,7 @@ const router = express.Router();
 
 const registerLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 40,
+  max: process.env.NODE_ENV === 'test' ? 60 : 8,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'محاولات تسجيل كثيرة جداً، يرجى الانتظار قليلاً والمحاولة مرة أخرى' },
@@ -117,7 +119,13 @@ function findOrCreateGoogleEmployee({
   const cleanEmail = emailVerifiedByGoogle
     ? String(email || '').trim().toLowerCase()
     : '';
-  const cleanName = String(fullName || '').trim();
+  const nameCheck = validateEmployeeFullName(fullName, {
+    allowExecutiveTitles: false,
+    minLen: 2,
+  });
+  const cleanName = nameCheck.ok
+    ? nameCheck.clean
+    : sanitizeDisplayText(cleanEmail.split('@')[0] || 'موظف Google', 60) || 'موظف Google';
 
   let existing = null;
   if (oauthId) {
@@ -182,9 +190,10 @@ function findOrCreateGoogleEmployee({
   const pendingRole = getOrCreatePendingRole();
   let validPrefDept = null;
   if (preferredDepartmentId) {
-    validPrefDept = get(`SELECT * FROM departments WHERE id = ?`, [
-      Number(preferredDepartmentId),
-    ]);
+    validPrefDept = get(
+      `SELECT * FROM departments WHERE id = ? AND COALESCE(is_chairman_exclusive, 0) = 0`,
+      [Number(preferredDepartmentId)]
+    );
   }
 
   const username = generateUniqueUsername(cleanEmail || cleanName, 'google');
@@ -229,10 +238,13 @@ router.get('/oauth/providers', (req, res) => {
   const gmailCfg = getGmailConfig();
   const origin = getBaseOrigin(req);
   const departments = all(
-    `SELECT id, slug, name, color, is_chairman_exclusive FROM departments ORDER BY id ASC`
+    `SELECT id, slug, name, color, is_chairman_exclusive
+     FROM departments
+     WHERE COALESCE(is_chairman_exclusive, 0) = 0
+     ORDER BY id ASC`
   ).map((d) => ({
     ...d,
-    is_chairman_exclusive: Boolean(Number(d.is_chairman_exclusive)),
+    is_chairman_exclusive: false,
   }));
 
   res.json({
@@ -249,7 +261,14 @@ router.get('/oauth/providers', (req, res) => {
 router.post('/register', registerLimiter, async (req, res) => {
   try {
     const body = req.body || {};
-    const fullName = String(body.fullName || '').trim();
+    const nameCheck = validateEmployeeFullName(body.fullName, {
+      allowExecutiveTitles: false,
+      minLen: 3,
+    });
+    if (!nameCheck.ok) {
+      return res.status(400).json({ error: nameCheck.error });
+    }
+    const fullName = nameCheck.clean;
     const rawUsername = String(body.username || '')
       .trim()
       .toLowerCase();
@@ -257,12 +276,6 @@ router.post('/register', registerLimiter, async (req, res) => {
     const rawEmail = String(body.email || '')
       .trim()
       .toLowerCase();
-
-    if (fullName.length < 3) {
-      return res.status(400).json({
-        error: 'يرجى كتابة الاسم الكامل للموظف (3 أحرف على الأقل)',
-      });
-    }
 
     if (!/^[a-z0-9_.-]{3,32}$/.test(rawUsername)) {
       return res.status(400).json({

@@ -14,53 +14,50 @@
    cd elhelb-boards
    ```
 2. شغّل سكريبت التثبيت الآلي بأمر واحد:
-   - **للتشغيل عبر IP السيرفر (`http://SERVER_IP:3000`):**
-     ```bash
-     sudo bash setup-from-zip.sh
-     ```
-   - **أو للتشغيل على دومين رسمي بشهادة `HTTPS` تلقائية (بعد توجيه `A Record` لـ IP السيرفر):**
+   - **للتشغيل على دومين رسمي بشهادة `HTTPS` عامة تلقائية (بعد توجيه `A Record` لـ IP السيرفر):**
      ```bash
      sudo DOMAIN=boards.elhelbgroup.com bash setup-from-zip.sh
      ```
+   - **أو للتشغيل عبر IP السيرفر مباشرةً بتشفير `HTTPS` داخلي (`https://SERVER_IP`):**
+     ```bash
+     sudo bash setup-from-zip.sh
+     ```
+   - *(اختياري)* يمكنك تمرير كلمة مرور مبدئية مخصصة لحساب `admin` عند أول تثبيت:
+     ```bash
+     sudo ADMIN_INIT_PASSWORD='YourStrongPassword#2026' DOMAIN=boards.elhelbgroup.com bash setup-from-zip.sh
+     ```
+     وإذا لم تمررها، سيقوم السكريبت بتوليد كلمة مرور عشوائية قوية فريدة لهذا السيرفر فقط وعرضها على الشاشة مرة واحدة وحفظها بصلاحية `0600` في `/opt/elhelb-data/.admin_init_password`.
 
 ### ماذا يجهّز السكريبت تلقائياً؟
-- تثبيت **Node.js 22 LTS** وتفعيل خدمة نظام **`systemd`** محمية (`elhelb-boards.service`) تعمل بمستخدم نظام معزول محدود الصلاحيات (**`User=elhelb`** مع `NoNewPrivileges=true` و `ProtectSystem=full` بدون صلاحية `root`).
-- توليد مفتاح تشفير جلسات فريد 384-bit (`JWT_SECRET`) وحفظه بصلاحية `0600` في `/opt/elhelb-data/.jwt_secret`.
-- عزل قاعدة البيانات في مسار دائم مستقل بصلاحية `0700`: **`/opt/elhelb-data/elhelb-boards.db`** مع حفظ تلقائي آمن عند أي إعادة تشغيل (`SIGTERM` WAL Checkpoint).
-- أخذ نسخة احتياطية يومية تلقائية الساعة 3:00 صباحاً محمية بـ `flock` داخل: **`/opt/elhelb-backups/`**.
-- أوامر الفحص والمتابعة لقسم الـ IT:
-  - فحص الجاهزية الإنتاجية الذاتي: `npm run verify`
-  - حالة الخدمة: `sudo systemctl status elhelb-boards`
-  - السجلات الحية: `sudo journalctl -u elhelb-boards -f`
-  - إعادة التشغيل: `sudo systemctl restart elhelb-boards`
+- تثبيت **Node.js 22 LTS** وبناء الواجهة بمستخدم محدود الصلاحيات (`elhelb` مع `--ignore-scripts`)، ثم قفل ملفات الكود للقراءة فقط وتفعيل خدمة **`systemd`** محمية (`NoNewPrivileges=true` و `ProtectSystem=full`).
+- ربط تطبيق Node داخلياً بـ `127.0.0.1:3000` فقط وتأمين الاتصال الخارجي عبر **Caddy HTTPS** (`443/TCP`) حتى لا تمر بيانات الدخول بدون تشفير أبداً.
+- توليد مفاتيح تشفير مستقلة 384-bit (`JWT_SECRET` و `SETTINGS_ENCRYPTION_KEY`) بصلاحية `0600` داخل `/opt/elhelb-data/`.
+- عزل قاعدة البيانات في **`/opt/elhelb-data/elhelb-boards.db`** وأخذ نسخة احتياطية يومية تلقائية الساعة 3:00 صباحاً داخل **`/opt/elhelb-backups/`**.
 
 ---
 
 ## الخيار 2: التشغيل عبر Docker / Docker Compose 🐳
 
-إذا كان السيرفر يعمل بـ Docker:
 ```bash
 unzip -q elhelb-boards-server.zip
 cd elhelb-boards
 docker compose up -d --build
 ```
-- يعمل التطبيق داخل الحاوية بمستخدم محدود الصلاحيات (**`USER node`**) وليس `root`.
-- تولّد الحاوية تلقائياً مفتاح `JWT_SECRET` فريداً داخل Volume البيانات (`/data/.jwt_secret`) عند أول إقلاع، ويرفض خادم الإنتاج العمل بدون مفتاح تشفير صالح.
-- يعمل النظام على المنفذ **`3000`** (`http://SERVER_IP:3000`) ويحفظ قاعدة البيانات بشكل دائم داخل Docker Volume باسم **`elhelb_boards_data`**.
+- يعمل التطبيق داخل الحاوية بمستخدم محدود الصلاحيات (**`USER node`**) مع `--ignore-scripts`.
+- يرتبط افتراضياً بـ **`127.0.0.1:3000`** ليُمرَّر خلف بوابة HTTPS (Nginx / Caddy)، ويولّد تلقائياً `JWT_SECRET` وكلمة مرور `admin` المبدئية في Docker Volume (`/data/.admin_init_password` — تظهر في `docker logs elhelb-boards` عند أول إقلاع).
 
 ---
 
-## الخيار 3: سيرفر Windows Server (داخلي أو سحابي) 🪟
+## الخيار 3: سيرفر Windows Server 🪟
 
-1. ثبّت **Node.js 22 LTS (64-bit)** من الموقع الرسمي: `https://nodejs.org/`.
-2. فك ضغط الملف وافتح مجلد `elhelb-boards` ثم اضغط مرتين على:
-   **`start-windows-server.bat`**
-3. سيقوم الملف تلقائياً بالتحقق من إصدار Node 22+، وتثبيت الحزم لأول مرة، وتوليد مفتاح `JWT_SECRET` الفريد في `data\.jwt_secret`، وتشغيل المنصة على `http://SERVER_IP:3000` مع حفظ قاعدة البيانات في `data\elhelb-boards.db`.
+1. ثبّت **Node.js 22 LTS (64-bit)** من `https://nodejs.org/`.
+2. شغّل **`start-windows-server.bat`**؛ سيولّد تلقائياً `data\.jwt_secret` و `data\.admin_init_password` ويربط الخدمة محلياً بـ `127.0.0.1:3000` لربطها خلف IIS / Caddy بشهادة HTTPS.
 
 ---
 
-## 🔒 متغيرات البيئة الاختيارية والجدار الناري (Firewall)
-- راجع ملف `.env.example` للاطلاع على كافة المتغيرات المدعومة (`PORT`, `DB_PATH`, `JWT_SECRET`, `PUBLIC_BASE_URL`, `ADMIN_INIT_PASSWORD`, `TRUST_PROXY`).
-- في حالة التشغيل المباشر بدون دومين: افتح المنفذ **`3000/TCP`** فقط.
-- في حالة تفعيل الدومين وشهادة SSL عبر Caddy: السكريبت يربط السيرفر الداخلي بـ `127.0.0.1:3000` تلقائياً، لذا افتح المنفذين **`80/TCP`** و **`443/TCP`** فقط.
-- الحساب السيادي لرئيس مجلس الإدارة (`admin`) مهيأ مسبقاً ومشفر (`bcrypt` cost 12) لتسليمه لإدارة المجموعة فور رفع السيرفر.
+## 🔒 النشر السحابي (Vercel / Render / Railway)
+عند النشر على منصة سحابية، أضف المتغيرات السرية التالية في إعدادات البيئة (Environment Variables):
+- **`JWT_SECRET`**: مفتاح عشوائي لا يقل عن 32 حرفاً (مستقل تماماً عن مفاتيح التخزين).
+- **`ADMIN_INIT_PASSWORD`**: كلمة المرور الأولية لحساب `admin` (10 أحرف فأكثر).
+- **`ADMIN_RESET_PASSWORD`** *(اختياري للطوارئ فقط)*: إذا أردت إعادة تعيين كلمة مرور `admin` على قاعدة بيانات قائمة، أضفه وأعد التشغيل ثم احذفه بعد الدخول.
+- **`TRUST_PROXY`**: القيمة `1`.

@@ -28,6 +28,7 @@ function computeBoardCapabilities(user, board) {
   const ctx = {
     departmentId: board.department_id,
     boardId: board.id,
+    departmentChairmanExclusive: board.department_chairman_exclusive,
   };
   return {
     canEditBoard: evaluatePermission(user, 'boards.edit', ctx).allowed,
@@ -118,7 +119,7 @@ router.get('/boards/executive-summary', (req, res) => {
   });
 });
 
-// List ONLY boards the user is genuinely allowed to access
+// List ONLY boards the user is genuinely allowed to access (single batched aggregate query — zero N+1)
 router.get('/boards', (req, res) => {
   const allBoards = all(
     `SELECT b.*,
@@ -128,13 +129,26 @@ router.get('/boards', (req, res) => {
             d.icon AS department_icon,
             d.is_chairman_exclusive AS department_chairman_exclusive,
             u.full_name AS creator_name,
-            (SELECT COUNT(*) FROM lists l WHERE l.board_id = b.id) AS lists_count,
-            (SELECT COUNT(*) FROM cards c WHERE c.board_id = b.id) AS cards_count,
-            (SELECT COUNT(*) FROM cards c WHERE c.board_id = b.id AND c.is_completed = 1) AS completed_cards_count,
-            EXISTS(SELECT 1 FROM board_stars s WHERE s.board_id = b.id AND s.user_id = ?) AS is_starred
+            COALESCE(lc.lists_count, 0) AS lists_count,
+            COALESCE(cc.cards_count, 0) AS cards_count,
+            COALESCE(cc.completed_cards_count, 0) AS completed_cards_count,
+            CASE WHEN st.user_id IS NOT NULL THEN 1 ELSE 0 END AS is_starred
      FROM boards b
      JOIN departments d ON d.id = b.department_id
      LEFT JOIN users u ON u.id = b.created_by
+     LEFT JOIN (
+       SELECT board_id, COUNT(*) AS lists_count
+       FROM lists
+       GROUP BY board_id
+     ) lc ON lc.board_id = b.id
+     LEFT JOIN (
+       SELECT board_id,
+              COUNT(*) AS cards_count,
+              SUM(CASE WHEN is_completed = 1 THEN 1 ELSE 0 END) AS completed_cards_count
+       FROM cards
+       GROUP BY board_id
+     ) cc ON cc.board_id = b.id
+     LEFT JOIN board_stars st ON st.board_id = b.id AND st.user_id = ?
      WHERE b.is_archived = 0
      ORDER BY is_starred DESC, b.id ASC`,
     [req.user.id]

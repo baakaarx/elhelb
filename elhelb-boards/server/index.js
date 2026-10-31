@@ -23,7 +23,14 @@ runUntracked(() => {
 });
 
 const app = express();
-if (process.env.TRUST_PROXY === '1' || process.env.VERCEL) {
+const managedCloudProxy = Boolean(
+  process.env.VERCEL ||
+    process.env.RENDER ||
+    process.env.RAILWAY_ENVIRONMENT ||
+    process.env.RAILWAY_PROJECT_ID ||
+    process.env.FLY_APP_NAME
+);
+if (process.env.TRUST_PROXY === '1' || (process.env.TRUST_PROXY !== '0' && managedCloudProxy)) {
   app.set('trust proxy', 1);
 }
 app.set('etag', false);

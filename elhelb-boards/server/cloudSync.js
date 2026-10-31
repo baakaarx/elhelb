@@ -18,14 +18,38 @@ let detectedBlobAccessMode = 'private';
 let tursoTableInitialized = false;
 let lastSyncError = '';
 
+function resolveIndependentEncryptionSecret() {
+  const dedicated = (
+    process.env.CLOUD_ENCRYPTION_KEY ||
+    process.env.SETTINGS_ENCRYPTION_KEY ||
+    process.env.JWT_SECRET ||
+    ''
+  ).trim();
+  if (dedicated.length >= 16) {
+    return dedicated;
+  }
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'FATAL SECURITY ERROR: CLOUD_ENCRYPTION_KEY or JWT_SECRET (independent of cloud storage token) is required in production.'
+    );
+  }
+  const { JWT_SECRET } = require('./rbac');
+  return JWT_SECRET;
+}
+
 function deriveCipherKey(secretMaterial) {
   if (!secretMaterial || String(secretMaterial).trim().length < 8) {
     throw new Error('Cloud sync requires valid secretMaterial token');
   }
-  const extraPepper = (process.env.CLOUD_ENCRYPTION_KEY || process.env.JWT_SECRET || '').trim();
+  const appSecret = resolveIndependentEncryptionSecret();
+  if (appSecret === String(secretMaterial).trim()) {
+    throw new Error(
+      'FATAL SECURITY ERROR: Cloud encryption secret must be distinct from the storage access token.'
+    );
+  }
   return crypto
-    .createHmac('sha256', String(secretMaterial))
-    .update(`elhelb-cloud-snapshot-v11:${extraPepper}`)
+    .createHmac('sha256', appSecret)
+    .update(`elhelb-cloud-snapshot-v18:${String(secretMaterial).trim()}`)
     .digest();
 }
 
@@ -273,9 +297,11 @@ async function blobPush(cfg, buf) {
     .randomBytes(3)
     .toString('hex')}.bin`;
 
-  let res = await blobPutRaw(cfg, pathname, buf, detectedBlobAccessMode);
-  if (!res.ok && (res.status === 400 || res.status === 403)) {
-    const altMode = detectedBlobAccessMode === 'private' ? 'public' : 'private';
+  const allowPublicBlob = process.env.ALLOW_PUBLIC_ENCRYPTED_BLOB === '1';
+  const primaryMode = allowPublicBlob ? detectedBlobAccessMode : 'private';
+  let res = await blobPutRaw(cfg, pathname, buf, primaryMode);
+  if (!res.ok && allowPublicBlob && (res.status === 400 || res.status === 403)) {
+    const altMode = primaryMode === 'private' ? 'public' : 'private';
     const retryRes = await blobPutRaw(cfg, pathname, buf, altMode);
     if (retryRes.ok) {
       detectedBlobAccessMode = altMode;
@@ -408,8 +434,77 @@ async function tursoPush(cfg, rev, buf) {
 // ==========================================
 // UNIFIED SYNC ORCHESTRATOR
 // ==========================================
+function mergeRemoteAdditionsIntoSnapshot(localSnap, remoteSnap) {
+  if (!remoteSnap || !remoteSnap.tables || !localSnap || !localSnap.tables) {
+    return localSnap;
+  }
+  const idTables = [
+    'departments',
+    'roles',
+    'users',
+    'boards',
+    'lists',
+    'cards',
+    'card_comments',
+    'permission_requests',
+    'permission_grants',
+    'notifications',
+    'audit_logs',
+  ];
+  for (const tbl of idTables) {
+    const localRows = Array.isArray(localSnap.tables[tbl]) ? localSnap.tables[tbl] : [];
+    const remoteRows = Array.isArray(remoteSnap.tables[tbl]) ? remoteSnap.tables[tbl] : [];
+    if (remoteRows.length === 0) continue;
+    const localIds = new Set(localRows.map((r) => Number(r.id)));
+    const maxLocalId = localRows.reduce((m, r) => Math.max(m, Number(r.id) || 0), 0);
+    for (const rRow of remoteRows) {
+      const rId = Number(rRow.id);
+      if (rId > maxLocalId && !localIds.has(rId)) {
+        localRows.push(rRow);
+        localIds.add(rId);
+      }
+    }
+    localSnap.tables[tbl] = localRows;
+  }
+  return localSnap;
+}
+
 async function performCloudPush(cfg) {
-  const snapshot = exportDatabaseSnapshot({ includeSecrets: true });
+  let snapshot = exportDatabaseSnapshot({ includeSecrets: true });
+
+  // Optimistic concurrency check: if another serverless instance pushed a newer revision concurrently,
+  // merge any newly appended rows with higher IDs instead of blindly clobbering them.
+  try {
+    if (syncedRev) {
+      if (cfg.type === 'upstash_kv') {
+        const currentRemoteRev = await kvCheckRev(cfg);
+        if (currentRemoteRev && currentRemoteRev !== syncedRev) {
+          const pulled = await kvPull(cfg);
+          if (pulled && pulled.buf) {
+            const remoteSnap = decodeSnapshot(pulled.buf, cfg.secretMaterial);
+            snapshot = mergeRemoteAdditionsIntoSnapshot(snapshot, remoteSnap);
+          }
+        }
+      } else if (cfg.type === 'turso_http') {
+        const currentRemoteRev = await tursoCheckRev(cfg);
+        if (currentRemoteRev && currentRemoteRev !== syncedRev) {
+          const pulled = await tursoPull(cfg);
+          if (pulled && pulled.buf) {
+            const remoteSnap = decodeSnapshot(pulled.buf, cfg.secretMaterial);
+            snapshot = mergeRemoteAdditionsIntoSnapshot(snapshot, remoteSnap);
+          }
+        }
+      } else if (cfg.type === 'vercel_blob') {
+        const blobs = await blobListSnapshots(cfg);
+        if (blobs.length > 0 && blobs[0].pathname !== syncedRev) {
+          const buf = await blobDownload(cfg, blobs[0]);
+          const remoteSnap = decodeSnapshot(buf, cfg.secretMaterial);
+          snapshot = mergeRemoteAdditionsIntoSnapshot(snapshot, remoteSnap);
+        }
+      }
+    }
+  } catch (_) {}
+
   const encryptedBuf = encodeSnapshot(snapshot, cfg.secretMaterial);
   const candidateRev = `${String(Date.now()).padStart(15, '0')}-${INSTANCE_ID}-${crypto
     .randomBytes(3)

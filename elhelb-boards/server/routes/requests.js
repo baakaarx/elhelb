@@ -116,6 +116,19 @@ router.get('/requests/inbox', (req, res) => {
     });
   }
 
+  const isChairman = req.user.role_slug === 'chairman';
+  const whereClauses = [];
+  const whereParams = [];
+
+  if (!isChairman) {
+    whereClauses.push('COALESCE(td.is_chairman_exclusive, 0) = 0');
+    if (!canAll) {
+      whereClauses.push('pr.target_department_id = ?');
+      whereClauses.push('u.department_id = ?');
+      whereParams.push(req.user.department_id || -1, req.user.department_id || -1);
+    }
+  }
+
   const allRows = all(
     `SELECT pr.*,
             u.full_name AS requester_name,
@@ -131,6 +144,7 @@ router.get('/requests/inbox', (req, res) => {
             p.category_label,
             td.name AS target_department_name,
             td.color AS target_department_color,
+            td.is_chairman_exclusive AS target_dept_exclusive,
             b.title AS target_board_title,
             c.title AS target_card_title,
             rv.full_name AS reviewer_name
@@ -143,23 +157,16 @@ router.get('/requests/inbox', (req, res) => {
      LEFT JOIN boards b ON b.id = pr.target_board_id
      LEFT JOIN cards c ON c.id = pr.target_card_id
      LEFT JOIN users rv ON rv.id = pr.reviewed_by
+     ${whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : ''}
      ORDER BY CASE pr.status WHEN 'pending' THEN 0 ELSE 1 END ASC, pr.id DESC
-     LIMIT 100`
+     LIMIT 100`,
+    whereParams
   );
 
   const filteredRequests = allRows
     .filter((row) => {
-      if (isChairmanExclusiveDepartment(row.target_department_id)) {
-        return req.user.role_slug === 'chairman';
-      }
       if (canAll) return true;
-      // Department manager sees requests within their own department for permissions they hold
-      return (
-        req.user.department_id &&
-        Number(row.target_department_id) === Number(req.user.department_id) &&
-        Number(row.requester_department_id) === Number(req.user.department_id) &&
-        req.user.permissionSet.has(row.permission_key)
-      );
+      return req.user.permissionSet.has(row.permission_key);
     })
     .map((row) => ({
       ...row,
@@ -271,11 +278,17 @@ router.post('/requests', async (req, res) => {
         actionSummary = `${perm.name} — لوحة "${board.title}"`;
       }
     } else {
-      // Cross-department access where user doesn't yet see private board details -> scope at department
-      scopeType = 'department';
+      // Do NOT widen a single-board request into department-wide access!
+      if (permissionKey !== 'boards.view_department') {
+        return res.status(403).json({
+          error: 'لا يمكنك طلب صلاحية إجراء على لوحة قبل الحصول على صلاحية عرضها أولاً',
+        });
+      }
+      scopeType = 'board';
+      targetBoardId = board.id;
       targetDepartmentId = board.department_id;
       if (!actionSummary) {
-        actionSummary = `${perm.name} — (${board.department_name})`;
+        actionSummary = `${perm.name} — لوحة محددة داخل (${board.department_name})`;
       }
     }
   } else {
@@ -361,7 +374,7 @@ router.post('/requests', async (req, res) => {
 
     // Notify eligible managers (strictly Chairman-only if department is sovereign Chairman-exclusive!)
     const managers = all(
-      `SELECT u.id, u.email, u.department_id, r.slug AS role_slug
+      `SELECT u.id, u.email, u.email_verified, u.department_id, r.slug AS role_slug
        FROM users u
        JOIN roles r ON r.id = u.role_id
        WHERE u.is_active = 1 AND u.onboarding_status = 'approved' AND u.id != ?`,
@@ -392,10 +405,10 @@ router.post('/requests', async (req, res) => {
            VALUES (?, 'request_new', 'طلب صلاحية جديد من موظف', ?, 'requests')`,
           [
             m.id,
-            `يطلب ${req.user.full_name} صلاحية (${perm.name}) — ${actionSummary}.`,
+            `يطلب ${req.user.full_name} (@${req.user.username}) صلاحية (${perm.name}) — ${actionSummary}.`,
           ]
         );
-        if (m.email) reviewerEmails.push(m.email);
+        if (m.email && Number(m.email_verified) === 1) reviewerEmails.push(m.email);
       }
     }
   });
@@ -448,7 +461,7 @@ router.post('/requests/:id(\\d+)/review', async (req, res) => {
   const reqId = Number(req.params.id);
   const reqRow = get(
     `SELECT pr.*, u.department_id AS requester_department_id, u.full_name AS requester_name,
-            u.email AS requester_email,
+            u.email AS requester_email, u.email_verified AS requester_email_verified,
             p.name AS permission_name
      FROM permission_requests pr
      JOIN users u ON u.id = pr.requester_id
@@ -598,7 +611,10 @@ router.post('/requests/:id(\\d+)/review', async (req, res) => {
   });
 
   await sendElhelbEmail({
-    to: reqRow.requester_email ? [reqRow.requester_email] : [],
+    to:
+      reqRow.requester_email && Number(reqRow.requester_email_verified) === 1
+        ? [reqRow.requester_email]
+        : [],
     ccAdmin: false,
     isChairmanExclusive: isExclusiveReview,
     eventType: decision === 'approved' ? 'request_approved' : 'request_rejected',

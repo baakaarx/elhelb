@@ -59,6 +59,26 @@ const PUBLIC_NO_TOKEN_PATHS = new Set([
   '/api/auth/oauth/providers',
 ]);
 
+function extractApiErrorMessage(payload, status, fallback) {
+  if (payload && typeof payload.error === 'string' && payload.error.trim()) {
+    return payload.error.trim();
+  }
+  if (payload && payload.error && typeof payload.error === 'object') {
+    const nested = typeof payload.error.message === 'string' ? payload.error.message.trim() : '';
+    if (status >= 500 || nested === 'A server error has occurred') {
+      return 'تعذر الاتصال بخادم المنصة (يرجى التأكد من ضبط متغيرات البيئة السرية JWT_SECRET و ADMIN_INIT_PASSWORD في إعدادات السيرفر ثم إعادة التشغيل)';
+    }
+    if (nested) return nested;
+  }
+  if (payload && typeof payload.message === 'string' && payload.message.trim()) {
+    return payload.message.trim();
+  }
+  if (status >= 500) {
+    return 'حدث خطأ داخلي في خادم المنصة — يرجى مراجعة إعدادات متغيرات البيئة في السيرفر';
+  }
+  return fallback;
+}
+
 export async function apiFetch(path, options = {}) {
   const {
     method = 'GET',
@@ -96,7 +116,7 @@ export async function apiFetch(path, options = {}) {
   ) {
     setStoredToken('');
     if (sessionExpiredHandler) sessionExpiredHandler();
-    const err = new Error(payload.error || 'انتهت الجلسة');
+    const err = new Error(extractApiErrorMessage(payload, 401, 'انتهت الجلسة'));
     err.status = 401;
     err.code = payload && payload.code;
     err.payload = payload;
@@ -113,7 +133,9 @@ export async function apiFetch(path, options = {}) {
     ) {
       permissionDeniedHandler(payload);
     }
-    const err = new Error(payload.error || 'ليس لديك صلاحية لتنفيذ هذا الإجراء');
+    const err = new Error(
+      extractApiErrorMessage(payload, 403, 'ليس لديك صلاحية لتنفيذ هذا الإجراء')
+    );
     err.status = 403;
     err.code = payload && payload.code;
     err.payload = payload;
@@ -121,7 +143,9 @@ export async function apiFetch(path, options = {}) {
   }
 
   if (!res.ok) {
-    const err = new Error(payload.error || 'حدث خطأ أثناء تنفيذ الطلب');
+    const err = new Error(
+      extractApiErrorMessage(payload, res.status, 'حدث خطأ أثناء تنفيذ الطلب')
+    );
     err.status = res.status;
     err.code = payload && payload.code;
     err.payload = payload;
