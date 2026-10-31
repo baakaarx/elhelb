@@ -7,7 +7,7 @@ const sharp = require('sharp');
 const app = require('../server/index');
 const { all } = require('../server/db');
 const { getAdminKey } = require('../server/adminAuth');
-const { analyzeImageBuffer, analyzePlantPathologyPixels, getOcrResizeDimensions } = require('../server/visionEngine');
+const { analyzeImageBuffer, analyzePlantPathologyPixels, getOcrResizeDimensions, recognizeWithTimeout } = require('../server/visionEngine');
 const agriKnowledge = require('../shared/agriKnowledgeBase.json');
 
 const voiceSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'voiceEngine.js'), 'utf8');
@@ -205,6 +205,21 @@ async function runTests() {
   const scaledOcr = getOcrResizeDimensions(6000, 4000);
   assert.ok(scaledOcr.width <= 1800 && scaledOcr.height <= 1800, 'يجب تصغير الصور الكبيرة قبل OCR لتجنب تجاوز مهلة الخادم');
   assert.ok(scaledOcr.width * scaledOcr.height <= 2_500_000);
+  let timedOutWorkerTerminated = false;
+  await assert.rejects(
+    recognizeWithTimeout(
+      Buffer.from('test'),
+      async () => ({
+        recognize: () => new Promise(() => {}),
+        terminate: async () => { timedOutWorkerTerminated = true; },
+      }),
+      10
+    ),
+    (error) => error.code === 'ELHELB_OCR_TIMEOUT',
+    'يجب أن يتوقف OCR بعد المهلة بدل تعليق طلب Vercel'
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(timedOutWorkerTerminated, true);
   await testBrowserVoiceEngineWiring();
   await testStaticBrainConversationalBehavior();
   console.log('🧪 بدء اختبار الشات بوت العام لمجموعة الهلب (حماية الجمهور + عزل الجلسات + العيادة الزراعية + تحليل الصور + Mobile API)...\n');
@@ -294,6 +309,16 @@ async function runTests() {
     assert.ok(visionRes.data.ok);
     assert.ok(/Capitol|ELH-101/i.test(visionRes.data.extractedText));
     assert.ok(visionRes.data.matchedCompanyRecords.length >= 1);
+    const multipartChatRes = await requestMultipart(baseUrl, '/api/chat/ask', {
+      fields: {
+        sessionId: 'vis_77777777777777777777777777777777',
+        language: 'ar',
+        message: 'حلل صورة المنتج المرفقة',
+      },
+      files: [{ field: 'image', filename: 'product-label.png', contentType: 'image/png', data: imgBuf }],
+    });
+    assert.equal(multipartChatRes.status, 200, 'يجب أن يعمل مسار رفع الصور متعدد الأجزاء المستخدم في واجهة المتصفح');
+    assert.ok(multipartChatRes.data.assistantMessage?.content);
     await assert.rejects(
       analyzeImageBuffer(Buffer.alloc(8 * 1024 * 1024 + 1)),
       /8 ميجابايت/,
