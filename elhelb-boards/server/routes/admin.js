@@ -16,6 +16,8 @@ const {
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
   isSecureRequest,
+  validatePasswordStrength,
+  encryptSecretValue,
   signUserToken,
   authenticate,
   evaluatePermission,
@@ -473,8 +475,9 @@ router.post('/users', async (req, res) => {
       error: 'اسم المستخدم يجب أن يكون من 3 إلى 64 حرفاً إنجليزياً أو رقماً أو بريداً إلكترونياً بدون مسافات',
     });
   }
-  if (password.length < 4 || password.length > 128) {
-    return res.status(400).json({ error: 'كلمة المرور يجب أن تكون بين 4 و128 حرفاً' });
+  const pwErr = validatePasswordStrength(password, username);
+  if (pwErr) {
+    return res.status(400).json({ error: pwErr });
   }
   if (fullName.length < 2 || fullName.length > 100) {
     return res.status(400).json({ error: 'الاسم الكامل للموظف مطلوب' });
@@ -524,9 +527,9 @@ router.post('/users', async (req, res) => {
   const onboardingStatus = role.slug === 'pending_onboarding' ? 'pending' : 'approved';
   const newUserId = run(
     `INSERT INTO users (
-      username, email, password_hash, full_name, job_title, avatar_color,
-      auth_provider, onboarding_status, role_id, department_id, approved_by, approved_at
-     ) VALUES (?, ?, ?, ?, ?, ?, 'local', ?, ?, ?, ?, datetime('now'))`,
+      username, email, email_verified, password_hash, full_name, job_title, avatar_color,
+      auth_provider, onboarding_status, role_id, department_id, preferred_department_id, approved_by, approved_at
+     ) VALUES (?, ?, 0, ?, ?, ?, ?, 'local', ?, ?, ?, ?, ?, datetime('now'))`,
     [
       username,
       email,
@@ -536,6 +539,7 @@ router.post('/users', async (req, res) => {
       avatarColor,
       onboardingStatus,
       role.id,
+      dept ? dept.id : null,
       dept ? dept.id : null,
       req.user.id,
     ]
@@ -714,8 +718,9 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
 
   if (body.newPassword && String(body.newPassword).length > 0) {
     const nextPass = String(body.newPassword);
-    if (nextPass.length < 6 || nextPass.length > 128) {
-      return res.status(400).json({ error: 'كلمة المرور الجديدة يجب أن تكون بين 6 و128 حرفاً' });
+    const pwErr = validatePasswordStrength(nextPass, existing.username);
+    if (pwErr) {
+      return res.status(400).json({ error: pwErr });
     }
     passwordHash = await bcrypt.hash(nextPass, 12);
     bumpToken = 1;
@@ -725,11 +730,15 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
     role.slug === 'pending_onboarding' ? 'pending' : 'approved';
   const departmentChanged =
     Number(departmentId || 0) !== Number(existing.department_id || 0);
+  const nextEmailVerified =
+    String(email || '').toLowerCase() === String(existing.email || '').toLowerCase()
+      ? Number(existing.email_verified || 0)
+      : 0;
 
   transaction(() => {
     run(
       `UPDATE users
-       SET full_name = ?, email = ?, job_title = ?, role_id = ?,
+       SET full_name = ?, email = ?, email_verified = ?, job_title = ?, role_id = ?,
            department_id = ?, preferred_department_id = ?,
            onboarding_status = ?,
            approved_by = COALESCE(approved_by, ?),
@@ -739,6 +748,7 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
       [
         fullName,
         email,
+        nextEmailVerified,
         jobTitle,
         role.id,
         departmentId,
@@ -1125,13 +1135,16 @@ router.put('/oauth-settings', (req, res) => {
 
   const body = req.body || {};
   if (body.googleClientId !== undefined) {
-    setSetting('google_client_id', String(body.googleClientId || '').trim(), req.user.id);
+    setSetting('google_client_id', String(body.googleClientId || '').trim());
   }
   if (body.googleClientSecret !== undefined && String(body.googleClientSecret).trim() !== '') {
-    setSetting('google_client_secret', String(body.googleClientSecret).trim(), req.user.id);
+    setSetting(
+      'google_client_secret',
+      encryptSecretValue(String(body.googleClientSecret).trim().slice(0, 256))
+    );
   }
   if (body.clearGoogleSecret) {
-    setSetting('google_client_secret', '', req.user.id);
+    setSetting('google_client_secret', '');
   }
 
   writeAudit({
@@ -1202,7 +1215,7 @@ router.put('/gmail-settings', (req, res) => {
   ) {
     setSetting(
       'gmail_app_password',
-      String(body.gmailAppPassword).replace(/\s+/g, '').slice(0, 128)
+      encryptSecretValue(String(body.gmailAppPassword).replace(/\s+/g, '').slice(0, 128))
     );
   }
   if (body.clearAppPassword) {
@@ -1351,48 +1364,57 @@ router.get('/backup/export', (req, res) => {
   });
 });
 
-router.post('/backup/import', (req, res) => {
-  if (req.user.role_slug !== 'chairman') {
-    return res.status(403).json({
-      error: 'استعادة النسخة الاحتياطية الكاملة مخصص لحساب رئيس مجلس الإدارة فقط',
-    });
-  }
+const backupJsonParser = express.json({ limit: '5mb' });
 
-  const snapshot = req.body && (req.body.snapshot || req.body);
-  if (
-    !snapshot ||
-    typeof snapshot !== 'object' ||
-    !snapshot.tables ||
-    !Array.isArray(snapshot.tables.users) ||
-    !Array.isArray(snapshot.tables.roles)
-  ) {
-    return res.status(400).json({
-      error: 'ملف النسخة الاحتياطية غير صالح — يرجى رفع ملف JSON المستخرج من المنصة',
-    });
-  }
+router.post(
+  '/backup/import',
+  (req, res, next) => {
+    if (req.user.role_slug !== 'chairman') {
+      return res.status(403).json({
+        error: 'استعادة النسخة الاحتياطية الكاملة مخصص لحساب رئيس مجلس الإدارة فقط',
+      });
+    }
+    return backupJsonParser(req, res, next);
+  },
+  (req, res) => {
+    const snapshot = req.body && (req.body.snapshot || req.body);
+    if (
+      !snapshot ||
+      typeof snapshot !== 'object' ||
+      !snapshot.tables ||
+      !Array.isArray(snapshot.tables.users) ||
+      !Array.isArray(snapshot.tables.roles)
+    ) {
+      return res.status(400).json({
+        error: 'ملف النسخة الاحتياطية غير صالح — يرجى رفع ملف JSON المستخرج من المنصة',
+      });
+    }
 
-  const chairmanRole = snapshot.tables.roles.find((r) => r.slug === 'chairman');
-  const hasChairmanUser =
-    chairmanRole &&
-    snapshot.tables.users.some(
-      (u) => Number(u.role_id) === Number(chairmanRole.id) && Number(u.is_active) !== 0
-    );
+    const chairmanRole = snapshot.tables.roles.find((r) => r.slug === 'chairman');
+    const hasChairmanUser =
+      chairmanRole &&
+      snapshot.tables.users.some(
+        (u) => Number(u.role_id) === Number(chairmanRole.id) && Number(u.is_active) !== 0
+      );
 
-  if (!hasChairmanUser) {
-    return res.status(400).json({
-      error: 'رفض أمني: النسخة المرفوعة لا تحتوي على حساب رئيس مجلس الإدارة المفعل',
-    });
-  }
+    if (!hasChairmanUser) {
+      return res.status(400).json({
+        error: 'رفض أمني: النسخة المرفوعة لا تحتوي على حساب رئيس مجلس الإدارة المفعل',
+      });
+    }
 
-  try {
-    importDatabaseSnapshot(snapshot, { requireActiveChairman: true });
-    seedIfNeeded();
-    markCoreDataModified();
-  } catch (err) {
-    return res.status(400).json({
-      error: 'تعذر استعادة النسخة الاحتياطية — تأكد من سلامة بنية ملف الـ JSON وتكامل العلاقات وعدم تلفه',
-    });
-  }
+    try {
+      importDatabaseSnapshot(snapshot, {
+        requireActiveChairman: true,
+        preserveMissingSecrets: true,
+      });
+      seedIfNeeded();
+      markCoreDataModified();
+    } catch (err) {
+      return res.status(400).json({
+        error: 'تعذر استعادة النسخة الاحتياطية — تأكد من سلامة بنية ملف الـ JSON وتكامل العلاقات وعدم تلفه',
+      });
+    }
 
   const restoredChairman = get(
     `SELECT u.*
@@ -1429,7 +1451,8 @@ router.post('/backup/import', (req, res) => {
     token: refreshedToken,
     message: 'تم استعادة كافة بيانات الشركة والموظفين واللوحات بنجاح 100%',
   });
-});
+  }
+);
 
 router.deleteUserCompletely = deleteUserCompletely;
 module.exports = router;

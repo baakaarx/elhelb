@@ -1,5 +1,6 @@
 const nodemailer = require('nodemailer');
 const { getSetting, run, all } = require('./db');
+const { decryptSecretValue } = require('./rbac');
 
 function escapeHtml(str) {
   return String(str ?? '')
@@ -15,7 +16,8 @@ function getGmailConfig() {
     process.env.GMAIL_USER || getSetting('gmail_user', '')
   ).trim();
   const rawAppPassword = String(
-    process.env.GMAIL_APP_PASSWORD || getSetting('gmail_app_password', '')
+    process.env.GMAIL_APP_PASSWORD ||
+      decryptSecretValue(getSetting('gmail_app_password', ''))
   );
   // Google displays App Passwords in 4x4 blocks with spaces — strip all whitespace automatically
   const gmailAppPassword = rawAppPassword.replace(/\s+/g, '');

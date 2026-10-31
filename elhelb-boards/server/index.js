@@ -3,8 +3,10 @@ const fs = require('fs');
 const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
+const rateLimit = require('express-rate-limit');
 const { initSchema, runUntracked, getWriteCounters, checkpointDatabase } = require('./db');
 const { seedIfNeeded } = require('./seed');
+const { extractCandidateTokens } = require('./rbac');
 const cloudSync = require('./cloudSync');
 
 const authRoutes = require('./routes/auth');
@@ -27,36 +29,65 @@ if (process.env.TRUST_PROXY === '1' || process.env.VERCEL) {
 app.set('etag', false);
 
 const allowIframePreview =
-  process.env.ALLOW_IFRAME_PREVIEW === '1' || Boolean(process.env.E2B_SANDBOX_ID);
+  process.env.FORCE_STRICT_HEADERS !== '1' &&
+  (process.env.ALLOW_IFRAME_PREVIEW === '1' || Boolean(process.env.E2B_SANDBOX_ID));
 
-// Production Clickjacking & CSP protection (relaxes frame-ancestors ONLY in explicit iframe preview mode)
+// Production Clickjacking & CSP protection (CSP stays 100% enforced at all times; preview mode only scopes frame-ancestors)
 app.use(
   helmet({
     frameguard: allowIframePreview ? false : { action: 'deny' },
-    contentSecurityPolicy: allowIframePreview
-      ? false
-      : {
-          useDefaults: true,
-          directives: {
-            defaultSrc: ["'self'"],
-            scriptSrc: ["'self'"],
-            styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-            fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
-            imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
-            connectSrc: ["'self'"],
-            objectSrc: ["'none'"],
-            baseUri: ["'self'"],
-            frameAncestors: ["'none'"],
-            upgradeInsecureRequests: null,
-          },
-        },
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+        fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+        imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+        connectSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        frameAncestors: allowIframePreview
+          ? ["'self'", 'https://*.arena.ai', 'https://*.lmarena.ai', 'https://*.e2b.app']
+          : ["'none'"],
+        upgradeInsecureRequests: null,
+      },
+    },
     crossOriginEmbedderPolicy: false,
     crossOriginResourcePolicy: { policy: allowIframePreview ? 'cross-origin' : 'same-origin' },
   })
 );
 app.use(cookieParser());
-app.use('/api/admin/backup/import', express.json({ limit: '5mb' }));
-app.use(express.json({ limit: '256kb' }));
+
+const standardJsonParser = express.json({ limit: '256kb' });
+app.use((req, res, next) => {
+  // Defer 5MB JSON parsing on /api/admin/backup/import until AFTER authenticate + Chairman check!
+  if (req.path === '/api/admin/backup/import') return next();
+  return standardJsonParser(req, res, next);
+});
+
+const globalApiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: process.env.NODE_ENV === 'test' ? 5000 : 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'عدد الطلبات مرتفع جداً، يرجى الانتظار لحظات والمحاولة مجدداً' },
+});
+app.use('/api', globalApiLimiter);
+
+const PUBLIC_API_SUBPATHS = new Set([
+  '/health',
+  '/auth/login',
+  '/auth/register',
+  '/auth/oauth/providers',
+  '/auth/oauth/google/start',
+  '/auth/oauth/google/callback',
+]);
+const PUBLIC_MUTATING_SUBPATHS = new Set([
+  '/auth/login',
+  '/auth/register',
+  '/auth/oauth/google/callback',
+]);
 
 // Strict zero-caching on ALL API endpoints + Cloud Persistent DB Sync across Serverless containers
 app.use('/api', async (req, res, next) => {
@@ -72,8 +103,14 @@ app.use('/api', async (req, res, next) => {
   res.setHeader('Expires', '0');
   res.setHeader('Vary', 'Authorization, X-Elhelb-Token, Cookie');
 
-  const forceFreshPull = req.method !== 'GET' && req.method !== 'HEAD';
-  await cloudSync.syncBeforeRequest(forceFreshPull);
+  const hasAuthCandidate = extractCandidateTokens(req).length > 0;
+  const subPath = String(req.path || '');
+  if (hasAuthCandidate || PUBLIC_API_SUBPATHS.has(subPath)) {
+    const forceFreshPull =
+      (req.method !== 'GET' && req.method !== 'HEAD' && hasAuthCandidate) ||
+      PUBLIC_MUTATING_SUBPATHS.has(subPath);
+    await cloudSync.syncBeforeRequest(forceFreshPull);
+  }
 
   const beforeCounters = getWriteCounters();
   const origJson = res.json.bind(res);

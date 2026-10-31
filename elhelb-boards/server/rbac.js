@@ -617,12 +617,91 @@ function userHasPermission(user, permissionKey) {
   return Boolean(user && user.permissionSet && user.permissionSet.has(permissionKey));
 }
 
+const COMMON_WEAK_PASSWORDS = new Set([
+  '1234567890',
+  '0123456789',
+  '9876543210',
+  '12345678910',
+  '1111111111',
+  '0000000000',
+  'password123',
+  'password1234',
+  'qwerty12345',
+  'qwertyuiop',
+  'admin12345',
+  'admin123456',
+  'welcome123',
+  'welcome1234',
+  'elhelb1234',
+  'abcdefghij',
+]);
+
+function validatePasswordStrength(password, username = '') {
+  const raw = String(password || '');
+  if (raw.length < 10 || raw.length > 128) {
+    return 'كلمة المرور يجب أن تتكون من 10 إلى 128 حرفاً أو رقماً على الأقل لتأمين الحساب';
+  }
+  const lower = raw.toLowerCase();
+  const cleanUser = String(username || '').trim().toLowerCase();
+  if (
+    COMMON_WEAK_PASSWORDS.has(lower) ||
+    /^(.)\1+$/.test(raw) ||
+    (cleanUser.length >= 3 && lower === cleanUser)
+  ) {
+    return 'كلمة المرور المختارة شائعة أو سهلة التخمين — يرجى اختيار كلمة مرور أقوى';
+  }
+  return null;
+}
+
+function deriveSettingsVaultKey() {
+  const seedMaterial = (process.env.SETTINGS_ENCRYPTION_KEY || JWT_SECRET || '').trim();
+  return crypto
+    .createHmac('sha256', seedMaterial)
+    .update('elhelb-settings-vault-v17')
+    .digest();
+}
+
+function encryptSecretValue(plaintext) {
+  const raw = String(plaintext ?? '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('enc:v1:')) return raw;
+  const key = deriveSettingsVaultKey();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(raw, 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return `enc:v1:${iv.toString('base64')}:${authTag.toString('base64')}:${encrypted.toString('base64')}`;
+}
+
+function decryptSecretValue(storedValue) {
+  const raw = String(storedValue ?? '').trim();
+  if (!raw) return '';
+  if (!raw.startsWith('enc:v1:')) return raw;
+  const parts = raw.split(':');
+  if (parts.length !== 5) return '';
+  try {
+    const iv = Buffer.from(parts[2], 'base64');
+    const authTag = Buffer.from(parts[3], 'base64');
+    const ciphertext = Buffer.from(parts[4], 'base64');
+    const key = deriveSettingsVaultKey();
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTag);
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+  } catch (_) {
+    return '';
+  }
+}
+
 module.exports = {
   JWT_SECRET,
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
   GLOBAL_PERMISSIONS,
   isSecureRequest,
+  extractCandidateTokens,
+  validatePasswordStrength,
+  encryptSecretValue,
+  decryptSecretValue,
   signUserToken,
   revokeTokenPayload,
   loadUserById,

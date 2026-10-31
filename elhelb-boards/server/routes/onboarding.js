@@ -5,6 +5,7 @@ const {
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
   isSecureRequest,
+  validatePasswordStrength,
   signUserToken,
   authenticate,
   userHasPermission,
@@ -17,18 +18,45 @@ const adminRoutes = require('./admin');
 const router = express.Router();
 router.use(authenticate);
 
-// Step 1: Employee creates or updates their own Username & Password
+// Step 1: Pending employee sets initial credentials (OAuth) or updates pending credentials (with currentPassword)
 router.post('/setup-credentials', async (req, res) => {
   try {
+    if (req.user.onboarding_status !== 'pending') {
+      return res.status(403).json({
+        error: 'تم اعتماد حسابك بالفعل؛ لتعديل بيانات الدخول يرجى مراجعة إدارة الموارد البشرية أو مسؤول النظام',
+      });
+    }
+
     const body = req.body || {};
     const username = String(body.username || '')
       .trim()
       .toLowerCase();
     const password = String(body.password || '');
+    const currentPassword = String(body.currentPassword || '');
     const fullName =
       body.fullName !== undefined
         ? String(body.fullName).trim()
         : req.user.full_name;
+
+    const rawSelf = get(`SELECT * FROM users WHERE id = ?`, [req.user.id]);
+    if (!rawSelf) {
+      return res.status(404).json({ error: 'الحساب غير موجود' });
+    }
+
+    // Require currentPassword whenever the account already has custom local credentials
+    if (Boolean(rawSelf.has_custom_credentials) && Boolean(rawSelf.password_hash)) {
+      if (!currentPassword) {
+        return res.status(400).json({
+          error: 'يرجى إدخال كلمة المرور الحالية أولاً لتأكيد تعديل اسم المستخدم أو كلمة المرور',
+        });
+      }
+      const matchesCurrent = await bcrypt.compare(currentPassword, rawSelf.password_hash);
+      if (!matchesCurrent) {
+        return res.status(403).json({
+          error: 'كلمة المرور الحالية غير صحيحة',
+        });
+      }
+    }
 
     if (!/^[a-z0-9_.-]{3,36}$/.test(username)) {
       return res.status(400).json({
@@ -36,10 +64,9 @@ router.post('/setup-credentials', async (req, res) => {
           'اسم المستخدم يجب أن يتكون من 3 إلى 36 حرفاً إنجليزياً أو رقماً (بدون مسافات، مثل: ahmed.ali)',
       });
     }
-    if (password.length < 4 || password.length > 128) {
-      return res.status(400).json({
-        error: 'كلمة المرور يجب أن تكون بين 4 و128 حرفاً أو رقماً',
-      });
+    const pwErr = validatePasswordStrength(password, username);
+    if (pwErr) {
+      return res.status(400).json({ error: pwErr });
     }
     if (fullName.length < 2 || fullName.length > 100) {
       return res.status(400).json({

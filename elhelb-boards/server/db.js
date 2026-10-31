@@ -432,15 +432,25 @@ const SNAPSHOT_TABLES_FORWARD = [
 
 const SNAPSHOT_TABLES_REVERSE = [...SNAPSHOT_TABLES_FORWARD].reverse();
 
+const SENSITIVE_SETTING_KEYS = new Set([
+  'gmail_app_password',
+  'google_client_secret',
+]);
+
 function getTableColumnSet(tableName) {
   const info = all(`PRAGMA table_info("${tableName}")`);
   return new Set(info.map((c) => c.name));
 }
 
-function exportDatabaseSnapshot() {
+function exportDatabaseSnapshot(options = {}) {
+  const includeSecrets = Boolean(options && options.includeSecrets);
   const tables = {};
   for (const table of SNAPSHOT_TABLES_FORWARD) {
-    if (table === 'audit_logs') {
+    if (table === 'system_settings' && !includeSecrets) {
+      tables[table] = all(`SELECT * FROM system_settings`).filter(
+        (row) => !SENSITIVE_SETTING_KEYS.has(row.key)
+      );
+    } else if (table === 'audit_logs') {
       tables[table] = all(
         `SELECT * FROM (SELECT * FROM audit_logs ORDER BY id DESC LIMIT 500) ORDER BY id ASC`
       );
@@ -481,8 +491,15 @@ function importDatabaseSnapshot(snapshot, options = {}) {
     throw new Error('Invalid database snapshot payload');
   }
   const requireActiveChairman = Boolean(options && options.requireActiveChairman);
+  const preserveMissingSecrets = Boolean(options && options.preserveMissingSecrets);
 
   runUntracked(() => {
+    const preservedSecretRows = preserveMissingSecrets
+      ? all(`SELECT * FROM system_settings`).filter((r) =>
+          SENSITIVE_SETTING_KEYS.has(r.key) && String(r.value || '').trim() !== ''
+        )
+      : [];
+
     db.exec('PRAGMA foreign_keys = OFF;');
     try {
       db.exec('BEGIN IMMEDIATE;');
@@ -517,6 +534,19 @@ function importDatabaseSnapshot(snapshot, options = {}) {
           for (const row of rows) {
             if (!row || typeof row !== 'object') continue;
             stmt.run(...cols.map((c) => normalizeParam(row[c])));
+          }
+        }
+
+        if (preservedSecretRows.length > 0) {
+          const restoreSecretStmt = db.prepare(
+            `INSERT OR IGNORE INTO system_settings (key, value, updated_at) VALUES (?, ?, ?)`
+          );
+          for (const secRow of preservedSecretRows) {
+            restoreSecretStmt.run(
+              String(secRow.key),
+              String(secRow.value),
+              String(secRow.updated_at || new Date().toISOString())
+            );
           }
         }
 

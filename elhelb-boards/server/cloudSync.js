@@ -409,7 +409,7 @@ async function tursoPush(cfg, rev, buf) {
 // UNIFIED SYNC ORCHESTRATOR
 // ==========================================
 async function performCloudPush(cfg) {
-  const snapshot = exportDatabaseSnapshot();
+  const snapshot = exportDatabaseSnapshot({ includeSecrets: true });
   const encryptedBuf = encodeSnapshot(snapshot, cfg.secretMaterial);
   const candidateRev = `${String(Date.now()).padStart(15, '0')}-${INSTANCE_ID}-${crypto
     .randomBytes(3)

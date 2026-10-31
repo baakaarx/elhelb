@@ -1,5 +1,5 @@
 const bcrypt = require('bcryptjs');
-const { get, run, transaction } = require('./db');
+const { get, run, transaction, getSetting, setSetting } = require('./db');
 
 const PERMISSIONS_CATALOG = [
   // 1. اللوحات والأقسام
@@ -204,13 +204,14 @@ function seedIfNeeded() {
     );
   }
 
-  // Pre-seed default sender & admin notification email so admin doesn't have to retype it
-  run(
-    `INSERT OR IGNORE INTO system_settings (key, value) VALUES ('gmail_user', 'mb9836504@gmail.com')`
-  );
-  run(
-    `INSERT OR IGNORE INTO system_settings (key, value) VALUES ('gmail_admin_cc', 'mb9836504@gmail.com')`
-  );
+  // Transparently upgrade any legacy plaintext secret settings in existing DBs to AES-256-GCM
+  for (const secretKey of ['gmail_app_password', 'google_client_secret']) {
+    const curVal = getSetting(secretKey, '');
+    if (curVal && !String(curVal).startsWith('enc:v1:')) {
+      const { encryptSecretValue } = require('./rbac');
+      setSetting(secretKey, encryptSecretValue(curVal));
+    }
+  }
 
   const HR_ROLE_DEFAULT_PERMS = [
     'users.manage',
