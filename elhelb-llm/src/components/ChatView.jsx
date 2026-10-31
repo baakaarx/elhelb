@@ -12,7 +12,7 @@ import {
   MicOff,
 } from 'lucide-react';
 import { apiRequest } from '../api';
-import { startArabicRecognition, startVoiceRecorder } from '../voiceEngine';
+import { mergeTranscriptParts, startArabicRecognition } from '../voiceEngine';
 
 const SUGGESTED_QUESTIONS = [
   {
@@ -99,21 +99,17 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // التسجيل الصوتي مخصص لإرسال ملاحظة صوتية واردة فقط؛ لا يوجد نطق لردود المساعد.
+  // الكلام من الميكروفون يتحول إلى نص قابل للمراجعة؛ لا نرفع أو نخزّن ملفاً صوتياً.
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [isFinalizingVoice, setIsFinalizingVoice] = useState(false);
   const [voiceSeconds, setVoiceSeconds] = useState(0);
-  const [pendingVoiceFile, setPendingVoiceFile] = useState(null);
-  const [pendingVoiceUrl, setPendingVoiceUrl] = useState('');
   const [voiceTranscript, setVoiceTranscript] = useState('');
   const voiceTranscriptRef = useRef('');
+  const voiceInputPrefixRef = useRef('');
+  const voiceRecognitionErrorRef = useRef('');
   const recordingRef = useRef(false);
   const micHandleRef = useRef(null);
-  const recorderRef = useRef(null);
   const voiceRetryTimerRef = useRef(null);
-  const voiceBlobReadyRef = useRef(false);
-  const voiceRecognitionEndedRef = useRef(true);
-  const voiceObjectUrlsRef = useRef(new Set());
 
   const bottomRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -137,8 +133,6 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
     recordingRef.current = false;
     clearTimeout(voiceRetryTimerRef.current);
     micHandleRef.current?.abort();
-    recorderRef.current?.cancel();
-    voiceObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
   }, []);
 
   useEffect(() => {
@@ -156,12 +150,34 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
+  function applyVoiceTranscript() {
+    const recognizedText = voiceTranscriptRef.current.trim();
+    setVoiceTranscript('');
+    setIsRecordingVoice(false);
+    setIsFinalizingVoice(false);
+    if (recognizedText) {
+      setInput([voiceInputPrefixRef.current, recognizedText].filter(Boolean).join(' ').trim());
+      setError('');
+      voiceRecognitionErrorRef.current = '';
+      return;
+    }
+    if (!voiceRecognitionErrorRef.current) {
+      setError('ما وصلنيش نص واضح. اضغط داخل خانة الكتابة واستخدم ميكروفون لوحة مفاتيح الموبايل؛ هيتبعت الكلام كنص فقط.');
+    }
+  }
+
+  function showKeyboardDictationFallback(message = '') {
+    const fallback = 'لو التفريغ الصوتي مش متاح في المتصفح، اضغط داخل خانة الكتابة واستخدم زر الميكروفون في لوحة مفاتيح الموبايل. الكلام هيتبعت كنص فقط.';
+    setError([message, fallback].filter(Boolean).join(' '));
+    textareaRef.current?.focus();
+  }
+
   function updateVoiceTranscript(finalText = '', interimText = '') {
     const cleanedFinal = String(finalText || '').trim();
-    if (cleanedFinal && !voiceTranscriptRef.current.endsWith(cleanedFinal)) {
-      voiceTranscriptRef.current = [voiceTranscriptRef.current, cleanedFinal].filter(Boolean).join(' ').trim();
+    if (cleanedFinal) {
+      voiceTranscriptRef.current = mergeTranscriptParts([voiceTranscriptRef.current, cleanedFinal]);
     }
-    setVoiceTranscript([voiceTranscriptRef.current, String(interimText || '').trim()].filter(Boolean).join(' ').trim());
+    setVoiceTranscript([voiceTranscriptRef.current, String(interimText || '').trim()].filter(Boolean).join(' '));
   }
 
   function startVoiceRecognitionCycle() {
@@ -172,37 +188,22 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
       onFinal: (text) => updateVoiceTranscript(text),
       onError: (message, code) => {
         if (code === 'no-speech' || code === 'aborted') return;
-        setError(message);
+        voiceRecognitionErrorRef.current = message;
         recordingRef.current = false;
         setIsRecordingVoice(false);
-        setIsFinalizingVoice(true);
-        recorderRef.current?.stop();
+        if (voiceTranscriptRef.current.trim()) applyVoiceTranscript();
+        else showKeyboardDictationFallback(message);
       },
       onEnd: () => {
         micHandleRef.current = null;
         if (recordingRef.current) {
           voiceRetryTimerRef.current = window.setTimeout(startVoiceRecognitionCycle, 250);
         } else {
-          voiceRecognitionEndedRef.current = true;
-          setVoiceTranscript(voiceTranscriptRef.current);
-          if (voiceBlobReadyRef.current) setIsFinalizingVoice(false);
+          applyVoiceTranscript();
         }
       },
     });
     micHandleRef.current = handle;
-  }
-
-  function clearPendingVoice({ keepUrl = false } = {}) {
-    if (pendingVoiceUrl && !keepUrl) {
-      URL.revokeObjectURL(pendingVoiceUrl);
-      voiceObjectUrlsRef.current.delete(pendingVoiceUrl);
-    }
-    setPendingVoiceFile(null);
-    setPendingVoiceUrl('');
-    setVoiceTranscript('');
-    voiceTranscriptRef.current = '';
-    voiceBlobReadyRef.current = false;
-    voiceRecognitionEndedRef.current = true;
   }
 
   function stopVoiceRecording() {
@@ -215,74 +216,30 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
     const recognition = micHandleRef.current;
     micHandleRef.current = null;
     if (recognition) recognition.stop();
-    else voiceRecognitionEndedRef.current = true;
-    const recorder = recorderRef.current;
-    recorderRef.current = null;
-    if (recorder) recorder.stop();
-    else voiceBlobReadyRef.current = true;
-    window.setTimeout(() => setIsFinalizingVoice(false), 2500);
+    else applyVoiceTranscript();
   }
 
-  async function toggleVoiceRecording() {
+  function toggleVoiceRecording() {
     if (recordingRef.current) {
       stopVoiceRecording();
       return;
     }
     if (isFinalizingVoice) return;
-    if (!window.MediaRecorder || !navigator.mediaDevices?.getUserMedia) {
-      setError('تسجيل الفويس نوت غير متاح في المتصفح الحالي. افتح الموقع عبر HTTPS واستخدم Chrome أو Safari حديثاً.');
-      return;
-    }
+    setError('');
+    voiceTranscriptRef.current = '';
+    voiceRecognitionErrorRef.current = '';
+    voiceInputPrefixRef.current = input.trim();
+    setVoiceTranscript('');
+
     if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
-      setError('المتصفح لا يدعم تفريغ الفويس نوت إلى نص. جرّب Chrome محدّثاً مع تفعيل إذن الميكروفون وخدمة التعرف على الكلام.');
+      showKeyboardDictationFallback('المتصفح الحالي لا يدعم تحويل الكلام تلقائياً.');
       return;
     }
 
-    clearPendingVoice();
-    setError('');
     recordingRef.current = true;
-    voiceBlobReadyRef.current = false;
-    voiceRecognitionEndedRef.current = false;
     setIsRecordingVoice(true);
     setIsFinalizingVoice(false);
     startVoiceRecognitionCycle();
-
-    const handle = await startVoiceRecorder({
-      onReady: (blob) => {
-        if (!blob?.size) {
-          setError('التسجيل الصوتي فارغ؛ جرّب التسجيل مرة أخرى.');
-          setIsFinalizingVoice(false);
-          return;
-        }
-        const url = URL.createObjectURL(blob);
-        voiceObjectUrlsRef.current.add(url);
-        setPendingVoiceFile(blob);
-        setPendingVoiceUrl(url);
-        voiceBlobReadyRef.current = true;
-        if (voiceRecognitionEndedRef.current) setIsFinalizingVoice(false);
-      },
-      onError: (message) => {
-        recordingRef.current = false;
-        setIsRecordingVoice(false);
-        setIsFinalizingVoice(false);
-        micHandleRef.current?.abort();
-        micHandleRef.current = null;
-        setError(message);
-      },
-      onStop: () => {
-        setIsRecordingVoice(false);
-      },
-    });
-
-    if (!handle) {
-      recordingRef.current = false;
-      setIsRecordingVoice(false);
-      micHandleRef.current?.abort();
-      micHandleRef.current = null;
-      return;
-    }
-    if (!recordingRef.current) handle.cancel();
-    else recorderRef.current = handle;
   }
 
   function handleSelectImageFile(file) {
@@ -319,28 +276,18 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
   }
 
   async function sendTurn(customPrompt) {
-    const voiceFileToSend = customPrompt === undefined ? pendingVoiceFile : null;
-    const transcript = voiceFileToSend ? (voiceTranscriptRef.current || voiceTranscript).trim() : '';
-    const typedText = customPrompt !== undefined ? customPrompt : input.trim();
-    const textToSend = [typedText, transcript].filter(Boolean).join(typedText && transcript ? '\n\n' : '');
+    const textToSend = customPrompt !== undefined ? customPrompt : input.trim();
     const hasImg = Boolean(pendingImageFile || pendingImagePreview);
-    if ((!textToSend && !hasImg && !voiceFileToSend) || loading) return null;
-    if (voiceFileToSend && !transcript) {
-      setError('سجلت الفويس نوت، لكن المتصفح لم يستطع تفريغ الكلام. جرّب التسجيل مرة أخرى أو اكتب ملخصاً قصيراً.');
-      return null;
-    }
+    if ((!textToSend && !hasImg) || loading) return null;
 
     const optimisticUser = {
       id: 'temp-' + Date.now(),
       role: 'user',
       content: textToSend || '📷 صورة مرفقة للتحليل',
       imageThumb: pendingImagePreview || null,
-      voiceNoteUrl: voiceFileToSend ? pendingVoiceUrl : null,
     };
-
     const fileToSend = pendingImageFile;
     const base64ToSend = pendingImagePreview;
-    const voiceUrlToKeep = voiceFileToSend ? pendingVoiceUrl : '';
 
     setError('');
     setLoading(true);
@@ -350,16 +297,12 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
 
     try {
       let res;
-      if (fileToSend || voiceFileToSend) {
+      if (fileToSend) {
         const fd = new FormData();
         fd.append('message', textToSend);
         fd.append('sessionId', sessionId);
         fd.append('language', 'ar');
-        if (fileToSend) fd.append('image', fileToSend);
-        if (voiceFileToSend) {
-          const extension = voiceFileToSend.type?.includes('mp4') ? 'm4a' : voiceFileToSend.type?.includes('ogg') ? 'ogg' : 'webm';
-          fd.append('voice', voiceFileToSend, `voice-note.${extension}`);
-        }
+        fd.append('image', fileToSend);
         res = await apiRequest('/api/chat/ask', { method: 'POST', formData: fd });
       } else {
         res = await apiRequest('/api/chat/ask', {
@@ -375,15 +318,14 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
 
       setMessages((prev) => [
         ...prev.filter((m) => m.id !== optimisticUser.id),
-        { ...res.userMessage, voiceNoteUrl: voiceUrlToKeep || null },
+        res.userMessage,
         res.assistantMessage,
       ]);
-      if (voiceFileToSend) clearPendingVoice({ keepUrl: true });
       return res;
     } catch (err) {
       setMessages((prev) => prev.filter((m) => m.id !== optimisticUser.id));
       setError(err.message || 'تعذر إرسال الرسالة، يرجى المحاولة مرة أخرى.');
-      setInput(typedText);
+      setInput(textToSend);
       return null;
     } finally {
       setLoading(false);
@@ -409,9 +351,9 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
 
               <h1 className="welcome-title">أهلاً بك في المساعد الذكي لمجموعة الهلب</h1>
               <p className="welcome-subtitle">
-                اكتب سؤالك أو سجّل فويس نوت عن <strong>محصولك أو مشكلة زراعية أو منتج من منتجات الهلب</strong>، وهنتابع معاك خطوة بخطوة.
+                اكتب سؤالك أو اتكلم بالميكروفون عن <strong>محصولك أو مشكلة زراعية أو منتج من منتجات الهلب</strong>، وهنتابع معاك خطوة بخطوة.
               </p>
-              <p className="voice-input-note">الفويس نوت بيتفرّغ لنص بمساعدة خدمة المتصفح؛ ردود المساعد كتابة فقط.</p>
+              <p className="voice-input-note">كلامك بيتحوّل لنص تراجعه في خانة الكتابة قبل الإرسال؛ التسجيل الصوتي نفسه لا يُرسل ولا يُحفظ.</p>
 
               <div className="suggestions-grid">
                 {SUGGESTED_QUESTIONS.map((item, idx) => {
@@ -452,12 +394,6 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
                       <div className="turn-bubble">
                         {m.imageThumb && (
                           <img src={m.imageThumb} alt="مرفق" className="attached-photo" />
-                        )}
-                        {m.voiceNoteUrl && (
-                          <div className="sent-voice-note">
-                            <span>🎙️ فويس نوت</span>
-                            <audio controls preload="metadata" src={m.voiceNoteUrl} />
-                          </div>
                         )}
                         {m.role === 'assistant' ? (
                           <FormattedMessage text={m.content} />
@@ -514,22 +450,14 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
           {isRecordingVoice && (
             <div className="listening-banner">
               <div className="voice-wave-bars"><span /><span /><span /><span /></div>
-              <span>جاري تسجيل الفويس نوت وتفريغ الكلام · {String(Math.floor(voiceSeconds / 60)).padStart(2, '0')}:{String(voiceSeconds % 60).padStart(2, '0')} — اضغط المايك للإيقاف</span>
+              <span>جاري تحويل كلامك إلى نص · {String(Math.floor(voiceSeconds / 60)).padStart(2, '0')}:{String(voiceSeconds % 60).padStart(2, '0')} — اضغط المايك للإيقاف</span>
             </div>
+          )}
+          {isRecordingVoice && voiceTranscript && (
+            <div className="voice-note-transcript-live" dir="auto">{voiceTranscript}</div>
           )}
           {isFinalizingVoice && !isRecordingVoice && (
-            <div className="listening-banner">⏳ بنجهّز الفويس نوت والتفريغ النصي...</div>
-          )}
-          {pendingVoiceUrl && (
-            <div className="image-preview-strip voice-note-strip">
-              <div className="voice-note-preview-content">
-                <strong>الفويس نوت جاهز</strong>
-                <audio controls preload="metadata" src={pendingVoiceUrl} />
-                {voiceTranscript && <div className="voice-note-transcript" dir="auto">التفريغ اللي هيوصل للمساعد: {voiceTranscript}</div>}
-                <small className="voice-note-transcript">المساعد يفهم التفريغ النصي فقط؛ التسجيل لا يُحفظ في سجل المحادثة. التفريغ قد يعتمد على خدمة المتصفح.</small>
-              </div>
-              <button type="button" className="remove-img-btn" onClick={() => clearPendingVoice()} aria-label="حذف الفويس نوت"><X size={16} /></button>
-            </div>
+            <div className="listening-banner">⏳ بنجهّز النص للإرسال...</div>
           )}
 
           {pendingImagePreview && (
@@ -576,8 +504,8 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
               type="button"
               className={`mic-btn ${isRecordingVoice ? 'recording' : ''}`}
               onClick={toggleVoiceRecording}
-              title={isRecordingVoice ? 'إيقاف تسجيل الفويس نوت' : 'تسجيل فويس نوت'}
-              aria-label={isRecordingVoice ? 'إيقاف تسجيل الفويس نوت' : 'تسجيل فويس نوت'}
+              title={isRecordingVoice ? 'إيقاف تحويل الكلام إلى نص' : 'تحويل الكلام إلى نص'}
+              aria-label={isRecordingVoice ? 'إيقاف تحويل الكلام إلى نص' : 'تحويل الكلام إلى نص'}
               disabled={loading || isFinalizingVoice}
             >
               {isRecordingVoice ? <MicOff size={20} /> : <Mic size={20} />}
@@ -596,14 +524,14 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
                   bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
                 }, 260);
               }}
-              placeholder={pendingVoiceFile ? 'أضف توضيحاً مكتوباً (اختياري)...' : 'اكتب سؤالك أو سجّل فويس نوت 🎙️...'}
+              placeholder="اكتب سؤالك أو اضغط الميكروفون لتحويل كلامك إلى نص..."
               disabled={loading}
             />
 
             <button
               type="submit"
               className="send-btn"
-              disabled={loading || isRecordingVoice || isFinalizingVoice || (!input.trim() && !pendingImagePreview && !pendingVoiceFile)}
+              disabled={loading || isRecordingVoice || isFinalizingVoice || (!input.trim() && !pendingImagePreview)}
               aria-label="إرسال"
             >
               <Send size={18} />

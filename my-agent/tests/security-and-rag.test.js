@@ -18,6 +18,9 @@ assert.doesNotMatch(voiceSource, /speechSynthesis|speakArabic|isVoiceOutputSuppo
 const appVoiceSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'App.jsx'), 'utf8');
 const chatVoiceSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'ChatView.jsx'), 'utf8');
 assert.doesNotMatch(`${appVoiceSource}\n${chatVoiceSource}`, /speakArabic|speechSynthesis|استمع للرد بالصوت|اختبار الصوت/);
+assert.doesNotMatch(chatVoiceSource, /MediaRecorder|startVoiceRecorder|voiceNoteUrl|append\(['\"]voice['\"]/);
+assert.match(chatVoiceSource, /ميكروفون لوحة مفاتيح الموبايل/);
+assert.match(chatVoiceSource, /message: textToSend/);
 
 const offlineBundle = esbuild.buildSync({
   entryPoints: [path.join(__dirname, '..', 'src', 'offlineStaticBrain.js')],
@@ -41,7 +44,7 @@ global.localStorage = {
 async function testStaticBrainConversationalBehavior() {
   const sessionId = 'static_voice_transcript_test';
   const greeting = await offlineModule.exports.runStandaloneClientTurn({ sessionId, message: 'هلا' });
-  assert.match(greeting.reply, /فويس نوت/);
+  assert.match(greeting.reply, /الميكروفون/);
   assert.match(greeting.reply, /هنا بالكتابة/);
   assert.doesNotMatch(greeting.reply, /هرد عليك بالصوت|بالصوت أو بالكتابة/);
 
@@ -53,6 +56,12 @@ async function testStaticBrainConversationalBehavior() {
 
 async function testBrowserVoiceEngineWiring() {
   const previousWindow = global.window;
+  global.window = { MediaRecorder: class {} };
+  assert.equal(voiceModule.exports.isVoiceInputSupported(), false, 'مسجل الصوت وحده لا يكفي لتحويل الكلام إلى نص');
+  let unsupportedError = null;
+  assert.equal(voiceModule.exports.startArabicRecognition({ onError: (message, code) => { unsupportedError = { message, code }; } }), null);
+  assert.equal(unsupportedError?.code, 'unsupported', 'يجب إظهار مسار إملاء لوحة المفاتيح عند غياب خدمة التعرف');
+
   const recognitionInstances = [];
   class MockRecognition {
     constructor() { recognitionInstances.push(this); }
@@ -256,14 +265,16 @@ async function runTests() {
     const histInvalid = await request(baseUrl, '/api/chat/history?sessionId=web-default');
     assert.equal(histInvalid.data.messages.length, 0, 'رفض المعرفات العامة المشتركة');
 
-    const voiceNoteTurn = await requestMultipart(baseUrl, '/api/chat/ask', {
-      fields: { sessionId: 'x', language: 'ar', message: 'السلام عليكم' },
-      files: [{ field: 'voice', filename: 'voice-note.webm', contentType: 'audio/webm', data: Buffer.from('temporary audio bytes') }],
+    const transcriptSessionId = 'vis_voice_text_session_123456';
+    const voiceTextTurn = await request(baseUrl, '/api/chat/ask', {
+      method: 'POST',
+      body: { sessionId: transcriptSessionId, language: 'ar', message: 'السلام عليكم' },
     });
-    assert.equal(voiceNoteTurn.status, 200, 'يجب استقبال ملف الفويس نوت مع التفريغ النصي');
-    assert.match(voiceNoteTurn.data.reply, /يا هلا/);
+    assert.equal(voiceTextTurn.status, 200, 'يجب قبول تفريغ الميكروفون وإرساله كنص عادي');
+    assert.equal(voiceTextTurn.data.userMessage.content, 'السلام عليكم');
+    assert.match(voiceTextTurn.data.reply, /يا هلا/);
 
-    console.log('✅ [3/5] عزل تام لخصوصية الزوار + استقبال فويس نوت + دقة العيادة الزراعية');
+    console.log('✅ [3/5] عزل جلسات الزوار + إرسال تفريغ الميكروفون كنص + دقة العيادة الزراعية');
 
     // 4. اختبار استقبال وتحليل الصور (Vision OCR) ومطابقتها مع مستحضرات الهلب
     const imgBuf = await generateTestProductLabelPngBuffer();
@@ -322,7 +333,7 @@ async function runTests() {
       assert.ok(!gRes.data.reply.includes('لم أجد'), `يجب أن يرد بودّ وطبيعية على "${greetWord}"`);
       assert.ok(!gRes.data.suggestions.includes('إيه طريقة ومعدل الاستخدام الموصى به؟'));
       if (greetWord === 'هلا') {
-        assert.match(gRes.data.reply, /فويس نوت/);
+        assert.match(gRes.data.reply, /الميكروفون/);
         assert.doesNotMatch(gRes.data.reply, /هرد عليك بالصوت/);
       }
     }

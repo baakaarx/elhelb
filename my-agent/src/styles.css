@@ -577,31 +577,14 @@ button {
   gap: 10px;
 }
 
-.voice-note-preview-content,
-.sent-voice-note {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  width: 100%;
-  font-size: 0.82rem;
-}
-
-.voice-note-preview-content audio,
-.sent-voice-note audio {
-  display: block;
-  width: min(320px, 100%);
-  height: 38px;
-}
-
-.voice-note-transcript {
+.voice-note-transcript-live {
+  background: #fff;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
   color: var(--text-secondary);
   line-height: 1.55;
   overflow-wrap: anywhere;
-}
-
-.sent-voice-note {
-  width: min(320px, 100%);
+  padding: 8px 12px;
   margin-bottom: 8px;
 }
 
