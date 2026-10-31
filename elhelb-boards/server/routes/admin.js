@@ -373,28 +373,38 @@ router.get('/users', (req, res) => {
     });
   }
 
+  const isChairman = req.user.role_slug === 'chairman';
   const users = all(
     `SELECT u.id, u.username, u.email, u.full_name, u.job_title, u.avatar_color, u.avatar_url,
             u.auth_provider, u.onboarding_status, u.preferred_department_id,
             u.role_id, u.department_id, u.is_active, u.created_at,
             r.slug AS role_slug, r.name AS role_name, r.color AS role_color, r.rank_level,
-            d.name AS department_name, d.color AS department_color,
-            pd.name AS preferred_department_name
+            d.name AS department_name, d.color AS department_color, d.is_chairman_exclusive AS dept_exclusive,
+            pd.name AS preferred_department_name, pd.is_chairman_exclusive AS pref_dept_exclusive
      FROM users u
      JOIN roles r ON r.id = u.role_id
      LEFT JOIN departments d ON d.id = u.department_id
      LEFT JOIN departments pd ON pd.id = u.preferred_department_id
-     ORDER BY r.rank_level DESC, u.id ASC`
-  ).map((u) => ({
-    ...u,
-    is_active: Boolean(u.is_active),
-    can_caller_edit:
-      u.id === req.user.id || canCallerModifyRank(req.user, u.rank_level),
-    can_caller_delete:
-      u.id !== req.user.id &&
-      u.role_slug !== 'chairman' &&
-      canCallerModifyRank(req.user, u.rank_level),
-  }));
+     WHERE (COALESCE(d.is_chairman_exclusive, 0) = 0 AND COALESCE(pd.is_chairman_exclusive, 0) = 0)
+        OR ? = 1
+        OR u.id = ?
+     ORDER BY r.rank_level DESC, u.id ASC`,
+    [isChairman ? 1 : 0, req.user.id]
+  ).map((u) => {
+    const isSovereignProtected = Boolean(Number(u.dept_exclusive)) && !isChairman;
+    return {
+      ...u,
+      is_active: Boolean(u.is_active),
+      can_caller_edit:
+        !isSovereignProtected &&
+        (u.id === req.user.id || canCallerModifyRank(req.user, u.rank_level)),
+      can_caller_delete:
+        !isSovereignProtected &&
+        u.id !== req.user.id &&
+        u.role_slug !== 'chairman' &&
+        canCallerModifyRank(req.user, u.rank_level),
+    };
+  });
 
   res.json(users);
 });
@@ -450,6 +460,11 @@ router.post('/users', async (req, res) => {
   if (departmentId !== null) {
     dept = get(`SELECT * FROM departments WHERE id = ?`, [departmentId]);
     if (!dept) return res.status(400).json({ error: 'القسم المحدد غير موجود' });
+    if (Number(dept.is_chairman_exclusive) && req.user.role_slug !== 'chairman') {
+      return res.status(403).json({
+        error: 'حماية سيادية: هذا القسم خاص ومرتبط مباشرةً برئيس مجلس الإدارة فقط ولا يمكن إضافة موظفين إليه إلا من حساب رئيس مجلس الإدارة شخصياً.',
+      });
+    }
   }
 
   const hash = await bcrypt.hash(password, 10);
@@ -496,13 +511,25 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
 
   const targetId = Number(req.params.id);
   const existing = get(
-    `SELECT u.*, r.rank_level AS current_rank, r.slug AS current_role_slug, r.name AS current_role_name
+    `SELECT u.*, r.rank_level AS current_rank, r.slug AS current_role_slug, r.name AS current_role_name,
+            d.is_chairman_exclusive AS current_dept_exclusive
      FROM users u
      JOIN roles r ON r.id = u.role_id
+     LEFT JOIN departments d ON d.id = u.department_id
      WHERE u.id = ?`,
     [targetId]
   );
   if (!existing) return res.status(404).json({ error: 'الموظف غير موجود' });
+
+  if (
+    Number(existing.current_dept_exclusive) &&
+    req.user.role_slug !== 'chairman' &&
+    targetId !== req.user.id
+  ) {
+    return res.status(403).json({
+      error: 'حماية سيادية: هذا الحساب يتبع قسماً خاصاً برئيس مجلس الإدارة ولا يمكن تعديله إلا من رئيس مجلس الإدارة شخصياً.',
+    });
+  }
 
   // Sovereign Rank Protection on Target User
   if (targetId !== req.user.id && !canCallerModifyRank(req.user, existing.current_rank)) {
@@ -564,6 +591,15 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
   if (departmentId !== null) {
     const dept = get(`SELECT * FROM departments WHERE id = ?`, [departmentId]);
     if (!dept) return res.status(400).json({ error: 'القسم المحدد غير موجود' });
+    if (
+      Number(dept.is_chairman_exclusive) &&
+      req.user.role_slug !== 'chairman' &&
+      Number(existing.department_id) !== Number(dept.id)
+    ) {
+      return res.status(403).json({
+        error: 'حماية سيادية: لا يمكن نقل موظف إلى قسم خاص برئيس مجلس الإدارة إلا من حساب رئيس مجلس الإدارة شخصياً.',
+      });
+    }
   }
 
   // Prevent removing last active roles.manage holder
@@ -656,7 +692,7 @@ router.delete('/users/:id(\\d+)', (req, res) => {
 
   const existing = get(
     `SELECT u.*, r.rank_level AS current_rank, r.slug AS current_role_slug, r.name AS current_role_name,
-            d.name AS current_department_name
+            d.name AS current_department_name, d.is_chairman_exclusive AS current_dept_exclusive
      FROM users u
      JOIN roles r ON r.id = u.role_id
      LEFT JOIN departments d ON d.id = u.department_id
@@ -677,6 +713,19 @@ router.delete('/users/:id(\\d+)', (req, res) => {
     });
     return res.status(403).json({
       error: 'حماية سيادية: حساب رئيس مجلس الإدارة محمي ولا يمكن حذفه نهائياً تحت أي ظرف.',
+    });
+  }
+
+  if (Number(existing.current_dept_exclusive) && req.user.role_slug !== 'chairman') {
+    writeAudit({
+      user: req.user,
+      action: `محاولة حذف حساب يتبع قسماً خاصاً برئيس مجلس الإدارة (${existing.full_name})`,
+      permissionKey: 'users.manage',
+      status: 'DENIED',
+      req,
+    });
+    return res.status(403).json({
+      error: 'حماية سيادية: هذا الحساب يتبع قسماً خاصاً برئيس مجلس الإدارة ولا يمكن حذفه إلا من رئيس مجلس الإدارة شخصياً.',
     });
   }
 
@@ -744,13 +793,19 @@ router.get('/departments', (req, res) => {
     });
   }
 
+  const isChairman = req.user.role_slug === 'chairman';
   const depts = all(
     `SELECT d.*,
             (SELECT COUNT(*) FROM users u WHERE u.department_id = d.id AND u.onboarding_status = 'approved') AS users_count,
             (SELECT COUNT(*) FROM boards b WHERE b.department_id = d.id) AS boards_count
      FROM departments d
-     ORDER BY d.id ASC`
-  );
+     WHERE d.is_chairman_exclusive = 0 OR ? = 1
+     ORDER BY d.id ASC`,
+    [isChairman ? 1 : 0]
+  ).map((d) => ({
+    ...d,
+    is_chairman_exclusive: Boolean(Number(d.is_chairman_exclusive)),
+  }));
 
   res.json(depts);
 });
@@ -769,6 +824,13 @@ router.post('/departments', (req, res) => {
   const description = String(body.description || '').trim().slice(0, 300);
   const color = /^#[0-9a-fA-F]{6}$/.test(body.color || '') ? body.color : '#0a6fa8';
   const icon = String(body.icon || 'briefcase').trim().slice(0, 30);
+  const isChairmanExclusive = Boolean(body.isChairmanExclusive) ? 1 : 0;
+
+  if (isChairmanExclusive && req.user.role_slug !== 'chairman') {
+    return res.status(403).json({
+      error: 'حماية سيادية: إنشاء قسم سيادي خاص برئيس مجلس الإدارة متاح لحساب رئيس مجلس الإدارة فقط',
+    });
+  }
 
   if (name.length < 2 || name.length > 80) {
     return res.status(400).json({ error: 'اسم القسم يجب أن يكون بين حرفين و80 حرفاً' });
@@ -779,8 +841,8 @@ router.post('/departments', (req, res) => {
 
   const slug = `${makeSlug(body.slug || name, 'dept')}-${Date.now().toString(36).slice(-4)}`;
   const id = run(
-    `INSERT INTO departments (slug, name, description, color, icon) VALUES (?, ?, ?, ?, ?)`,
-    [slug, name, description, color, icon]
+    `INSERT INTO departments (slug, name, description, color, icon, is_chairman_exclusive) VALUES (?, ?, ?, ?, ?, ?)`,
+    [slug, name, description, color, icon, isChairmanExclusive]
   ).lastInsertRowid;
 
   writeAudit({
@@ -807,11 +869,29 @@ router.patch('/departments/:id(\\d+)', (req, res) => {
   const dept = get(`SELECT * FROM departments WHERE id = ?`, [Number(req.params.id)]);
   if (!dept) return res.status(404).json({ error: 'القسم غير موجود' });
 
+  if (Number(dept.is_chairman_exclusive) && req.user.role_slug !== 'chairman') {
+    return res.status(403).json({
+      error: 'حماية سيادية: تعديل الأقسام الخاصة برئيس مجلس الإدارة متاح لحساب رئيس مجلس الإدارة فقط',
+    });
+  }
+
   const body = req.body || {};
   const name = body.name !== undefined ? String(body.name).trim() : dept.name;
   const description =
     body.description !== undefined ? String(body.description).trim().slice(0, 300) : dept.description;
   const color = /^#[0-9a-fA-F]{6}$/.test(body.color || '') ? body.color : dept.color;
+  const isChairmanExclusive =
+    body.isChairmanExclusive !== undefined
+      ? Boolean(body.isChairmanExclusive)
+        ? 1
+        : 0
+      : Number(dept.is_chairman_exclusive);
+
+  if (isChairmanExclusive !== Number(dept.is_chairman_exclusive) && req.user.role_slug !== 'chairman') {
+    return res.status(403).json({
+      error: 'حماية سيادية: تغيير خصوصية القسم السيادية متاح لحساب رئيس مجلس الإدارة فقط',
+    });
+  }
 
   if (name.length < 2 || name.length > 80) {
     return res.status(400).json({ error: 'اسم القسم غير صالح' });
@@ -820,12 +900,10 @@ router.patch('/departments/:id(\\d+)', (req, res) => {
   const dup = get(`SELECT id FROM departments WHERE name = ? AND id != ?`, [name, dept.id]);
   if (dup) return res.status(409).json({ error: 'يوجد قسم آخر بنفس الاسم' });
 
-  run(`UPDATE departments SET name = ?, description = ?, color = ? WHERE id = ?`, [
-    name,
-    description,
-    color,
-    dept.id,
-  ]);
+  run(
+    `UPDATE departments SET name = ?, description = ?, color = ?, is_chairman_exclusive = ? WHERE id = ?`,
+    [name, description, color, isChairmanExclusive, dept.id]
+  );
 
   writeAudit({
     user: req.user,
@@ -850,6 +928,12 @@ router.delete('/departments/:id(\\d+)', (req, res) => {
 
   const dept = get(`SELECT * FROM departments WHERE id = ?`, [Number(req.params.id)]);
   if (!dept) return res.status(404).json({ error: 'القسم غير موجود' });
+
+  if (Number(dept.is_chairman_exclusive) && req.user.role_slug !== 'chairman') {
+    return res.status(403).json({
+      error: 'حماية سيادية: حذف الأقسام الخاصة برئيس مجلس الإدارة متاح لحساب رئيس مجلس الإدارة فقط',
+    });
+  }
 
   const boardsCount = get(`SELECT COUNT(*) AS cnt FROM boards WHERE department_id = ?`, [dept.id]).cnt;
   const usersCount = get(`SELECT COUNT(*) AS cnt FROM users WHERE department_id = ?`, [dept.id]).cnt;

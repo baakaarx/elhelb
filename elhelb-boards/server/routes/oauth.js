@@ -173,7 +173,12 @@ router.get('/oauth/providers', (req, res) => {
   const creds = getGoogleCredentials();
   const gmailCfg = getGmailConfig();
   const origin = getBaseOrigin(req);
-  const departments = all(`SELECT id, name, color FROM departments ORDER BY id ASC`);
+  const departments = all(
+    `SELECT id, slug, name, color, is_chairman_exclusive FROM departments ORDER BY id ASC`
+  ).map((d) => ({
+    ...d,
+    is_chairman_exclusive: Boolean(Number(d.is_chairman_exclusive)),
+  }));
 
   res.json({
     googleConfigured: Boolean(creds.googleClientId && creds.googleClientSecret),

@@ -2,6 +2,7 @@ const express = require('express');
 const { get, all, run, transaction } = require('../db');
 const {
   authenticate,
+  isChairmanExclusiveDepartment,
   canAccessBoard,
   evaluatePermission,
   writeAudit,
@@ -34,6 +35,9 @@ const REQUESTABLE_CATEGORIES = new Set(['boards', 'lists', 'cards', 'collaborati
 
 function canManagerReviewRequest(manager, reqRow) {
   if (Number(reqRow.requester_id) === Number(manager.id)) return false;
+  if (isChairmanExclusiveDepartment(reqRow.target_department_id)) {
+    return manager.role_slug === 'chairman';
+  }
   if (manager.permissionSet.has('requests.review_all')) return true;
   if (
     manager.permissionSet.has('requests.review_department') &&
@@ -49,6 +53,7 @@ function canManagerReviewRequest(manager, reqRow) {
 
 // Catalog of requestable permissions & departments for the "طلب صلاحية من المدير" dialog
 router.get('/requests/catalog', (req, res) => {
+  const isChairman = req.user.role_slug === 'chairman';
   const permissions = all(
     `SELECT key, name, description, category, category_label
      FROM permissions
@@ -57,7 +62,11 @@ router.get('/requests/catalog', (req, res) => {
   ).filter((p) => REQUESTABLE_CATEGORIES.has(p.category));
 
   const departments = all(
-    `SELECT id, slug, name, color, description FROM departments ORDER BY id ASC`
+    `SELECT id, slug, name, color, description
+     FROM departments
+     WHERE is_chairman_exclusive = 0 OR ? = 1 OR id = ?
+     ORDER BY id ASC`,
+    [isChairman ? 1 : 0, req.user.department_id || -1]
   );
 
   res.json({
@@ -140,6 +149,9 @@ router.get('/requests/inbox', (req, res) => {
 
   const filteredRequests = allRows
     .filter((row) => {
+      if (isChairmanExclusiveDepartment(row.target_department_id)) {
+        return req.user.role_slug === 'chairman';
+      }
       if (canAll) return true;
       // Department manager sees requests within their own department for permissions they hold
       return (
@@ -308,6 +320,16 @@ router.post('/requests', async (req, res) => {
   }
 
   const deptRow = get(`SELECT * FROM departments WHERE id = ?`, [targetDepartmentId]);
+  if (
+    deptRow &&
+    Number(deptRow.is_chairman_exclusive) &&
+    req.user.role_slug !== 'chairman' &&
+    Number(req.user.department_id) !== Number(deptRow.id)
+  ) {
+    return res.status(403).json({
+      error: 'حماية سيادية: هذا القسم خاص ومرتبط مباشرةً برئيس مجلس الإدارة فقط ولا يقبل طلبات وصول خارجية.',
+    });
+  }
   const isCrossDept =
     !req.user.department_id || Number(req.user.department_id) !== Number(targetDepartmentId);
 

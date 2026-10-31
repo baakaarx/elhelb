@@ -231,12 +231,266 @@ function seedIfNeeded() {
     'requests.review_department',
   ];
 
+  const OFFICIAL_DEPARTMENTS = [
+    {
+      slug: 'export',
+      name: 'قسم التصدير والشحن الدولي',
+      description: 'إدارة عقود التصدير الخارجية، الشحن البحري والجوي، الاعتمادات المستندية، والأسواق الدولية',
+      color: '#0284c7',
+      icon: 'globe',
+      boardTitle: 'لوحة أعمال قسم التصدير والشحن الدولي',
+      boardBg: 'ocean',
+      isChairmanExclusive: 0,
+    },
+    {
+      slug: 'customs',
+      name: 'قسم التخليص الجمركي واللوجستيات والموانئ',
+      description: 'متابعة منظومة نافذة (ACI)، الإفراج الجمركي للخامات الواردة، شهادات الصادر بالموانئ، البوليصة الملاحية، وحجز الحاويات والنقل',
+      color: '#0369a1',
+      icon: 'anchor',
+      boardTitle: 'لوحة أعمال التخليص الجمركي واللوجستيات والموانئ',
+      boardBg: 'ocean',
+      isChairmanExclusive: 0,
+      lists: [
+        'شحنات جديدة وتسجيل نافذة (ACI)',
+        'الفحص والرقابة وسحب العينات',
+        'سداد الرسوم والإفراج الجمركي',
+        'النقل للمصانع / الشحن البحري ✅',
+      ],
+      labels: [
+        ['نافذة ACI', '#0284c7'],
+        ['وارد خامات', '#d97706'],
+        ['صادر دولي', '#7c3aed'],
+        ['تم الإفراج', '#059669'],
+      ],
+    },
+    {
+      slug: 'registration',
+      name: 'قسم تسجيل المنتجات والتراخيص',
+      description: 'إعداد الملفات الفنية، تسجيل المنتجات بالهيئات الرقابية، الشهادات الصحية، وتجديد التراخيص',
+      color: '#7c3aed',
+      icon: 'file-check',
+      boardTitle: 'لوحة أعمال قسم تسجيل المنتجات والتراخيص',
+      boardBg: 'purple',
+      isChairmanExclusive: 0,
+    },
+    {
+      slug: 'production',
+      name: 'قسم المصانع والإنتاج والتعبئة',
+      description: 'إدارة خطوط التصنيع والخلط والتعبئة بمصانع المجموعة، أوامر التشغيل، وتجهيز طلبيات التصدير والسوق المحلي',
+      color: '#b45309',
+      icon: 'factory',
+      boardTitle: 'لوحة أعمال المصانع وخطوط الإنتاج والتعبئة',
+      boardBg: 'gold',
+      isChairmanExclusive: 0,
+      lists: [
+        'أوامر التشغيل المطلوبة',
+        'تحت التصنيع والخلط',
+        'التعبئة والتغليف والترقيم',
+        'جاهز للتسليم للمخازن ✅',
+      ],
+      labels: [
+        ['طلبيات تصدير', '#0284c7'],
+        ['سوق محلي', '#b45309'],
+        ['تشغيلة عاجلة', '#dc2626'],
+        ['تم الإنتاج', '#059669'],
+      ],
+    },
+    {
+      slug: 'qc_labs',
+      name: 'قسم المعامل ورقابة الجودة (QC)',
+      description: 'الفحص المعملي للخامات والمنتج النهائي، مطابقة المواصفات القياسية، وإصدار شهادات التحليل (COA) للتصدير والجمارك',
+      color: '#6d28d9',
+      icon: 'flask',
+      boardTitle: 'لوحة أعمال المعامل المركزية ورقابة الجودة (QC)',
+      boardBg: 'purple',
+      isChairmanExclusive: 0,
+      lists: [
+        'عينات واردة للفحص',
+        'جاري التحليل المعملي',
+        'مراجعة وإصدار شهادة (COA)',
+        'مطابق للمواصفات ومعتمد ✅',
+      ],
+      labels: [
+        ['شهادة COA', '#7c3aed'],
+        ['فحص خامات', '#d97706'],
+        ['مطابقة تصدير', '#0284c7'],
+        ['معتمد معملياً', '#059669'],
+      ],
+    },
+    {
+      slug: 'warehouses',
+      name: 'قسم المخازن وإدارة الإمداد',
+      description: 'إدارة مخازن الخامات والعبوات والمنتج التام، أذون الاستلام والصرف، الجرد الدوري، وتجهيز الحاويات للشحن',
+      color: '#047857',
+      icon: 'warehouse',
+      boardTitle: 'لوحة أعمال المخازن المركزية وإدارة الإمداد',
+      boardBg: 'emerald',
+      isChairmanExclusive: 0,
+      lists: [
+        'أذون استلام وصرف جديدة',
+        'تجهيز وتجميع الطلبيات',
+        'تحميل وتستيف الحاويات',
+        'تم الصرف والجرد ✅',
+      ],
+      labels: [
+        ['مخزن الخامات', '#d97706'],
+        ['مخزن العبوات', '#0a6fa8'],
+        ['منتج تام', '#059669'],
+        ['تجهيز حاوية', '#7c3aed'],
+      ],
+    },
+    {
+      slug: 'agri_support',
+      name: 'قسم الدعم الفني الزراعي والتجارب الحقلية',
+      description: 'المتابعة الفنية للمزارع الكبرى، التجارب الحقلية للمبيدات والأسمدة، وبرامج وقاية وتغذية المحاصيل',
+      color: '#15803d',
+      icon: 'sprout',
+      boardTitle: 'لوحة أعمال الدعم الفني الزراعي والتجارب الحقلية',
+      boardBg: 'emerald',
+      isChairmanExclusive: 0,
+      lists: [
+        'زيارات وبرامج حقلية مطلوبة',
+        'تحت التطبيق والمتابعة بالمزارع',
+        'تقييم النتائج والتوصيات الفنية',
+        'تقرير حقلي مكتمل ✅',
+      ],
+      labels: [
+        ['تجربة حقلية', '#15803d'],
+        ['كبار المزارع', '#b45309'],
+        ['وقاية المزروعات', '#dc2626'],
+        ['تغذية النبات', '#059669'],
+      ],
+    },
+    {
+      slug: 'it',
+      name: 'قسم تكنولوجيا المعلومات (IT)',
+      description: 'إدارة الأنظمة والمنصات الرقمية، صلاحيات الحسابات، الشبكات، أمن المعلومات، والدعم الفني',
+      color: '#2563eb',
+      icon: 'cpu',
+      boardTitle: 'لوحة أعمال قسم تكنولوجيا المعلومات (IT)',
+      boardBg: 'royal',
+      isChairmanExclusive: 0,
+    },
+    {
+      slug: 'sales',
+      name: 'قسم المبيعات والتعاقدات',
+      description: 'إدارة عروض الأسعار، صفقات الشركات بالسوق المحلي، ومتابعة حسابات كبار العملاء',
+      color: '#0a6fa8',
+      icon: 'trending-up',
+      boardTitle: 'لوحة أعمال قسم المبيعات والتعاقدات',
+      boardBg: 'gold',
+      isChairmanExclusive: 0,
+    },
+    {
+      slug: 'procurement',
+      name: 'قسم المشتريات والتوريدات',
+      description: 'إدارة الموردين، أوامر الشراء المحلية والدولية، الخامات، والمخازن المركزية',
+      color: '#059669',
+      icon: 'package',
+      boardTitle: 'لوحة أعمال قسم المشتريات والتوريدات',
+      boardBg: 'emerald',
+      isChairmanExclusive: 0,
+    },
+    {
+      slug: 'media',
+      name: 'قسم الميديا والتسويق',
+      description: 'الهوية البصرية، الكتالوجات التصديرية، التصميم الجرافيكي، والحملات الرقمية',
+      color: '#db2777',
+      icon: 'megaphone',
+      boardTitle: 'لوحة أعمال قسم الميديا والتسويق',
+      boardBg: 'crimson',
+      isChairmanExclusive: 0,
+    },
+    {
+      slug: 'hr',
+      name: 'قسم الموارد البشرية',
+      description: 'استقطاب الكفاءات، مسوغات التعيين، الحضور والانصراف، وتقييم الأداء الإداري',
+      color: '#d97706',
+      icon: 'users',
+      boardTitle: 'لوحة أعمال قسم الموارد البشرية',
+      boardBg: 'slate',
+      isChairmanExclusive: 0,
+    },
+    {
+      slug: 'finance',
+      name: 'قسم الحسابات والمالية',
+      description: 'المراجعة المالية، الفواتير الضريبية، التحصيلات، وتسوية الاعتمادات البنكية',
+      color: '#0d9488',
+      icon: 'landmark',
+      boardTitle: 'لوحة أعمال قسم الحسابات والمالية',
+      boardBg: 'sunset',
+      isChairmanExclusive: 0,
+    },
+    {
+      slug: 'ai_systems',
+      name: 'قسم الذكاء الاصطناعي وتطوير الأنظمة (AI)',
+      description: 'تطوير أنظمة الذكاء الاصطناعي والمنصات الرقمية والأتمتة الخاصة بمجموعة الهلب — يتبع رئيس مجلس الإدارة مباشرةً بخصوصية سيادية كاملة',
+      color: '#92400e',
+      icon: 'sparkles',
+      boardTitle: 'لوحة تكليفات ومشاريع الذكاء الاصطناعي (مكتب رئيس مجلس الإدارة)',
+      boardBg: 'royal',
+      isChairmanExclusive: 1,
+      lists: [
+        'تكليفات جديدة من رئيس مجلس الإدارة',
+        'قيد التطوير والتنفيذ (AI & Dev)',
+        'جاهز لعرض ومراجعة رئيس مجلس الإدارة',
+        'تم الاعتماد والتشغيل ✅',
+      ],
+      labels: [
+        ['تكليف سيادي عاجل', '#dc2626'],
+        ['ذكاء اصطناعي (AI)', '#7c3aed'],
+        ['تطوير منصات وأنظمة', '#2563eb'],
+        ['معتمد من رئيس مجلس الإدارة', '#059669'],
+      ],
+    },
+  ];
+
+  const defaultLists = [
+    'المهام الجديدة',
+    'جاري العمل عليها',
+    'قيد المراجعة والاعتماد',
+    'مكتمل ✅',
+  ];
+  const defaultLabels = [
+    ['عاجل', '#dc2626'],
+    ['مهم', '#d97706'],
+    ['متابعة', '#0a6fa8'],
+    ['معتمد', '#059669'],
+  ];
+
+  function createStarterBoardForDept(dept, creatorId) {
+    const boardId = run(
+      `INSERT INTO boards (title, description, department_id, background, created_by)
+       VALUES (?, ?, ?, ?, ?)`,
+      [dept.boardTitle, dept.description, dept.id, dept.boardBg, creatorId]
+    ).lastInsertRowid;
+
+    const listsToUse = dept.lists || defaultLists;
+    listsToUse.forEach((lTitle, idx) => {
+      run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, ?)`, [
+        boardId,
+        lTitle,
+        idx + 1,
+      ]);
+    });
+
+    const labelsToUse = dept.labels || defaultLabels;
+    labelsToUse.forEach(([lName, lColor]) => {
+      run(`INSERT INTO board_labels (board_id, name, color) VALUES (?, ?, ?)`, [
+        boardId,
+        lName,
+        lColor,
+      ]);
+    });
+  }
+
   const existingUsers = get(`SELECT COUNT(*) AS cnt FROM users`);
   if (existingUsers && existingUsers.cnt > 0) {
-    // Safe migration: ensure hr_manager role exists in pre-existing local databases
-    const existingHrRole = get(`SELECT id FROM roles WHERE slug = 'hr_manager'`);
-    if (!existingHrRole) {
-      transaction(() => {
+    transaction(() => {
+      // Safe migration 1: ensure hr_manager role exists in pre-existing local databases
+      const existingHrRole = get(`SELECT id FROM roles WHERE slug = 'hr_manager'`);
+      if (!existingHrRole) {
         const hrRoleId = run(
           `INSERT INTO roles (slug, name, description, color, rank_level, is_protected)
            VALUES ('hr_manager', 'مسؤول الموارد البشرية (HR)', ?, '#d97706', 70, 1)`,
@@ -250,94 +504,42 @@ function seedIfNeeded() {
             k,
           ]);
         }
-      });
-    }
+      }
+
+      // Safe migration 2: ensure any newly introduced official departments & starter boards exist
+      const chairmanUser = get(
+        `SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id WHERE r.slug = 'chairman' ORDER BY u.id ASC LIMIT 1`
+      );
+      const creatorId = chairmanUser ? chairmanUser.id : null;
+
+      for (const d of OFFICIAL_DEPARTMENTS) {
+        let existingDept = get(`SELECT id, is_chairman_exclusive FROM departments WHERE slug = ?`, [
+          d.slug,
+        ]);
+        if (!existingDept) {
+          const newDeptId = run(
+            `INSERT INTO departments (slug, name, description, color, icon, is_chairman_exclusive)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [d.slug, d.name, d.description, d.color, d.icon, d.isChairmanExclusive ? 1 : 0]
+          ).lastInsertRowid;
+          createStarterBoardForDept({ ...d, id: newDeptId }, creatorId);
+        } else if (d.slug === 'ai_systems' && !existingDept.is_chairman_exclusive) {
+          run(`UPDATE departments SET is_chairman_exclusive = 1 WHERE id = ?`, [existingDept.id]);
+        }
+      }
+    });
     return;
   }
 
   const adminPasswordHash = bcrypt.hashSync('010228513849', 10);
 
   transaction(() => {
-    // 1. Official ELHELB GROUP Departments
-    const departmentsToCreate = [
-      {
-        slug: 'export',
-        name: 'قسم التصدير والشحن الدولي',
-        description: 'إدارة عقود التصدير الخارجية، الشحن البحري والجوي، الاعتمادات المستندية، والأسواق الدولية',
-        color: '#0284c7',
-        icon: 'globe',
-        boardTitle: 'لوحة أعمال قسم التصدير والشحن الدولي',
-        boardBg: 'ocean',
-      },
-      {
-        slug: 'registration',
-        name: 'قسم تسجيل المنتجات والتراخيص',
-        description: 'إعداد الملفات الفنية، تسجيل المنتجات بالهيئات الرقابية، الشهادات الصحية، وتجديد التراخيص',
-        color: '#7c3aed',
-        icon: 'file-check',
-        boardTitle: 'لوحة أعمال قسم تسجيل المنتجات والتراخيص',
-        boardBg: 'purple',
-      },
-      {
-        slug: 'it',
-        name: 'قسم تكنولوجيا المعلومات (IT)',
-        description: 'إدارة الأنظمة والمنصات الرقمية، صلاحيات الحسابات، الشبكات، أمن المعلومات، والدعم الفني',
-        color: '#2563eb',
-        icon: 'cpu',
-        boardTitle: 'لوحة أعمال قسم تكنولوجيا المعلومات (IT)',
-        boardBg: 'royal',
-      },
-      {
-        slug: 'sales',
-        name: 'قسم المبيعات والتعاقدات',
-        description: 'إدارة عروض الأسعار، صفقات الشركات بالسوق المحلي، ومتابعة حسابات كبار العملاء',
-        color: '#0a6fa8',
-        icon: 'trending-up',
-        boardTitle: 'لوحة أعمال قسم المبيعات والتعاقدات',
-        boardBg: 'gold',
-      },
-      {
-        slug: 'procurement',
-        name: 'قسم المشتريات والتوريدات',
-        description: 'إدارة الموردين، أوامر الشراء المحلية والدولية، الخامات، والمخازن المركزية',
-        color: '#059669',
-        icon: 'package',
-        boardTitle: 'لوحة أعمال قسم المشتريات والتوريدات',
-        boardBg: 'emerald',
-      },
-      {
-        slug: 'media',
-        name: 'قسم الميديا والتسويق',
-        description: 'الهوية البصرية، الكتالوجات التصديرية، التصميم الجرافيكي، والحملات الرقمية',
-        color: '#db2777',
-        icon: 'megaphone',
-        boardTitle: 'لوحة أعمال قسم الميديا والتسويق',
-        boardBg: 'crimson',
-      },
-      {
-        slug: 'hr',
-        name: 'قسم الموارد البشرية',
-        description: 'استقطاب الكفاءات، مسوغات التعيين، الحضور والانصراف، وتقييم الأداء الإداري',
-        color: '#d97706',
-        icon: 'users',
-        boardTitle: 'لوحة أعمال قسم الموارد البشرية',
-        boardBg: 'slate',
-      },
-      {
-        slug: 'finance',
-        name: 'قسم الحسابات والمالية',
-        description: 'المراجعة المالية، الفواتير الضريبية، التحصيلات، وتسوية الاعتمادات البنكية',
-        color: '#0d9488',
-        icon: 'landmark',
-        boardTitle: 'لوحة أعمال قسم الحسابات والمالية',
-        boardBg: 'sunset',
-      },
-    ];
-
-    const createdDepts = departmentsToCreate.map((d) => {
+    // 1. Official ELHELB GROUP Departments (14 departments including Sovereign AI Office)
+    const createdDepts = OFFICIAL_DEPARTMENTS.map((d) => {
       const id = run(
-        `INSERT INTO departments (slug, name, description, color, icon) VALUES (?, ?, ?, ?, ?)`,
-        [d.slug, d.name, d.description, d.color, d.icon]
+        `INSERT INTO departments (slug, name, description, color, icon, is_chairman_exclusive)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [d.slug, d.name, d.description, d.color, d.icon, d.isChairmanExclusive ? 1 : 0]
       ).lastInsertRowid;
       return { ...d, id };
     });
@@ -504,42 +706,9 @@ function seedIfNeeded() {
       ]
     ).lastInsertRowid;
 
-    // 4. Clean Starter Board for each of the 8 company departments (zero fake users/cards)
-    const defaultLists = [
-      'المهام الجديدة',
-      'جاري العمل عليها',
-      'قيد المراجعة والاعتماد',
-      'مكتمل ✅',
-    ];
-    const defaultLabels = [
-      ['عاجل', '#dc2626'],
-      ['مهم', '#d97706'],
-      ['متابعة', '#0a6fa8'],
-      ['معتمد', '#059669'],
-    ];
-
+    // 4. Clean Starter Board for each of the 14 company departments (zero fake users/cards)
     for (const dept of createdDepts) {
-      const boardId = run(
-        `INSERT INTO boards (title, description, department_id, background, created_by)
-         VALUES (?, ?, ?, ?, ?)`,
-        [dept.boardTitle, dept.description, dept.id, dept.boardBg, adminUserId]
-      ).lastInsertRowid;
-
-      defaultLists.forEach((lTitle, idx) => {
-        run(`INSERT INTO lists (board_id, title, position) VALUES (?, ?, ?)`, [
-          boardId,
-          lTitle,
-          idx + 1,
-        ]);
-      });
-
-      defaultLabels.forEach(([lName, lColor]) => {
-        run(`INSERT INTO board_labels (board_id, name, color) VALUES (?, ?, ?)`, [
-          boardId,
-          lName,
-          lColor,
-        ]);
-      });
+      createStarterBoardForDept(dept, adminUserId);
     }
   });
 }

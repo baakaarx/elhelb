@@ -182,12 +182,28 @@ function findMatchingGrant(user, permissionKey, target = {}) {
   return null;
 }
 
+function isChairmanExclusiveDepartment(departmentId, preloadedFlag = undefined) {
+  if (preloadedFlag !== undefined && preloadedFlag !== null) {
+    return Boolean(Number(preloadedFlag));
+  }
+  if (!departmentId) return false;
+  const row = get(`SELECT is_chairman_exclusive FROM departments WHERE id = ?`, [
+    Number(departmentId),
+  ]);
+  return Boolean(row && Number(row.is_chairman_exclusive));
+}
+
 /**
  * Checks whether user can view a specific board (or department).
  */
 function canAccessBoard(user, board) {
   if (!board) return { allowed: false, viaGrant: null };
-  if (user.permissionSet.has('boards.view_all')) {
+  const isExclusive = isChairmanExclusiveDepartment(
+    board.department_id,
+    board.department_chairman_exclusive
+  );
+
+  if (user.permissionSet.has('boards.view_all') && (!isExclusive || user.role_slug === 'chairman')) {
     return { allowed: true, viaGrant: null };
   }
   if (
@@ -237,7 +253,11 @@ function evaluatePermission(user, permissionKey, target = {}) {
   }
 
   // Scoped permissions (Boards, Lists, Cards, Comments, Department Requests)
-  const hasCompanyWideScope = user.permissionSet.has('boards.view_all');
+  const isExclusive =
+    departmentId !== null ? isChairmanExclusiveDepartment(departmentId) : false;
+  const hasCompanyWideScope =
+    user.permissionSet.has('boards.view_all') &&
+    (!isExclusive || user.role_slug === 'chairman');
   const isOwnDepartment =
     departmentId !== null &&
     user.department_id !== null &&
@@ -324,12 +344,23 @@ function denyPermission(req, res, {
   canRequestElevation = true,
 }) {
   const perm = get(`SELECT key, name, description FROM permissions WHERE key = ?`, [permissionKey]);
-  const dept = departmentId ? get(`SELECT id, name FROM departments WHERE id = ?`, [departmentId]) : null;
+  const dept = departmentId
+    ? get(`SELECT id, name, is_chairman_exclusive FROM departments WHERE id = ?`, [departmentId])
+    : null;
+  const isHiddenExclusive = Boolean(
+    dept &&
+      Number(dept.is_chairman_exclusive) &&
+      req.user.role_slug !== 'chairman' &&
+      Number(req.user.department_id) !== Number(dept.id)
+  );
+  if (isHiddenExclusive) {
+    canRequestElevation = false;
+  }
   // IMPORTANT: Do NOT leak private board/card titles if user cannot view that board!
   let safeBoardTitle = null;
   let safeCardTitle = null;
   if (boardId) {
-    const board = get(`SELECT id, title, department_id FROM boards WHERE id = ?`, [boardId]);
+    const board = resolveBoardHierarchy(boardId);
     if (board && canAccessBoard(req.user, board).allowed) {
       safeBoardTitle = board.title;
       if (cardId) {
@@ -339,13 +370,17 @@ function denyPermission(req, res, {
     }
   }
 
+  const safeDeptLabel = isHiddenExclusive ? 'قسم خاص بمكتب رئيس مجلس الإدارة' : dept ? dept.name : null;
+
   const message =
     customMessage ||
-    `تم رفض الطلب من السيرفر: لا تملك صلاحية "${perm ? perm.name : permissionKey}"${
-      dept && (!req.user.department_id || Number(req.user.department_id) !== Number(dept.id))
-        ? ` على (${dept.name})`
-        : ''
-    }`;
+    (isHiddenExclusive
+      ? 'حماية سيادية: هذا القسم خاص ومرتبط مباشرةً برئيس مجلس الإدارة فقط'
+      : `تم رفض الطلب من السيرفر: لا تملك صلاحية "${perm ? perm.name : permissionKey}"${
+          dept && (!req.user.department_id || Number(req.user.department_id) !== Number(dept.id))
+            ? ` على (${dept.name})`
+            : ''
+        }`);
 
   writeAudit({
     user: req.user,
@@ -364,8 +399,8 @@ function denyPermission(req, res, {
     permissionDescription: perm ? perm.description : '',
     actionLabel,
     scopeType,
-    targetDepartmentId: dept ? dept.id : departmentId,
-    targetDepartmentName: dept ? dept.name : null,
+    targetDepartmentId: isHiddenExclusive ? null : dept ? dept.id : departmentId,
+    targetDepartmentName: safeDeptLabel,
     targetBoardId: safeBoardTitle ? boardId : null,
     targetBoardTitle: safeBoardTitle,
     targetCardId: safeCardTitle ? cardId : null,
@@ -380,7 +415,11 @@ function denyPermission(req, res, {
  */
 function resolveBoardHierarchy(boardId) {
   return get(
-    `SELECT b.*, d.name AS department_name, d.color AS department_color, d.slug AS department_slug
+    `SELECT b.*,
+            d.name AS department_name,
+            d.color AS department_color,
+            d.slug AS department_slug,
+            d.is_chairman_exclusive AS department_chairman_exclusive
      FROM boards b
      JOIN departments d ON d.id = b.department_id
      WHERE b.id = ?`,
@@ -392,7 +431,8 @@ function resolveListHierarchy(listId) {
   return get(
     `SELECT l.id AS list_id, l.title AS list_title, l.position AS list_position, l.board_id,
             b.title AS board_title, b.department_id, b.background,
-            d.name AS department_name
+            d.name AS department_name,
+            d.is_chairman_exclusive AS department_chairman_exclusive
      FROM lists l
      JOIN boards b ON b.id = l.board_id
      JOIN departments d ON d.id = b.department_id
@@ -405,7 +445,8 @@ function resolveCardHierarchy(cardId) {
   return get(
     `SELECT c.*, l.title AS list_title,
             b.title AS board_title, b.department_id,
-            d.name AS department_name
+            d.name AS department_name,
+            d.is_chairman_exclusive AS department_chairman_exclusive
      FROM cards c
      JOIN lists l ON l.id = c.list_id
      JOIN boards b ON b.id = c.board_id
@@ -429,6 +470,7 @@ module.exports = {
   getActiveGrantsForUser,
   authenticate,
   userHasPermission,
+  isChairmanExclusiveDepartment,
   canAccessBoard,
   evaluatePermission,
   consumeGrantIfOneTime,

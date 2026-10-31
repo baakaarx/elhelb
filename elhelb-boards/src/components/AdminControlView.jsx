@@ -143,7 +143,7 @@ export default function AdminControlView({ user, onRefreshMe, showToast }) {
         <UsersManagementPanel currentUser={user} onRefreshMe={onRefreshMe} showToast={showToast} />
       )}
       {subTab === 'departments' && canDepts && (
-        <DepartmentsManagementPanel showToast={showToast} />
+        <DepartmentsManagementPanel currentUser={user} showToast={showToast} />
       )}
       {subTab === 'gmail' && canRoles && <GmailSettingsPanel showToast={showToast} />}
       {subTab === 'oauth' && canRoles && <OAuthSettingsPanel showToast={showToast} />}
@@ -1242,11 +1242,13 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
 /* ==========================================
    3. DEPARTMENTS MANAGEMENT
    ========================================== */
-function DepartmentsManagementPanel({ showToast }) {
+function DepartmentsManagementPanel({ currentUser, showToast }) {
+  const isChairman = currentUser && currentUser.roleSlug === 'chairman';
   const [departments, setDepartments] = useState([]);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [color, setColor] = useState('#0a6fa8');
+  const [isChairmanExclusive, setIsChairmanExclusive] = useState(false);
 
   async function loadDepts() {
     try {
@@ -1266,14 +1268,33 @@ function DepartmentsManagementPanel({ showToast }) {
     try {
       await apiFetch('/api/admin/departments', {
         method: 'POST',
-        body: { name, description, color },
+        body: { name, description, color, isChairmanExclusive: isChairman && isChairmanExclusive },
       });
       setName('');
       setDescription('');
+      setIsChairmanExclusive(false);
       await loadDepts();
       showToast('تم إنشاء القسم الجديد بنجاح', 'success');
     } catch (err) {
       showToast(err.message || 'تعذر إنشاء القسم', 'error');
+    }
+  }
+
+  async function handleToggleExclusive(dept) {
+    try {
+      await apiFetch(`/api/admin/departments/${dept.id}`, {
+        method: 'PATCH',
+        body: { isChairmanExclusive: !dept.is_chairman_exclusive },
+      });
+      await loadDepts();
+      showToast(
+        !dept.is_chairman_exclusive
+          ? `تم تحويل «${dept.name}» إلى قسم سيادي خاص برئيس مجلس الإدارة فقط`
+          : `تم فتح «${dept.name}» للإدارة العامة والـ HR`,
+        'success'
+      );
+    } catch (err) {
+      showToast(err.message || 'تعذر تحديث خصوصية القسم', 'error');
     }
   }
 
@@ -1332,6 +1353,34 @@ function DepartmentsManagementPanel({ showToast }) {
               ))}
             </div>
           </div>
+          {isChairman && (
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 8,
+                background: '#fffbeb',
+                border: '1px solid #fde68a',
+                borderRadius: 10,
+                padding: '10px 12px',
+                marginBottom: 14,
+                cursor: 'pointer',
+                fontSize: 12.5,
+                color: '#92400e',
+                fontWeight: 700,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={isChairmanExclusive}
+                onChange={(e) => setIsChairmanExclusive(e.target.checked)}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                👑 قسم سيادي خاص برئيس مجلس الإدارة فقط (مخفي تماماً عن المدير العام، الـ HR، والـ IT)
+              </span>
+            </label>
+          )}
           <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
             <Plus size={15} />
             إنشاء القسم
@@ -1358,27 +1407,54 @@ function DepartmentsManagementPanel({ showToast }) {
               {departments.map((d) => (
                 <tr key={d.id}>
                   <td>
-                    <span className="badge" style={{ background: d.color, color: '#fff' }}>
-                      {d.name}
-                    </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-start' }}>
+                      <span className="badge" style={{ background: d.color, color: '#fff' }}>
+                        {d.name}
+                      </span>
+                      {Boolean(d.is_chairman_exclusive) && (
+                        <span
+                          className="badge"
+                          style={{
+                            background: '#fffbeb',
+                            color: '#92400e',
+                            border: '1px solid #f59e0b',
+                            fontSize: 11,
+                          }}
+                        >
+                          👑 خاص برئيس مجلس الإدارة فقط
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td style={{ fontSize: 12.5, color: '#475569' }}>{d.description}</td>
                   <td style={{ fontWeight: 800 }}>{d.users_count}</td>
                   <td style={{ fontWeight: 800 }}>{d.boards_count}</td>
                   <td>
-                    <button
-                      type="button"
-                      className="btn btn-danger-soft btn-sm"
-                      disabled={d.users_count > 0 || d.boards_count > 0}
-                      title={
-                        d.users_count > 0 || d.boards_count > 0
-                          ? 'لا يمكن حذف قسم مرتبط بلوحات أو موظفين'
-                          : 'حذف القسم'
-                      }
-                      onClick={() => handleDelete(d)}
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {isChairman && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          title="تبديل الخصوصية السيادية (خاص برئيس مجلس الإدارة فقط / عام)"
+                          onClick={() => handleToggleExclusive(d)}
+                        >
+                          👑
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-danger-soft btn-sm"
+                        disabled={d.users_count > 0 || d.boards_count > 0}
+                        title={
+                          d.users_count > 0 || d.boards_count > 0
+                            ? 'لا يمكن حذف قسم مرتبط بلوحات أو موظفين'
+                            : 'حذف القسم'
+                        }
+                        onClick={() => handleDelete(d)}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -64,7 +64,7 @@ async function main() {
     // Fetch roles & departments so we can dynamically create isolated test users inside tmpDb
     const rolesRes = await api('GET', '/api/admin/roles', chairmanTok);
     const deptsRes = await api('GET', '/api/admin/departments', chairmanTok);
-    assert.equal(deptsRes.data.length, 8);
+    assert.equal(deptsRes.data.length, 14, 'Chairman must see all 14 official ELHELB GROUP departments');
 
     const roleBySlug = (slug) => rolesRes.data.roles.find((r) => r.slug === slug);
     const deptBySlug = (slug) => deptsRes.data.find((d) => d.slug === slug);
@@ -106,11 +106,11 @@ async function main() {
     console.log('2️⃣ Testing strict Department Isolation across Export, Product Registration, IT, Sales & Media...');
     const chairmanBoards = await api('GET', '/api/boards', chairmanTok);
     assert.equal(chairmanBoards.status, 200);
-    assert.equal(chairmanBoards.data.length, 8, 'Admin (Chairman) should see all 8 company boards across all 8 departments');
+    assert.equal(chairmanBoards.data.length, 14, 'Admin (Chairman) should see all 14 company boards across all 14 departments');
 
     const execSummary = await api('GET', '/api/boards/executive-summary', chairmanTok);
     assert.equal(execSummary.status, 200);
-    assert.equal(execSummary.data.departments.length, 8, 'Executive summary should include all 8 departments');
+    assert.equal(execSummary.data.departments.length, 14, 'Executive summary for Chairman should include all 14 departments');
 
     // Export employee ONLY sees Export board
     const exportBoards = await api('GET', '/api/boards', exportEmpTok);
@@ -160,7 +160,11 @@ async function main() {
     console.log('3️⃣ Testing Sovereign Role Hierarchy (admin [Chairman] > GM > IT Admin)...');
     const itDepts = await api('GET', '/api/admin/departments', itMgrTok);
     assert.equal(itDepts.status, 200);
-    assert.equal(itDepts.data.length, 8);
+    assert.equal(
+      itDepts.data.length,
+      13,
+      'IT Admin sees ONLY the 13 operational departments (Chairman-Exclusive AI department is hidden)'
+    );
 
     // Neither GM nor IT Manager can edit Chairman's sovereign role!
     const gmTouchChairman = await api('PUT', `/api/admin/roles/${chairmanRole.id}`, gmTok, {
@@ -888,7 +892,139 @@ async function main() {
     assert.equal(imported.status, 200);
     assert.equal((await api('POST', '/api/auth/login', null, { username: 'mo.ai', password: '010228513849' })).status, 200);
 
-    console.log('\n✅ ALL 12 PRODUCTION v12 TESTS (SERVER MIGRATION BACKUP, CLOUD PERSISTENCE, SESSION ISOLATION & RBAC) PASSED 100%!');
+    console.log('1️⃣3️⃣ Testing 14 Official Departments + Sovereign Chairman-Exclusive AI Department Isolation...');
+    // Verify all 5 new agrochemical/export operational departments + sovereign ai_systems exist
+    for (const slug of ['customs', 'production', 'qc_labs', 'warehouses', 'agri_support', 'ai_systems']) {
+      assert.ok(deptBySlug(slug), `Department ${slug} must exist in seeded DB`);
+    }
+    const aiDept = deptBySlug('ai_systems');
+    assert.equal(aiDept.is_chairman_exclusive, true, 'ai_systems must be marked is_chairman_exclusive = true');
+
+    const aiBoard = chairmanBoards.data.find((b) => b.department_slug === 'ai_systems');
+    assert.ok(aiBoard, 'Chairman must see ai_systems board');
+
+    // General Manager (super_admin), IT Admin, and HR Manager MUST NOT see ai_systems anywhere!
+    const gmBoards = await api('GET', '/api/boards', gmTok);
+    assert.equal(gmBoards.status, 200);
+    assert.equal(gmBoards.data.length, 13, 'General Manager must see ONLY 13 operational boards, NEVER ai_systems');
+    assert.ok(!gmBoards.data.some((b) => b.department_slug === 'ai_systems'));
+
+    const gmSummary = await api('GET', '/api/boards/executive-summary', gmTok);
+    assert.equal(gmSummary.status, 200);
+    assert.equal(gmSummary.data.departments.length, 13, 'General Manager executive summary must exclude ai_systems');
+
+    const gmDirectory = await api('GET', '/api/departments/directory', gmTok);
+    assert.equal(gmDirectory.status, 200);
+    assert.ok(!gmDirectory.data.some((d) => d.slug === 'ai_systems'), 'Directory for GM must hide ai_systems');
+
+    // Direct URL probing of ai_systems board by General Manager, IT Admin, and HR Manager -> 403!
+    const gmProbeAi = await api('GET', `/api/boards/${aiBoard.id}`, gmTok);
+    assert.equal(gmProbeAi.status, 403, 'even super_admin General Manager must get 403 on ai_systems board');
+    assert.equal(gmProbeAi.data.targetBoardTitle, null, '403 must NOT leak ai_systems board title');
+    assert.equal(gmProbeAi.data.canRequestElevation, false, 'ai_systems must disallow elevation requests');
+
+    assert.equal((await api('GET', `/api/boards/${aiBoard.id}`, itMgrTok)).status, 403);
+    assert.equal((await api('GET', `/api/boards/${aiBoard.id}`, hrTok)).status, 403);
+
+    // GM, IT Admin, and HR Manager CANNOT create or move users into ai_systems
+    assert.equal(
+      (
+        await api('POST', '/api/admin/users', gmTok, {
+          username: 'sneak.ai',
+          password: 'Password123',
+          fullName: 'متسلل',
+          roleId: staffRole.id,
+          departmentId: aiDept.id,
+        })
+      ).status,
+      403
+    );
+    assert.equal(
+      (
+        await api('POST', '/api/admin/users', hrTok, {
+          username: 'sneak.hr.ai',
+          password: 'Password123',
+          fullName: 'متسلل HR',
+          roleId: staffRole.id,
+          departmentId: aiDept.id,
+        })
+      ).status,
+      403
+    );
+
+    // Self-register AI Systems Engineer -> chooses ai_systems -> ONLY Chairman sees & approves!
+    const regAi = await api('POST', '/api/auth/register', null, {
+      fullName: 'مهندس الذكاء الاصطناعي وتطوير الأنظمة',
+      username: 'ai.sovereign',
+      password: '010228513849',
+    });
+    assert.equal(regAi.status, 201);
+    const aiEmpTok = regAi.data.token;
+    const aiEmpId = regAi.data.user.id;
+
+    const pickAiDept = await api('PATCH', '/api/onboarding/my-preference', aiEmpTok, {
+      preferredDepartmentId: aiDept.id,
+      jobTitle: 'مدير الذكاء الاصطناعي وتطوير الأنظمة',
+    });
+    assert.equal(pickAiDept.status, 200);
+
+    // HR Manager and General Manager MUST NOT see pending ai.sovereign request!
+    const hrPendingCheck = await api('GET', '/api/onboarding/pending', hrTok);
+    assert.ok(!hrPendingCheck.data.pendingUsers.some((u) => u.username === 'ai.sovereign'));
+    const gmPendingCheck = await api('GET', '/api/onboarding/pending', gmTok);
+    assert.ok(!gmPendingCheck.data.pendingUsers.some((u) => u.username === 'ai.sovereign'));
+    assert.equal(
+      (
+        await api('POST', `/api/onboarding/${aiEmpId}/claim`, gmTok, {
+          departmentId: aiDept.id,
+          roleId: deptMgrRole.id,
+        })
+      ).status,
+      403,
+      'General Manager must get 403 attempting to approve into ai_systems'
+    );
+
+    // Chairman DOES see pending ai.sovereign and approves directly!
+    const chPendingCheck = await api('GET', '/api/onboarding/pending', chairmanTok);
+    assert.ok(chPendingCheck.data.pendingUsers.some((u) => u.username === 'ai.sovereign'));
+    const chClaimAi = await api('POST', `/api/onboarding/${aiEmpId}/claim`, chairmanTok, {
+      departmentId: aiDept.id,
+      roleId: deptMgrRole.id,
+      jobTitle: 'مدير الذكاء الاصطناعي وتطوير الأنظمة',
+    });
+    assert.equal(chClaimAi.status, 200);
+
+    // Approved AI engineer logs in, sees ONLY ai_systems board, and works directly with Chairman!
+    const aiBoards = await api('GET', '/api/boards', aiEmpTok);
+    assert.equal(aiBoards.status, 200);
+    assert.equal(aiBoards.data.length, 1);
+    assert.equal(aiBoards.data[0].department_slug, 'ai_systems');
+    assert.equal(aiBoards.data[0].department_chairman_exclusive, true);
+
+    const openAiBoard = await api('GET', `/api/boards/${aiBoard.id}`, aiEmpTok);
+    assert.equal(openAiBoard.status, 200);
+    // Assignee list on ai_systems board contains ONLY ai_systems members + Chairman (NO GM, NO IT Admin!)
+    assert.equal(
+      openAiBoard.data.departmentMembers.length,
+      2,
+      'ai_systems board members list must include ONLY AI engineer + Chairman'
+    );
+
+    // Chairman posts a direct sovereign task to AI engineer -> 201!
+    const chTask = await api('POST', `/api/lists/${openAiBoard.data.lists[0].id}/cards`, chairmanTok, {
+      title: 'بناء مساعد ذكي لتحليل عقود التصدير لـ 22 دولة',
+      priority: 'urgent',
+      assigneeIds: [aiEmpId],
+    });
+    assert.equal(chTask.status, 201);
+
+    // General Manager CANNOT edit/delete AI engineer or touch that card -> 403!
+    assert.equal((await api('PATCH', `/api/cards/${chTask.data.id}`, gmTok, { title: 'تطفل' })).status, 403);
+    assert.equal((await api('DELETE', `/api/admin/users/${aiEmpId}`, gmTok)).status, 403);
+    const gmUsersList = await api('GET', '/api/admin/users', gmTok);
+    assert.ok(!gmUsersList.data.some((u) => u.username === 'ai.sovereign'), 'GM users table must hide ai.sovereign');
+
+    console.log('\n✅ ALL 13 PRODUCTION v13 TESTS (14 DEPARTMENTS, SOVEREIGN CHAIRMAN-ONLY AI ISOLATION, BACKUP, CLOUD & RBAC) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}
