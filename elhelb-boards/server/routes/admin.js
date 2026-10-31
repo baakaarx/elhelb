@@ -437,8 +437,8 @@ router.post('/users', async (req, res) => {
       error: 'اسم المستخدم يجب أن يكون من 3 إلى 64 حرفاً إنجليزياً أو رقماً أو بريداً إلكترونياً بدون مسافات',
     });
   }
-  if (password.length < 4) {
-    return res.status(400).json({ error: 'كلمة المرور يجب ألا تقل عن 4 أحرف' });
+  if (password.length < 4 || password.length > 128) {
+    return res.status(400).json({ error: 'كلمة المرور يجب أن تكون بين 4 و128 حرفاً' });
   }
   if (fullName.length < 2 || fullName.length > 100) {
     return res.status(400).json({ error: 'الاسم الكامل للموظف مطلوب' });
@@ -633,10 +633,11 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
   let bumpToken = !isActive && existing.is_active ? 1 : 0;
 
   if (body.newPassword && String(body.newPassword).length > 0) {
-    if (String(body.newPassword).length < 6) {
-      return res.status(400).json({ error: 'كلمة المرور الجديدة يجب ألا تقل عن 6 أحرف' });
+    const nextPass = String(body.newPassword);
+    if (nextPass.length < 6 || nextPass.length > 128) {
+      return res.status(400).json({ error: 'كلمة المرور الجديدة يجب أن تكون بين 6 و128 حرفاً' });
     }
-    passwordHash = await bcrypt.hash(String(body.newPassword), 10);
+    passwordHash = await bcrypt.hash(nextPass, 12);
     bumpToken = 1;
   }
 
@@ -1159,26 +1160,40 @@ router.get('/audit-logs', (req, res) => {
     });
   }
 
+  const isChairman = req.user.role_slug === 'chairman';
   const statusFilter = String(req.query.status || 'ALL').toUpperCase();
   const q = String(req.query.q || '').trim();
 
   const where = [];
   const params = [];
 
+  if (!isChairman) {
+    where.push('al.is_chairman_exclusive = 0');
+    where.push(
+      `NOT EXISTS (
+        SELECT 1 FROM users u
+        LEFT JOIN departments d ON d.id = u.department_id
+        LEFT JOIN departments pd ON pd.id = u.preferred_department_id
+        WHERE u.id = al.actor_id
+          AND (COALESCE(d.is_chairman_exclusive, 0) = 1 OR COALESCE(pd.is_chairman_exclusive, 0) = 1)
+      )`
+    );
+  }
+
   if (statusFilter === 'ALLOWED' || statusFilter === 'DENIED') {
-    where.push('status = ?');
+    where.push('al.status = ?');
     params.push(statusFilter);
   }
   if (q) {
-    where.push('(actor_name LIKE ? OR action LIKE ? OR details LIKE ? OR permission_key LIKE ?)');
+    where.push('(al.actor_name LIKE ? OR al.action LIKE ? OR al.details LIKE ? OR al.permission_key LIKE ?)');
     const p = `%${q}%`;
     params.push(p, p, p, p);
   }
 
   const sql = `
-    SELECT * FROM audit_logs
+    SELECT al.* FROM audit_logs al
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY id DESC
+    ORDER BY al.id DESC
     LIMIT 150
   `;
 

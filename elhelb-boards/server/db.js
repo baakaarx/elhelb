@@ -343,6 +343,7 @@ function initSchema() {
       endpoint TEXT NOT NULL DEFAULT '',
       details TEXT NOT NULL DEFAULT '',
       ip TEXT NOT NULL DEFAULT '',
+      is_chairman_exclusive INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS email_logs (
@@ -369,6 +370,7 @@ function initSchema() {
 
   // Safe migrations for existing local DB files
   ensureColumn('departments', 'is_chairman_exclusive', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('audit_logs', 'is_chairman_exclusive', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('roles', 'rank_level', 'INTEGER NOT NULL DEFAULT 20');
   ensureColumn('users', 'email', 'TEXT DEFAULT NULL');
   ensureColumn('users', 'avatar_url', 'TEXT DEFAULT NULL');

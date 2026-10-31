@@ -38,15 +38,39 @@ function getGoogleCredentials() {
 }
 
 function getBaseOrigin(req) {
-  const proto = String(
-    req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http')
-  )
-    .split(',')[0]
-    .trim();
-  const host = String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000')
-    .split(',')[0]
-    .trim();
-  return `${proto}://${host}`;
+  const configuredOrigin = String(process.env.PUBLIC_BASE_URL || '').trim();
+  if (configuredOrigin) {
+    try {
+      const parsed = new URL(configuredOrigin);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return parsed.origin;
+      }
+    } catch (_) {}
+  }
+
+  const trustProxyEnabled = Boolean(req && req.app && req.app.get('trust proxy'));
+  const rawProto = trustProxyEnabled
+    ? String(req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http'))
+        .split(',')[0]
+        .trim()
+    : req.secure
+    ? 'https'
+    : 'http';
+  const proto = rawProto === 'https' ? 'https' : 'http';
+
+  const rawHost = trustProxyEnabled
+    ? String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000')
+        .split(',')[0]
+        .trim()
+    : String(req.headers.host || 'localhost:3000')
+        .split(',')[0]
+        .trim();
+
+  const safeHost = /^[a-zA-Z0-9.-]+(?::\d{1,5})?$/.test(rawHost)
+    ? rawHost
+    : 'localhost:3000';
+
+  return `${proto}://${safeHost}`;
 }
 
 function getOrCreatePendingRole() {
@@ -215,9 +239,9 @@ router.post('/register', registerLimiter, async (req, res) => {
       });
     }
 
-    if (password.length < 6) {
+    if (password.length < 6 || password.length > 128) {
       return res.status(400).json({
-        error: 'كلمة المرور يجب أن تكون 6 أحرف أو أرقام على الأقل',
+        error: 'كلمة المرور يجب أن تكون بين 6 و128 حرفاً أو رقماً',
       });
     }
 
@@ -308,7 +332,24 @@ router.get('/oauth/google/start', (req, res) => {
   }
   const redirectUri = `${getBaseOrigin(req)}/api/auth/oauth/google/callback`;
   const prefDept = req.query.dept ? Number(req.query.dept) : null;
-  const state = jwt.sign({ p: 'google', d: prefDept }, JWT_SECRET, { expiresIn: '15m' });
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const isHttps =
+    req.secure ||
+    (Boolean(req.app && req.app.get('trust proxy')) &&
+      String(req.headers['x-forwarded-proto'] || '').includes('https'));
+
+  res.cookie('elhelb_oauth_nonce', nonce, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: isHttps,
+    maxAge: 15 * 60 * 1000,
+  });
+
+  const state = jwt.sign(
+    { p: 'google', d: prefDept, n: nonce },
+    JWT_SECRET,
+    { algorithm: 'HS256', expiresIn: '15m' }
+  );
 
   const params = new URLSearchParams({
     client_id: googleClientId,
@@ -327,7 +368,14 @@ router.get('/oauth/google/callback', async (req, res) => {
     const { code, state } = req.query;
     if (!code || !state) return res.redirect('/?oauth_error=cancelled');
 
-    const decodedState = jwt.verify(String(state), JWT_SECRET);
+    const decodedState = jwt.verify(String(state), JWT_SECRET, {
+      algorithms: ['HS256'],
+    });
+    const cookieNonce = req.cookies && req.cookies.elhelb_oauth_nonce;
+    res.clearCookie('elhelb_oauth_nonce');
+    if (!decodedState || !decodedState.n || cookieNonce !== decodedState.n) {
+      return res.redirect('/?oauth_error=state_mismatch');
+    }
     const { googleClientId, googleClientSecret } = getGoogleCredentials();
     const redirectUri = `${getBaseOrigin(req)}/api/auth/oauth/google/callback`;
 

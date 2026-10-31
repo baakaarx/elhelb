@@ -24,16 +24,15 @@
      ```
 
 ### ماذا يجهّز السكريبت تلقائياً؟
-- تثبيت **Node.js 22 LTS** ومدير العمليات **PM2** مع إعادة التشغيل التلقائي عند إعادة إقلاع السيرفر (`systemd`).
-- توليد مفتاح تشفير جلسات فريد 384-bit (`JWT_SECRET`) خاص بالسيرفر وحفظه بصلاحية `0600` في `/opt/elhelb-data/.jwt_secret`.
+- تثبيت **Node.js 22 LTS** وتفعيل خدمة نظام **`systemd`** محمية (`elhelb-boards.service`) تعمل بمستخدم نظام معزول محدود الصلاحيات (**`User=elhelb`** مع `NoNewPrivileges=true` و `ProtectSystem=full` بدون صلاحية `root`).
+- توليد مفتاح تشفير جلسات فريد 384-bit (`JWT_SECRET`) وحفظه بصلاحية `0600` في `/opt/elhelb-data/.jwt_secret`.
 - عزل قاعدة البيانات في مسار دائم مستقل بصلاحية `0700`: **`/opt/elhelb-data/elhelb-boards.db`**.
-- تفعيل `TRUST_PROXY=1` تلقائياً فقط عند تشغيل Caddy HTTPS لمنع تزوير عناوين الـ IP.
 - أخذ نسخة احتياطية يومية تلقائية الساعة 3:00 صباحاً محمية بـ `flock` في: **`/opt/elhelb-backups/`**.
 - أوامر الفحص والمتابعة لقسم الـ IT:
   - فحص الجاهزية الأمنية الذاتي: `npm test`
-  - حالة الخدمة: `pm2 status`
-  - السجلات الحية: `pm2 logs elhelb-boards`
-  - إعادة التشغيل بدون توقف: `pm2 reload elhelb-boards`
+  - حالة الخدمة: `sudo systemctl status elhelb-boards`
+  - السجلات الحية: `sudo journalctl -u elhelb-boards -f`
+  - إعادة التشغيل: `sudo systemctl restart elhelb-boards`
 
 ---
 
@@ -45,6 +44,7 @@ unzip elhelb-boards-server.zip -d elhelb-boards
 cd elhelb-boards
 docker compose up -d --build
 ```
+- يعمل التطبيق داخل الحاوية بمستخدم محدود الصلاحيات (**`USER node`**) وليس `root`.
 - يولّد الحاوية تلقائياً مفتاح `JWT_SECRET` فريد داخل Volume البيانات (`/data/.jwt_secret`) عند أول إقلاع، ويرفض خادم الإنتاج العمل بدون مفتاح تشفير صالح.
 - يعمل النظام على المنفذ **`3000`** (`http://SERVER_IP:3000`) ويحفظ قاعدة البيانات بشكل دائم داخل Docker Volume باسم **`elhelb_boards_data`**.
 
@@ -60,7 +60,7 @@ docker compose up -d --build
 ---
 
 ## 🔒 متغيرات البيئة الاختيارية والجدار الناري (Firewall)
-- راجع ملف `.env.example` للاطلاع على كافة المتغيرات المدعومة (`PORT`, `DB_PATH`, `JWT_SECRET`, `ADMIN_INIT_PASSWORD`, `TRUST_PROXY`).
+- راجع ملف `.env.example` للاطلاع على كافة المتغيرات المدعومة (`PORT`, `DB_PATH`, `JWT_SECRET`, `PUBLIC_BASE_URL`, `ADMIN_INIT_PASSWORD`, `TRUST_PROXY`).
 - في حالة التشغيل المباشر بدون دومين: افتح المنفذ **`3000/TCP`** فقط.
 - في حالة تفعيل الدومين وشهادة SSL عبر Caddy أو Nginx: افتح المنفذين **`80/TCP`** و **`443/TCP`** (واضبط `TRUST_PROXY=1` وأغلق المنفذ `3000` خارجياً).
 - الحساب السيادي لرئيس مجلس الإدارة (`admin`) مهيأ مسبقاً ومشفر (`bcrypt` cost 12) لتسليمه لإدارة المجموعة فور رفع السيرفر.

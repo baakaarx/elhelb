@@ -1094,9 +1094,109 @@ async function main() {
     assert.equal(rotateRes.status, 200);
     assert.ok(rotateRes.data.token, 'Rotating own password must return a refreshed JWT immediately');
     assert.equal((await api('GET', '/api/auth/me', chairmanTok)).status, 401, 'Old Chairman token must be revoked');
-    assert.equal((await api('GET', '/api/auth/me', rotateRes.data.token)).status, 200, 'New Chairman token works seamlessly');
+    const activeChairmanTok = rotateRes.data.token;
+    assert.equal((await api('GET', '/api/auth/me', activeChairmanTok)).status, 200, 'New Chairman token works seamlessly');
 
-    console.log('\n✅ ALL 14 PRODUCTION v14 TESTS (HARDENED SECURITY, 14 DEPARTMENTS, SOVEREIGN AI ISOLATION, BACKUP & CLOUD) PASSED 100%!');
+    console.log('1️⃣5️⃣ Testing Deep White-Box Hardening (No Query Token Leak, Sovereign Audit Isolation, CSRF Cookie Block, DoS Caps, OAuth Host Poisoning & Non-Root)...');
+    // 15a. Query-string ?_t= token MUST be rejected (401) & audit_logs must NEVER store query strings
+    const queryLeakAttempt = await fetch(`${base}/api/auth/me?_t=${encodeURIComponent(activeChairmanTok)}`);
+    assert.equal(queryLeakAttempt.status, 401, 'Query-string ?_t= token must be rejected');
+
+    // Trigger an audited action with a query string and verify endpoint in audit_logs has zero '?'
+    const aiEmpTaskRes = await api(
+      'POST',
+      `/api/lists/${openAiBoard.data.lists[0].id}/cards?leak_probe=secret123`,
+      aiEmpTok,
+      { title: 'بناء نموذج سري للتنبؤ بالمبيعات لمكتب رئيس مجلس الإدارة' }
+    );
+    assert.equal(aiEmpTaskRes.status, 201);
+
+    const chAuditRes = await api('GET', '/api/admin/audit-logs', activeChairmanTok);
+    assert.equal(chAuditRes.status, 200);
+    assert.ok(
+      chAuditRes.data.every((row) => !String(row.endpoint || '').includes('?')),
+      'audit_logs.endpoint must strip all query parameters'
+    );
+    assert.ok(
+      chAuditRes.data.some((row) => String(row.details || '').includes('بناء نموذج سري')),
+      'Chairman must see sovereign AI audit logs'
+    );
+
+    // 15b. IT Admin & General Manager MUST NOT see any sovereign AI or Chairman backup audit logs!
+    const itAuditRes = await api('GET', '/api/admin/audit-logs', itMgrTok);
+    assert.equal(itAuditRes.status, 200);
+    assert.ok(
+      !itAuditRes.data.some(
+        (row) =>
+          String(row.details || '').includes('بناء نموذج سري') ||
+          String(row.details || '').includes('بناء مساعد ذكي لتحليل عقود التصدير') ||
+          String(row.details || '').includes('الذكاء الاصطناعي') ||
+          String(row.endpoint || '').startsWith('/api/admin/backup')
+      ),
+      'IT Admin audit logs must strictly exclude sovereign AI department and Chairman backup logs'
+    );
+
+    const gmAuditRes = await api('GET', '/api/admin/audit-logs', gmTok);
+    assert.equal(gmAuditRes.status, 200);
+    assert.ok(
+      !gmAuditRes.data.some(
+        (row) =>
+          String(row.details || '').includes('بناء نموذج سري') ||
+          String(row.details || '').includes('الذكاء الاصطناعي')
+      ),
+      'General Manager audit logs must strictly exclude sovereign AI department logs'
+    );
+
+    // 15c. Cookie-only CSRF on state-changing POST/PATCH/DELETE MUST return 403 CSRF_BLOCKED
+    const csrfCookieOnly = await fetch(`${base}/api/auth/logout`, {
+      method: 'POST',
+      headers: {
+        Cookie: `elhelb_session_v10=${activeChairmanTok}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    assert.equal(csrfCookieOnly.status, 403, 'Cookie-only state-changing request must be blocked against CSRF');
+    const csrfBody = await csrfCookieOnly.json();
+    assert.equal(csrfBody.code, 'CSRF_BLOCKED');
+
+    // 15d. CPU & Body DoS defenses (oversized >128 char password -> 400; >256kb JSON -> 413)
+    const longPassRes = await api('POST', '/api/auth/register', null, {
+      fullName: 'اختبار حماية المعالج',
+      username: 'dos.probe',
+      password: 'A'.repeat(500),
+    });
+    assert.equal(longPassRes.status, 400, 'Oversized password (>128 chars) must be rejected immediately');
+
+    const hugeJsonRes = await fetch(`${base}/api/boards`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${activeChairmanTok}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title: 'X'.repeat(300 * 1024), departmentId: aiDept.id }),
+    });
+    assert.equal(hugeJsonRes.status, 413, 'Normal API endpoints must reject >256kb JSON payloads');
+
+    // 15e. OAuth Host-Header Poisoning defense when TRUST_PROXY is off
+    const poisonedOAuth = await fetch(`${base}/api/auth/oauth/providers`, {
+      headers: {
+        'X-Forwarded-Host': 'evil-attacker.example.com',
+        'X-Forwarded-Proto': 'https',
+      },
+    });
+    const poisonedOAuthData = await poisonedOAuth.json();
+    assert.ok(
+      !String(poisonedOAuthData.googleCallbackUrl || '').includes('evil-attacker'),
+      'X-Forwarded-Host must be ignored when trust proxy is disabled'
+    );
+
+    // 15f. Non-root least-privilege declarations in Dockerfile & setup-from-zip.sh
+    const dockerfileContent = fs.readFileSync(path.join(__dirname, '..', 'Dockerfile'), 'utf8');
+    assert.match(dockerfileContent, /^USER node$/m, 'Dockerfile must run as non-root USER node');
+    const setupScriptContent = fs.readFileSync(path.join(__dirname, '..', 'setup-from-zip.sh'), 'utf8');
+    assert.ok(setupScriptContent.includes('User=$SERVICE_USER') && setupScriptContent.includes('NoNewPrivileges=true'));
+
+    console.log('\n✅ ALL 15 PRODUCTION v15 TESTS (DEEP WHITE-BOX SECURITY, SOVEREIGN AUDIT ISOLATION, CSRF, DOS, 14 DEPTS & RBAC) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}

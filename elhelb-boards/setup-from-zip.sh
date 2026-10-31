@@ -3,6 +3,7 @@ set -euo pipefail
 
 # ==============================================================================
 # ELHELB GROUP — المثبّت المباشر المؤمَّن من ملف الضغط (خاص بقسم الـ IT)
+# يعمل بمستخدم نظام معزول محدود الصلاحيات (User=elhelb) عبر systemd
 # الاستخدام:
 #   1) تشغيل على IP السيرفر مباشرة (http://SERVER_IP:3000):
 #        sudo bash setup-from-zip.sh
@@ -14,6 +15,7 @@ SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="/opt/elhelb-boards"
 DATA_DIR="/opt/elhelb-data"
 BACKUP_DIR="/opt/elhelb-backups"
+SERVICE_USER="elhelb"
 DOMAIN="${DOMAIN:-}"
 PORT="${PORT:-3000}"
 
@@ -28,18 +30,16 @@ if ! command -v node >/dev/null 2>&1 || [[ "$(node -v | cut -d. -f1 | tr -d 'v')
   apt-get install -y nodejs
 fi
 
-if ! command -v pm2 >/dev/null 2>&1; then
-  npm install -g pm2
+echo "🌿 [3/5] إنشاء مستخدم النظام المعزول ($SERVICE_USER) وتأمين مجلد قاعدة البيانات..."
+if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
+  useradd --system --home-dir "$DATA_DIR" --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
 fi
 
-echo "🌿 [3/5] إعداد مجلد قاعدة البيانات الدائم ومفتاح التشفير المعزول..."
 mkdir -p "$APP_DIR" "$DATA_DIR" "$BACKUP_DIR"
-chmod 700 "$DATA_DIR" "$BACKUP_DIR"
 
 if [[ ! -f "$DATA_DIR/.jwt_secret" ]]; then
   umask 077
   node -e "process.stdout.write(require('crypto').randomBytes(48).toString('hex'))" > "$DATA_DIR/.jwt_secret"
-  chmod 600 "$DATA_DIR/.jwt_secret"
 fi
 JWT_SECRET_VAL="${JWT_SECRET:-$(cat "$DATA_DIR/.jwt_secret")}"
 
@@ -54,23 +54,68 @@ npm run build
 npm prune --omit=dev
 
 TRUST_PROXY_VAL="0"
+PUBLIC_ORIGIN_VAL="${PUBLIC_BASE_URL:-}"
 if [[ -n "$DOMAIN" ]]; then
   TRUST_PROXY_VAL="1"
+  if [[ -z "$PUBLIC_ORIGIN_VAL" ]]; then
+    PUBLIC_ORIGIN_VAL="https://$DOMAIN"
+  fi
 fi
 
-echo "🌿 [5/5] تشغيل المنصة عبر PM2 وتفعيل التشغيل التلقائي عند إعادة الإقلاع..."
-DB_PATH="$DATA_DIR/elhelb-boards.db" \
-JWT_SECRET="$JWT_SECRET_VAL" \
-PORT="$PORT" \
-TRUST_PROXY="$TRUST_PROXY_VAL" \
-ADMIN_INIT_PASSWORD="${ADMIN_INIT_PASSWORD:-}" \
-  pm2 startOrReload ecosystem.config.cjs --update-env
-pm2 save
-env PATH=$PATH:/usr/bin pm2 startup systemd -u root --hp /root >/dev/null 2>&1 || true
+umask 077
+cat >"$DATA_DIR/.env.runtime" <<ENVEOF
+NODE_ENV=production
+HOST=0.0.0.0
+PORT=$PORT
+DB_PATH=$DATA_DIR/elhelb-boards.db
+JWT_SECRET=$JWT_SECRET_VAL
+TRUST_PROXY=$TRUST_PROXY_VAL
+PUBLIC_BASE_URL=$PUBLIC_ORIGIN_VAL
+ADMIN_INIT_PASSWORD=${ADMIN_INIT_PASSWORD:-}
+ENVEOF
 
-# نسخ احتياطي يومي تلقائي الساعة 3 فجراً مع قفل flock والاحتفاظ بآخر 30 نسخة
-cat >/etc/cron.d/elhelb-boards-backup <<'EOF'
-0 3 * * * root flock -n /var/lock/elhelb-backup.lock sh -c 'test -f /opt/elhelb-data/elhelb-boards.db && sqlite3 /opt/elhelb-data/elhelb-boards.db ".backup /opt/elhelb-backups/daily-$(date +\%F).db" && ls -1t /opt/elhelb-backups/daily-*.db 2>/dev/null | tail -n +31 | xargs -r rm -f'
+chown -R root:"$SERVICE_USER" "$APP_DIR"
+chmod -R u+rwX,g+rX,o-rwx "$APP_DIR"
+chown -R "$SERVICE_USER":"$SERVICE_USER" "$DATA_DIR" "$BACKUP_DIR"
+chmod 700 "$DATA_DIR" "$BACKUP_DIR"
+chmod 600 "$DATA_DIR/.jwt_secret" "$DATA_DIR/.env.runtime"
+
+echo "🌿 [5/5] تفعيل خدمة النظام المحمية (systemd) بمستخدم محدود الصلاحيات ($SERVICE_USER)..."
+if command -v pm2 >/dev/null 2>&1; then
+  pm2 delete elhelb-boards >/dev/null 2>&1 || true
+fi
+
+cat >/etc/systemd/system/elhelb-boards.service <<SVCEOF
+[Unit]
+Description=ELHELB GROUP Official Boards & RBAC Platform
+After=network.target
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+Group=$SERVICE_USER
+WorkingDirectory=$APP_DIR
+EnvironmentFile=$DATA_DIR/.env.runtime
+ExecStart=$(command -v node) --no-warnings $APP_DIR/server/index.js
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=$DATA_DIR
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+systemctl daemon-reload
+systemctl enable elhelb-boards.service
+systemctl restart elhelb-boards.service
+
+# نسخ احتياطي يومي تلقائي الساعة 3 فجراً بصلاحية المستخدم المعزول مع قفل flock
+cat >/etc/cron.d/elhelb-boards-backup <<EOF
+0 3 * * * $SERVICE_USER flock -n /tmp/elhelb-backup.lock sh -c 'test -f /opt/elhelb-data/elhelb-boards.db && sqlite3 /opt/elhelb-data/elhelb-boards.db ".backup /opt/elhelb-backups/daily-\$(date +\\%F).db" && ls -1t /opt/elhelb-backups/daily-*.db 2>/dev/null | tail -n +31 | xargs -r rm -f'
 EOF
 chmod 644 /etc/cron.d/elhelb-boards-backup
 
@@ -97,3 +142,4 @@ fi
 
 echo "📂 مسار قاعدة البيانات الدائم: $DATA_DIR/elhelb-boards.db"
 echo "💾 مسار النسخ الاحتياطية اليومية: $BACKUP_DIR/"
+echo "🔍 لمتابعة حالة الخدمة: sudo systemctl status elhelb-boards"
