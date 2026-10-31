@@ -4,6 +4,8 @@ const crypto = require('node:crypto');
 const { get, run } = require('./db');
 const { ingestDocument, ingestDataset, getDecryptedDatasets } = require('./vaultService');
 const { parseTabularData } = require('./dataAnalytics');
+const { encryptField } = require('./secureFields');
+const { hashMobileKey } = require('./mobileKey');
 
 const COMPANY_DATA_DIR = path.join(__dirname, '..', 'company-data');
 
@@ -11,9 +13,11 @@ function inferCategoryFromFilename(name) {
   const lower = name.toLowerCase();
   if (lower.includes('clinic') || lower.includes('crop') || lower.includes('عياد')) return 'agri_clinic';
   if (lower.includes('product') || lower.includes('catalog') || lower.includes('منتج')) return 'products';
+  if (lower.includes('herbicide') || lower.includes('nutrition') || lower.includes('مبيد') || lower.includes('تغذ')) return 'products';
   if (lower.includes('sale') || lower.includes('مبيعات')) return 'sales';
   if (lower.includes('inv') || lower.includes('مخزن')) return 'inventory';
-  return 'general';
+  // Unknown company files are private-by-default, never silently published as general knowledge.
+  return 'private';
 }
 
 function syncCompanyDataFolder() {
@@ -58,7 +62,11 @@ function syncCompanyDataFolder() {
           description: `بيانات مستوردة تلقائياً من مجلد company-data (${filename})`,
           filename,
           rawData: rawContent,
+          isPublic: ['general', 'products', 'agri_clinic'].includes(category),
         });
+      } else if (['general', 'products', 'agri_clinic'].includes(category) && !existingDataset.isPublic) {
+        run('UPDATE datasets SET is_public = 1 WHERE id = ?', [existingDataset.id]);
+        run("UPDATE documents SET is_public = 1 WHERE source_type = 'dataset_index' AND filename = ?", [filename]);
       }
     } else {
       const contentHash = crypto.createHash('sha256').update(rawContent, 'utf8').digest('hex');
@@ -77,6 +85,7 @@ function syncCompanyDataFolder() {
           sourceType: 'company_data_folder',
           filename,
           content: rawContent,
+          isPublic: ['general', 'products', 'agri_clinic'].includes(category),
         });
       }
     }
@@ -105,8 +114,8 @@ function seedIfNeeded() {
     run(
       `INSERT INTO security_settings (
         id, provider, ollama_url, local_openai_url, airgap_lock, dlp_mode, mask_phones, require_mobile_key, mobile_api_key
-      ) VALUES (1, 'auto', 'http://127.0.0.1:11434', 'http://127.0.0.1:8080/v1', 1, 'warn', 0, 0, ?)`,
-      [generatedMobileKey]
+      ) VALUES (1, 'auto', 'http://127.0.0.1:11434', 'http://127.0.0.1:8080/v1', 1, 'mask', 1, 0, ?)`,
+      [hashMobileKey(generatedMobileKey)]
     );
 
     const examples = [
@@ -116,6 +125,7 @@ function seedIfNeeded() {
         output_response:
           '🌱 **توصية العيادة الزراعية لمجموعة الهلب لمكافحة الحفار في البطاطس:**\n- **المستحضر الموصى به:** مبيد **بيريبان 48% EC (`Pyriban 48% EC`)** (المادة الفعالة: كلوربيريفوس).\n- **معدل وطريقة الاستخدام:** **1 لتر للفدان** يجهز كطعم سام ويوضع **سرسبة بين الخطوط بعد الري وعند الغروب** لضمان أعلى كفاءة في القضاء على الحفار وحماية الدرنات.',
         category: 'agri_clinic',
+        is_public: 1,
       },
       {
         instruction: 'كلمني عن مجموعة الهلب وتاريخها وإزاي أتواصل معاكم',
@@ -123,14 +133,21 @@ function seedIfNeeded() {
         output_response:
           '**مجموعة الهلب (ELHELB GROUP)** تأسست عام **1993** على يد **م. عبد الرحمن السماحي**، وهي رائدة إقليمياً وعالمياً في صناعة المبيدات والكيماويات الزراعية وتغذية المحاصيل وخدمات التصنيع للغير (**Toll Manufacturing**) تحت شعار *«علامة ترسم البسمة وقت الحصاد»*، وتصدّر لأكثر من **22 دولة حول العالم**.\n\n📞 **قنوات التواصل الرسمية:**\n- **المكتب الإقليمي:** 34 شارع جامعة الدول العربية — الجيزة، مصر\n- **داخل مصر:** `201011112221` | **التصدير وخارج مصر:** `201094460002`\n- **الموقع الرسمي:** `https://elhelbgroup.com/`',
         category: 'general',
+        is_public: 1,
       },
     ];
 
     for (const ex of examples) {
       run(
-        `INSERT INTO training_examples (instruction, input_context, output_response, category)
-         VALUES (?, ?, ?, ?)`,
-        [ex.instruction, ex.input_context, ex.output_response, ex.category]
+        `INSERT INTO training_examples (instruction, input_context, output_response, category, is_public)
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          encryptField(ex.instruction),
+          encryptField(ex.input_context),
+          encryptField(ex.output_response),
+          ex.category,
+          ex.is_public ? 1 : 0,
+        ]
       );
     }
   }
@@ -142,4 +159,5 @@ function seedIfNeeded() {
 module.exports = {
   seedIfNeeded,
   syncCompanyDataFolder,
+  inferCategoryFromFilename,
 };

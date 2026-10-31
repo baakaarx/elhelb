@@ -10,7 +10,7 @@ const router = express.Router();
 
 router.get('/overview', (_req, res) => {
   const docs = all(
-    `SELECT id, title, category, source_type, filename, sha256_hash, chunk_count, char_count, created_at
+    `SELECT id, title, category, source_type, filename, sha256_hash, chunk_count, char_count, is_public, created_at
      FROM documents
      WHERE source_type != 'dataset_index'
      ORDER BY id DESC`
@@ -23,6 +23,7 @@ router.get('/overview', (_req, res) => {
     id: ds.id,
     name: ds.name,
     category: ds.category,
+    is_public: ds.isPublic,
     category_label: ds.categoryLabel,
     description: ds.description,
     filename: ds.filename,
@@ -86,6 +87,7 @@ router.post('/documents', (req, res) => {
       category: req.body?.category || 'general',
       sourceType: req.body?.sourceType || 'manual',
       filename: req.body?.filename || null,
+      isPublic: req.body?.isPublic === true,
     });
     res.status(201).json({
       document: {
@@ -106,6 +108,7 @@ router.post('/datasets', (req, res) => {
       category: req.body?.category || 'sales',
       description: req.body?.description || '',
       filename: req.body?.filename || null,
+      isPublic: req.body?.isPublic === true,
     });
     res.status(201).json({ dataset: created });
   } catch (err) {

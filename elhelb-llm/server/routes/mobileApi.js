@@ -5,7 +5,8 @@ const { get } = require('../db');
 const { requireAdminKey } = require('../adminAuth');
 const { processCompanyQuery } = require('../companyBrainService');
 const { ingestDocument, ingestDataset, getDecryptedDatasets } = require('../vaultService');
-const { analyzeImageBuffer } = require('../visionEngine');
+const { matchesMobileKey } = require('../mobileKey');
+const { isValidPrivateSessionId } = require('../sessionId');
 
 const router = express.Router();
 const upload = multer({
@@ -24,7 +25,7 @@ function checkMobileApiKey(req, res, next) {
     provided = req.headers.authorization.slice(7).trim();
   }
 
-  if (provided !== settings.mobile_api_key) {
+  if (!matchesMobileKey(provided, settings.mobile_api_key)) {
     return res.status(401).json({
       error: 'مفتاح API غير صالح.',
     });
@@ -56,7 +57,7 @@ router.post('/chat', upload.single('image'), async (req, res) => {
   try {
     const message = String(req.body?.message || req.body?.prompt || '').slice(0, 3000);
     const rawSession = String(req.body?.sessionId || '');
-    const validSession = /^[a-zA-Z0-9_-]{16,80}$/.test(rawSession);
+    const validSession = isValidPrivateSessionId(rawSession);
     const sessionId = validSession ? rawSession : 'mob_' + crypto.randomUUID();
     const imageInput = req.file ? req.file.buffer : req.body?.imageBase64 || null;
 
@@ -79,7 +80,7 @@ router.post('/chat', upload.single('image'), async (req, res) => {
       latencyMs: result.latencyMs,
     });
   } catch (err) {
-    res.status(400).json({ ok: false, error: err.message });
+    res.status(err.status || 400).json({ ok: false, error: err.message });
   }
 });
 
@@ -103,21 +104,19 @@ router.post('/vision/analyze', upload.single('image'), async (req, res) => {
       persistChat: false,
     });
 
-    const rawVision = await analyzeImageBuffer(imageInput);
-
     res.json({
       ok: true,
       analysisReply: fullResult.reply,
-      documentType: rawVision.signals.docType,
-      imageMeta: rawVision.imageMeta,
-      extractedText: rawVision.ocr.text,
-      ocrConfidence: rawVision.ocr.confidence,
-      detectedSignals: rawVision.signals,
+      documentType: fullResult.visionDetails?.documentType || 'صورة فوتوغرافية عامة',
+      imageMeta: fullResult.visionDetails?.imageMeta || null,
+      extractedText: fullResult.visionDetails?.extractedText || '',
+      ocrConfidence: fullResult.visionDetails?.ocrConfidence || 0,
+      detectedSignals: fullResult.visionDetails?.detectedSignals || {},
       matchedCompanyRecords: fullResult.matchedRecords,
       latencyMs: fullResult.latencyMs,
     });
   } catch (err) {
-    res.status(400).json({ ok: false, error: err.message });
+    res.status(err.status || 400).json({ ok: false, error: err.message });
   }
 });
 
@@ -131,8 +130,9 @@ router.post('/data/ingest', requireAdminKey, (req, res) => {
         rawData: req.body?.data || req.body?.content,
         category: req.body?.category || 'products',
         description: req.body?.description || '',
+        isPublic: req.body?.isPublic === true,
       });
-      return res.status(201).json({ ok: true, type: 'dataset', id: ds.id, rowCount: ds.row_count });
+      return res.status(201).json({ ok: true, type: 'dataset', id: ds.id, rowCount: ds.row_count, isPublic: Boolean(ds.is_public) });
     }
 
     const doc = ingestDocument({
@@ -140,10 +140,11 @@ router.post('/data/ingest', requireAdminKey, (req, res) => {
       content: req.body?.content,
       category: req.body?.category || 'general',
       sourceType: 'admin_api',
+      isPublic: req.body?.isPublic === true,
     });
     res.status(201).json({ ok: true, type: 'document', id: doc.id, chunks: doc.chunk_count });
   } catch (err) {
-    res.status(400).json({ ok: false, error: err.message });
+    res.status(err.status || 400).json({ ok: false, error: err.message });
   }
 });
 

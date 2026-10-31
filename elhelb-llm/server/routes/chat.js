@@ -3,6 +3,8 @@ const express = require('express');
 const multer = require('multer');
 const { all, run } = require('../db');
 const { processCompanyQuery } = require('../companyBrainService');
+const { decryptField } = require('../secureFields');
+const { isValidPrivateSessionId } = require('../sessionId');
 
 const router = express.Router();
 
@@ -24,10 +26,6 @@ const upload = multer({
   },
 });
 
-function isValidPrivateSessionId(sid) {
-  return typeof sid === 'string' && /^[a-zA-Z0-9_-]{16,80}$/.test(sid);
-}
-
 router.get('/history', (req, res) => {
   const sessionId = String(req.query.sessionId || '');
   // حماية خصوصية الزوار: لا يتم استرجاع أي سجل إلا بمعرّف جلسة خاص عشوائي صالح
@@ -39,24 +37,24 @@ router.get('/history', (req, res) => {
     `SELECT id, role, content, image_thumb, meta_json, created_at
      FROM chat_messages
      WHERE session_id = ?
-     ORDER BY id ASC
+     ORDER BY id DESC
      LIMIT 60`,
     [sessionId]
   );
 
   res.json({
-    messages: rows.map((r) => {
+    messages: rows.reverse().map((r) => {
       let meta = {};
       try {
-        meta = JSON.parse(r.meta_json || '{}');
+        meta = JSON.parse(decryptField(r.meta_json) || '{}');
       } catch {
         meta = {};
       }
       return {
         id: r.id,
         role: r.role,
-        content: r.content,
-        imageThumb: r.image_thumb || null,
+        content: decryptField(r.content),
+        imageThumb: decryptField(r.image_thumb) || null,
         suggestions: Array.isArray(meta.suggestions) ? meta.suggestions : [],
         created_at: r.created_at,
       };
@@ -124,7 +122,7 @@ router.post('/ask', (req, res) => {
         },
       });
     } catch (err) {
-      res.status(400).json({ error: err.message || 'تعذر معالجة الطلب.' });
+      res.status(err.status || 400).json({ error: err.message || 'تعذر معالجة الطلب.' });
     }
   });
 });

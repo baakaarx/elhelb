@@ -447,6 +447,7 @@ function fileToDataUrl(file) {
 }
 
 function loadLocalHistory(sessionId) {
+  if (!sessionId) return [];
   try {
     return JSON.parse(localStorage.getItem('elhelb_hist_' + sessionId) || '[]');
   } catch {
@@ -455,6 +456,7 @@ function loadLocalHistory(sessionId) {
 }
 
 function saveLocalHistory(sessionId, list) {
+  if (!sessionId) return;
   try {
     localStorage.setItem('elhelb_hist_' + sessionId, JSON.stringify(list.slice(-40)));
   } catch {
@@ -463,6 +465,7 @@ function saveLocalHistory(sessionId, list) {
 }
 
 export function clearLocalHistory(sessionId) {
+  if (!sessionId) return;
   try {
     localStorage.removeItem('elhelb_hist_' + sessionId);
   } catch {

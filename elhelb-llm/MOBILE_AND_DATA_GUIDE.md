@@ -9,19 +9,27 @@
 ```
 elhelb-llm/company-data/
 ```
-عند تشغيل السيرفر، سيقوم تلقائياً بقراءة أي ملفات جديدة وتشفيرها بتقنية `AES-256-GCM` وفهرستها للرد الفوري على أسئلة الجمهور والموبايل.
+عند تشغيل السيرفر، يفهرس الملفات الموجودة في المجلد. الملفات المصنفة `general` و`products` و`agri_clinic` والمضافة ضمن بيانات المستودع المعتمدة تكون متاحة للشات العام؛ أما `sales` و`inventory` وأي ملفات تشغيلية أخرى فتبقى خاصة.
 
-كما يمكن الإضافة برمجياً عن بُعد عبر إرسال مفتاح الإدارة السري الموجود على السيرفر في `elhelb-llm/data/.admin.key`:
+**كل إضافة إدارية جديدة خاصة افتراضياً.** لا تجعلها متاحة للزوار إلا بعد مراجعة محتواها وإرسال `"isPublic": true` صراحةً. تُشفّر المستندات والجداول ومحادثات المستخدمين والبيانات التدريبية في SQLite باستخدام `AES-256-GCM`، مع سياسة حذف افتراضية للمحادثات والسجلات بعد 30 يوماً. استخدم `ELHELB_VAULT_KEY` و`ELHELB_ADMIN_KEY` كأسرار بيئة مستقلة عن ملف قاعدة البيانات، ولا تضعهما في المستودع.
+
+مثال لإضافة مستند خاص (الافتراضي):
 ```bash
 curl -X POST http://YOUR_SERVER:4000/api/v1/data/ingest \
   -H "Content-Type: application/json" \
-  -H "X-Admin-Key: $(cat elhelb-llm/data/.admin.key)" \
-  -d '{"type":"document","title":"مستحضر جديد","content":"تفاصيل ومعدلات استخدام المستحضر..."}'
+  -H "X-Admin-Key: $ELHELB_ADMIN_KEY" \
+  -d '{"type":"document","title":"مستند داخلي","category":"sales","content":"تفاصيل داخلية..."}'
 ```
+
+لنشر مستند مراجَع للعملاء، أضف `"isPublic": true` بعد التحقق من عدم احتوائه على بيانات داخلية أو شخصية. ينطبق الخيار نفسه على `type: "dataset"`. أمثلة التدريب لا تُستخدم في الشات العام إلا إذا أُنشئت صراحةً مع `is_public: true`.
+
+**مهم للنشر:** SQLite على Vercel يُخزّن حالياً في `/tmp`، وهو تخزين مؤقت وغير مشترك بين المثيلات. لا تعتمد عليه لحفظ الإضافات الإدارية أو السجلات بصورة دائمة؛ يلزم ربط قاعدة بيانات/تخزين دائم قبل استخدامه إنتاجياً. Docker Compose يربط مجلد `./data` كتخزين محلي مستمر.
 
 ---
 
 ## 2️⃣ ربط الشات بوت وتحليل الصور داخل تطبيق الموبايل (Mobile App)
+
+حد رفع الصورة **8 ميجابايت** وبحد أقصى **25 ميجابكسل**. محددا المعدل الحاليان (60 طلب شات و12 طلب صورة بالدقيقة) يستخدمان مخزن ذاكرة محلياً لكل مثيل؛ يلزم مخزن مشترك على مستوى البنية التحتية عند التوسع لعدة مثيلات.
 
 ### أ) كود Flutter (Dart) — إرسال سؤال أو صورة كاميرا
 ```dart
@@ -33,7 +41,7 @@ Future<String> askElhelbBot(String message, {File? imageFile, required String us
   final uri = Uri.parse('https://YOUR_DOMAIN/api/v1/chat');
   final req = http.MultipartRequest('POST', uri)
     ..fields['message'] = message
-    ..fields['sessionId'] = userSessionId; // UUID خاص بكل مستخدم في التطبيق
+    ..fields['sessionId'] = userSessionId; // UUID v4 عشوائي خاص بالمستخدم؛ احتفظ به كسِر لاستعادة سجله
 
   if (imageFile != null) {
     req.files.add(await http.MultipartFile.fromPath('image', imageFile.path));

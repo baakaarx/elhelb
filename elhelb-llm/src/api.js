@@ -11,11 +11,8 @@ function generateRandomSessionId() {
     return 'vis_' + crypto.randomUUID().replace(/-/g, '');
   }
   const arr = new Uint8Array(16);
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    crypto.getRandomValues(arr);
-  } else {
-    for (let i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
-  }
+  if (typeof crypto === 'undefined' || typeof crypto.getRandomValues !== 'function') return '';
+  crypto.getRandomValues(arr);
   return (
     'vis_' +
     Array.from(arr)
@@ -27,7 +24,7 @@ function generateRandomSessionId() {
 export function getVisitorSessionId() {
   try {
     let sid = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (!sid || !/^[a-zA-Z0-9_-]{16,80}$/.test(sid)) {
+    if (!sid || !/^(?:vis_[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/i.test(sid)) {
       sid = generateRandomSessionId();
       localStorage.setItem(SESSION_STORAGE_KEY, sid);
     }

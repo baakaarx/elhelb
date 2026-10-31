@@ -1,6 +1,7 @@
 const express = require('express');
 const { get, all, run, CATEGORIES } = require('../db');
 const { decryptText } = require('../cryptoVault');
+const { encryptField, decryptField } = require('../secureFields');
 
 const router = express.Router();
 
@@ -32,6 +33,9 @@ router.get('/overview', (_req, res) => {
   const profile = get('SELECT * FROM model_profile WHERE id = 1');
   const examples = all('SELECT * FROM training_examples ORDER BY id DESC').map((ex) => ({
     ...ex,
+    instruction: decryptField(ex.instruction),
+    input_context: decryptField(ex.input_context),
+    output_response: decryptField(ex.output_response),
     category_label: CATEGORIES[ex.category] || ex.category,
   }));
 
@@ -76,15 +80,22 @@ router.post('/examples', (req, res) => {
   const inputContext = String(req.body?.input_context || '').trim();
   const outputResponse = String(req.body?.output_response || '').trim();
   const category = CATEGORIES[req.body?.category] ? req.body.category : 'general';
+  const isPublic = req.body?.is_public === true;
 
   if (!instruction || !outputResponse) {
     return res.status(400).json({ error: 'السؤال والإجابة النموذجية مطلوبان.' });
   }
 
   const ins = run(
-    `INSERT INTO training_examples (instruction, input_context, output_response, category)
-     VALUES (?, ?, ?, ?)`,
-    [instruction, inputContext, outputResponse, category]
+    `INSERT INTO training_examples (instruction, input_context, output_response, category, is_public)
+     VALUES (?, ?, ?, ?, ?)`,
+    [
+      encryptField(instruction),
+      encryptField(inputContext),
+      encryptField(outputResponse),
+      category,
+      isPublic ? 1 : 0,
+    ]
   );
   res.status(201).json({
     example: get('SELECT * FROM training_examples WHERE id = ?', [Number(ins.lastInsertRowid)]),
@@ -101,7 +112,7 @@ router.post('/auto-generate', (_req, res) => {
      ORDER BY c.id DESC`
   );
 
-  const existing = new Set(all('SELECT instruction FROM training_examples').map((r) => r.instruction.trim()));
+  const existing = new Set(all('SELECT instruction FROM training_examples').map((r) => decryptField(r.instruction).trim()));
   let generatedCount = 0;
 
   for (const ch of chunkRows) {
@@ -120,7 +131,7 @@ router.post('/auto-generate', (_req, res) => {
     run(
       `INSERT INTO training_examples (instruction, input_context, output_response, category)
        VALUES (?, ?, ?, ?)`,
-      [instruction, ch.doc_title, cleanBody, ch.category]
+      [encryptField(instruction), encryptField(ch.doc_title), encryptField(cleanBody), ch.category]
     );
     existing.add(instruction);
     generatedCount++;
@@ -137,7 +148,12 @@ router.delete('/examples/:id', (req, res) => {
 router.get('/export-jsonl', (req, res) => {
   const format = req.query.format === 'alpaca' ? 'alpaca' : 'sharegpt';
   const profile = get('SELECT * FROM model_profile WHERE id = 1');
-  const rows = all('SELECT * FROM training_examples ORDER BY id ASC');
+  const rows = all('SELECT * FROM training_examples ORDER BY id ASC').map((ex) => ({
+    ...ex,
+    instruction: decryptField(ex.instruction),
+    input_context: decryptField(ex.input_context),
+    output_response: decryptField(ex.output_response),
+  }));
 
   const lines = rows.map((ex) => {
     if (format === 'alpaca') {

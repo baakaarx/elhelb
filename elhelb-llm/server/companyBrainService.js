@@ -1,5 +1,6 @@
 const { get, all, run } = require('./db');
 const { inspectAndSanitize } = require('./dlpShield');
+const { encryptField, decryptField, sanitizePublicValue, hasSensitiveValue } = require('./secureFields');
 const { retrieveCompanyKnowledge, getDecryptedDatasets } = require('./vaultService');
 const { analyzeDatasetsForQuery } = require('./dataAnalytics');
 const { analyzeImageBuffer } = require('./visionEngine');
@@ -42,10 +43,14 @@ async function processCompanyQuery({
   const settings = get('SELECT * FROM security_settings WHERE id = 1');
   const modelProfile = get('SELECT * FROM model_profile WHERE id = 1');
 
-  const dlpResult = inspectAndSanitize(rawMessage, {
-    mode: settings.dlp_mode || 'warn',
+  const dlpOptions = {
+    mode: settings.dlp_mode || 'mask',
     maskPhones: Boolean(settings.mask_phones),
-  });
+  };
+  const dlpResult = inspectAndSanitize(rawMessage, dlpOptions);
+  if (dlpResult.blocked) {
+    throw new Error('تم إيقاف الطلب لاحتوائه على بيانات حساسة. أزل البيانات الحساسة وحاول مرة أخرى.');
+  }
   const cleanMessage = dlpResult.sanitizedText;
 
   const historyRows =
@@ -53,7 +58,15 @@ async function processCompanyQuery({
     all(
       `SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY id DESC LIMIT 6`,
       [sessionId]
-    ).reverse();
+    )
+      .map((row) => ({
+        ...row,
+        content: inspectAndSanitize(decryptField(row.content), dlpOptions).sanitizedText,
+      }))
+      .reverse();
+  if (dlpOptions.mode === 'block' && hasSensitiveValue(historyRows, inspectAndSanitize, dlpOptions)) {
+    throw new Error('تم إيقاف الطلب لاحتواء سجل المحادثة على بيانات حساسة.');
+  }
 
   // 1) فهم كلام الناس باللهجة الطبيعية وسياق المحادثة المستمر (بدون صورة)
   const nlu = analyzeHumanIntent(cleanMessage, historyRows);
@@ -74,14 +87,14 @@ async function processCompanyQuery({
       const uIns = run(
         `INSERT INTO chat_messages (session_id, source_channel, role, content, image_thumb, citations_json, meta_json)
          VALUES (?, ?, 'user', ?, NULL, '[]', '{}')`,
-        [sessionId, channel, cleanMessage]
+        [sessionId, channel, encryptField(cleanMessage)]
       );
       userMsgId = Number(uIns.lastInsertRowid);
 
       const bIns = run(
         `INSERT INTO chat_messages (session_id, source_channel, role, content, image_thumb, citations_json, meta_json)
          VALUES (?, ?, 'assistant', ?, NULL, '[]', ?)`,
-        [sessionId, channel, nlu.reply, JSON.stringify({ suggestions: nlu.suggestions })]
+        [sessionId, channel, encryptField(nlu.reply), encryptField(JSON.stringify({ suggestions: nlu.suggestions }))]
       );
       botMsgId = Number(bIns.lastInsertRowid);
     }
@@ -116,6 +129,21 @@ async function processCompanyQuery({
   let visionReport = null;
   if (imageInput) {
     visionReport = await analyzeImageBuffer(imageInput);
+    const ocrDlp = inspectAndSanitize(visionReport.ocr?.text || '', dlpOptions);
+    if (ocrDlp.blocked) {
+      throw new Error('تم إيقاف الصورة لاحتوائها على بيانات حساسة مقروءة. أرسل صورة منقّحة وحاول مرة أخرى.');
+    }
+    visionReport.ocr.text = ocrDlp.sanitizedText;
+    const safeSignals = sanitizePublicValue(visionReport.signals, inspectAndSanitize, dlpOptions);
+    const signalDlp = inspectAndSanitize(JSON.stringify(visionReport.signals || {}), dlpOptions);
+    if (signalDlp.blocked) {
+      throw new Error('تم إيقاف الصورة لاحتوائها على بيانات حساسة مقروءة. أرسل صورة منقّحة وحاول مرة أخرى.');
+    }
+    visionReport.signals = safeSignals;
+    // لا نمرر بكسلات تحتوي على بيانات كشفها DLP إلى الموديل؛ نحتفظ بتحليل OCR المنقّح.
+    if ((ocrDlp.findings.length > 0 || signalDlp.findings.length > 0) && dlpOptions.mode !== 'off') {
+      visionReport.ollamaBase64 = null;
+    }
   }
 
   // 3) دمج السؤال الموسّع باللهجة والسياق مع النص المقروء من الصورة للبحث في بيانات الشركة
@@ -127,13 +155,30 @@ async function processCompanyQuery({
   const retrieval = combinedSearchQuery
     ? retrieveCompanyKnowledge(combinedSearchQuery, 5)
     : { contexts: [] };
+  if (dlpOptions.mode === 'block' && hasSensitiveValue(retrieval.contexts, inspectAndSanitize, dlpOptions)) {
+    throw new Error('تعذر تنفيذ الطلب لأن المحتوى العام المطابق يحتوي على بيانات حساسة.');
+  }
+  const publicContexts = sanitizePublicValue(retrieval.contexts, inspectAndSanitize, dlpOptions);
 
-  const decryptedDatasets = getDecryptedDatasets();
-  const dataAnalysis = combinedSearchQuery
+  const decryptedDatasets = getDecryptedDatasets({ publicOnly: true });
+  const rawDataAnalysis = combinedSearchQuery
     ? analyzeDatasetsForQuery(combinedSearchQuery, decryptedDatasets)
     : null;
+  if (dlpOptions.mode === 'block' && hasSensitiveValue(rawDataAnalysis, inspectAndSanitize, dlpOptions)) {
+    throw new Error('تعذر تنفيذ الطلب لأن نتائج الجدول المطابقة تحتوي على بيانات حساسة.');
+  }
+  const dataAnalysis = sanitizePublicValue(rawDataAnalysis, inspectAndSanitize, dlpOptions);
 
-  const trainingExamples = all('SELECT * FROM training_examples ORDER BY id DESC');
+  const rawTrainingExamples = all('SELECT * FROM training_examples WHERE is_public = 1 ORDER BY id DESC').map((example) => ({
+    ...example,
+    instruction: decryptField(example.instruction),
+    input_context: decryptField(example.input_context),
+    output_response: decryptField(example.output_response),
+  }));
+  if (dlpOptions.mode === 'block' && hasSensitiveValue(rawTrainingExamples, inspectAndSanitize, dlpOptions)) {
+    throw new Error('تعذر تنفيذ الطلب لأن أمثلة المعرفة العامة تحتوي على بيانات حساسة.');
+  }
+  const trainingExamples = sanitizePublicValue(rawTrainingExamples, inspectAndSanitize, dlpOptions);
 
   // 4) توليد الرد الذكي الشامل (مع دعم التشخيص العامي المباشر إن وُجد)
   const completion = await generateCompanyResponse({
@@ -141,7 +186,7 @@ async function processCompanyQuery({
     originalUserText: cleanMessage,
     colloquialRule: nlu.colloquialRule || null,
     conversationHistory: historyRows,
-    contexts: retrieval.contexts,
+    contexts: publicContexts,
     dataAnalysis,
     visionReport,
     settings,
@@ -150,16 +195,26 @@ async function processCompanyQuery({
     language: responseLanguage,
   });
 
-  const citations = retrieval.contexts.slice(0, 4).map((ctx, idx) => ({
-    index: idx + 1,
-    docId: ctx.docId,
-    docTitle: ctx.docTitle,
-    sectionTitle: ctx.sectionTitle,
-    category: ctx.category,
-    categoryLabel: ctx.categoryLabel,
-    score: ctx.score,
-    snippet: ctx.decryptedText.slice(0, 240) + (ctx.decryptedText.length > 240 ? '...' : ''),
-  }));
+  const answerDlp = inspectAndSanitize(completion.answer || '', dlpOptions);
+  if (answerDlp.blocked) {
+    throw new Error('تعذر عرض الرد لأنه يحتوي على بيانات حساسة.');
+  }
+  completion.answer = answerDlp.sanitizedText;
+
+  const citations = sanitizePublicValue(
+    publicContexts.slice(0, 4).map((ctx, idx) => ({
+      index: idx + 1,
+      docId: ctx.docId,
+      docTitle: ctx.docTitle,
+      sectionTitle: ctx.sectionTitle,
+      category: ctx.category,
+      categoryLabel: ctx.categoryLabel,
+      score: ctx.score,
+      snippet: ctx.decryptedText.slice(0, 240) + (ctx.decryptedText.length > 240 ? '...' : ''),
+    })),
+    inspectAndSanitize,
+    dlpOptions
+  );
 
   const speechText = formatForSpeech(completion.answer, responseLanguage);
   let suggestions;
@@ -213,6 +268,23 @@ async function processCompanyQuery({
       : null,
   };
 
+  const safeAssistantMeta = sanitizePublicValue(assistantMeta, inspectAndSanitize, dlpOptions);
+  const publicDataInsights = sanitizePublicValue(dataAnalysis?.insights || [], inspectAndSanitize, dlpOptions);
+  const publicMatchedRecords = sanitizePublicValue(dataAnalysis?.matchedRecords || [], inspectAndSanitize, dlpOptions);
+  const publicVisionDetails = visionReport
+    ? sanitizePublicValue(
+        {
+          documentType: visionReport.signals?.docType,
+          imageMeta: visionReport.imageMeta,
+          extractedText: visionReport.ocr?.text || '',
+          ocrConfidence: visionReport.ocr?.confidence || 0,
+          detectedSignals: visionReport.signals,
+        },
+        inspectAndSanitize,
+        dlpOptions
+      )
+    : null;
+
   let userMsgId = Date.now();
   let botMsgId = Date.now() + 1;
 
@@ -223,8 +295,8 @@ async function processCompanyQuery({
       [
         sessionId,
         channel,
-        cleanMessage || '📷 [صورة مرفقة للتحليل]',
-        visionReport?.thumbnailDataUrl || null,
+        encryptField(cleanMessage || '📷 [صورة مرفقة للتحليل]'),
+        encryptField(visionReport?.thumbnailDataUrl || null),
       ]
     );
     userMsgId = Number(uIns.lastInsertRowid);
@@ -235,9 +307,9 @@ async function processCompanyQuery({
       [
         sessionId,
         channel,
-        completion.answer,
-        JSON.stringify(citations),
-        JSON.stringify(assistantMeta),
+        encryptField(completion.answer),
+        encryptField(JSON.stringify(citations)),
+        encryptField(JSON.stringify(safeAssistantMeta)),
       ]
     );
     botMsgId = Number(bIns.lastInsertRowid);
@@ -249,7 +321,7 @@ async function processCompanyQuery({
     [
       channel,
       visionReport ? 'vision_chat' : 'text_chat',
-      (cleanMessage || visionReport?.imageMeta?.sceneHint || 'محادثة').slice(0, 120),
+      null,
       visionReport ? 1 : 0,
       completion.engineUsed,
       completion.latencyMs,
@@ -261,9 +333,10 @@ async function processCompanyQuery({
     speechText,
     suggestions,
     citations,
-    vision: assistantMeta.visionSummary,
-    dataInsights: dataAnalysis?.insights || [],
-    matchedRecords: dataAnalysis?.matchedRecords || [],
+    vision: safeAssistantMeta.visionSummary,
+    visionDetails: publicVisionDetails,
+    dataInsights: publicDataInsights,
+    matchedRecords: publicMatchedRecords,
     engineUsed: completion.engineUsed,
     latencyMs: completion.latencyMs,
     userMessage: {
