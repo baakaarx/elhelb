@@ -8,7 +8,7 @@ const app = require('../server/index');
 const { all, get, run } = require('../server/db');
 const { ingestDocument, ingestDataset, retrieveCompanyKnowledge, getDecryptedDatasets } = require('../server/vaultService');
 const { inspectAndSanitize } = require('../server/dlpShield');
-const { analyzeImageBuffer } = require('../server/visionEngine');
+const { analyzeImageBuffer, getOcrResizeDimensions } = require('../server/visionEngine');
 const { encryptField, decryptField } = require('../server/secureFields');
 const { getAdminKey } = require('../server/adminAuth');
 const { inferCategoryFromFilename } = require('../server/seed');
@@ -207,6 +207,9 @@ async function generateTestProductLabelPngBuffer() {
 }
 
 async function runTests() {
+  const scaledOcr = getOcrResizeDimensions(6000, 4000);
+  assert.ok(scaledOcr.width <= 1800 && scaledOcr.height <= 1800, 'يجب تصغير الصور الكبيرة قبل OCR لتجنب تجاوز مهلة الخادم');
+  assert.ok(scaledOcr.width * scaledOcr.height <= 2_500_000);
   assert.equal(inferCategoryFromFilename('employee-salaries.csv'), 'private', 'الملفات غير المعروفة يجب ألا تُنشر افتراضياً');
   assert.equal(inferCategoryFromFilename('06-elhelb-herbicides-and-nutrition.md'), 'products');
   await testBrowserVoiceEngineWiring();

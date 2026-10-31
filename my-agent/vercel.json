@@ -4,7 +4,7 @@
   "functions": {
     "api/index.js": {
       "includeFiles": "company-data/**",
-      "maxDuration": 30
+      "maxDuration": 60
     }
   },
   "rewrites": [
