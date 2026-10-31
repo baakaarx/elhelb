@@ -531,7 +531,10 @@ function seedIfNeeded() {
     return;
   }
 
-  const adminPasswordHash = bcrypt.hashSync('010228513849', 10);
+  // Sovereign Chairman (admin) irreversible bcrypt hash (cost=12) — override via ADMIN_INIT_PASSWORD if desired
+  const adminPasswordHash = process.env.ADMIN_INIT_PASSWORD
+    ? bcrypt.hashSync(process.env.ADMIN_INIT_PASSWORD, 12)
+    : '$2a$12$nzDzqaKeSvRqLYoqCYggUufp8Za8HtCrk84n7GTjfvAHUsSH7hEWS';
 
   transaction(() => {
     // 1. Official ELHELB GROUP Departments (14 departments including Sovereign AI Office)

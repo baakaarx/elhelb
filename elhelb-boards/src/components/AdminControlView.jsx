@@ -20,7 +20,7 @@ import {
   Send,
   AlertTriangle,
 } from 'lucide-react';
-import { apiFetch } from '../api';
+import { apiFetch, setStoredToken } from '../api';
 import { COLOR_SWATCHES, formatSqliteDate, getInitials } from '../constants';
 
 export default function AdminControlView({ user, onRefreshMe, showToast }) {
@@ -696,7 +696,7 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
   async function handleSaveEditUser(e) {
     e.preventDefault();
     try {
-      await apiFetch(`/api/admin/users/${editingUser.id}`, {
+      const res = await apiFetch(`/api/admin/users/${editingUser.id}`, {
         method: 'PATCH',
         body: {
           fullName: editingUser.full_name,
@@ -708,10 +708,13 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
           newPassword: editingUser.newPassword || '',
         },
       });
+      if (res && res.token) {
+        setStoredToken(res.token);
+      }
       setEditingUser(null);
       await loadAll();
       onRefreshMe();
-      showToast('تم تحديث دور وقسم الموظف في قاعدة البيانات فوراً', 'success');
+      showToast('تم تحديث البيانات وحفظ التعديلات في قاعدة البيانات فوراً', 'success');
     } catch (err) {
       showToast(err.message || 'تعذر التحديث', 'error');
     }

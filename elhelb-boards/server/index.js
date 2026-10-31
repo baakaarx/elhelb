@@ -21,16 +21,37 @@ runUntracked(() => {
 });
 
 const app = express();
-app.set('trust proxy', 1);
+if (process.env.TRUST_PROXY === '1' || process.env.VERCEL) {
+  app.set('trust proxy', 1);
+}
 app.set('etag', false);
 
-// Configured for both production security and seamless iframe Live Preview embedding
+const allowIframePreview =
+  process.env.ALLOW_IFRAME_PREVIEW === '1' || Boolean(process.env.E2B_SANDBOX_ID);
+
+// Production Clickjacking & CSP protection (relaxes frame-ancestors ONLY in explicit iframe preview mode)
 app.use(
   helmet({
-    frameguard: false,
-    contentSecurityPolicy: false,
+    frameguard: allowIframePreview ? false : { action: 'deny' },
+    contentSecurityPolicy: allowIframePreview
+      ? false
+      : {
+          useDefaults: true,
+          directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+            fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+            imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+            connectSrc: ["'self'"],
+            objectSrc: ["'none'"],
+            baseUri: ["'self'"],
+            frameAncestors: ["'none'"],
+            upgradeInsecureRequests: null,
+          },
+        },
     crossOriginEmbedderPolicy: false,
-    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginResourcePolicy: { policy: allowIframePreview ? 'cross-origin' : 'same-origin' },
   })
 );
 app.use(cookieParser());
@@ -110,7 +131,7 @@ app.use('/api', async (req, res, next) => {
   next();
 });
 
-app.get('/health', (req, res) => {
+app.get(['/health', '/api/health'], (req, res) => {
   const st = cloudSync.getStorageStatus();
   res.json({
     ok: true,

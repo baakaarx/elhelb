@@ -14,6 +14,8 @@ module.exports = {
         HOST: '0.0.0.0',
         PORT: process.env.PORT || 3000,
         DB_PATH: process.env.DB_PATH || '/opt/elhelb-data/elhelb-boards.db',
+        JWT_SECRET: process.env.JWT_SECRET || '',
+        TRUST_PROXY: process.env.TRUST_PROXY || '0',
       },
     },
   ],

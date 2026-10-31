@@ -19,10 +19,13 @@ let tursoTableInitialized = false;
 let lastSyncError = '';
 
 function deriveCipherKey(secretMaterial) {
-  const jwtPart = process.env.JWT_SECRET || 'elhelb-sovereign-v10-isolated-2026-secret';
+  if (!secretMaterial || String(secretMaterial).trim().length < 8) {
+    throw new Error('Cloud sync requires valid secretMaterial token');
+  }
+  const extraPepper = (process.env.CLOUD_ENCRYPTION_KEY || process.env.JWT_SECRET || '').trim();
   return crypto
-    .createHash('sha256')
-    .update(`elhelb-cloud-snapshot-v11:${secretMaterial}:${jwtPart}`)
+    .createHmac('sha256', String(secretMaterial))
+    .update(`elhelb-cloud-snapshot-v11:${extraPepper}`)
     .digest();
 }
 
@@ -582,12 +585,17 @@ function resetCloudSyncStateForTests() {
   lastSyncError = '';
 }
 
-module.exports = {
+const exportedApi = {
   encodeSnapshot,
   decodeSnapshot,
   resolveActiveProvider,
   syncBeforeRequest,
   syncAfterMutation,
   getStorageStatus,
-  resetCloudSyncStateForTests,
 };
+
+if (process.env.NODE_ENV === 'test') {
+  exportedApi.resetCloudSyncStateForTests = resetCloudSyncStateForTests;
+}
+
+module.exports = exportedApi;

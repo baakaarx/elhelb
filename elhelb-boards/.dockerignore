@@ -1,0 +1,13 @@
+node_modules
+data
+*.db
+*.db-wal
+*.db-shm
+.jwt_secret
+.env
+.env.*
+.git
+.gitignore
+tests
+*.zip
+npm-debug.log*
