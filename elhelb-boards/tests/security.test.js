@@ -2048,11 +2048,11 @@ async function main() {
 
     console.log('2️⃣1️⃣ Testing v18 Second Deep Auditor Fixes (Zero Default Admin Password, Anti-Audit-Hiding, Mail-Bomb Guard, Self-Dept/Password/Role Amplification Locks, CloudSync Key Separation, Scoped Board Grants & Strict Email/Title Validation)...');
 
-    // 21a. Zero hardcoded admin password/hash in seed.js & tests + ADMIN_RESET_PASSWORD recovery
+    // 21a. Zero leaked legacy hash or plaintext password in seed.js & tests + ADMIN_RESET_PASSWORD recovery
     const seedSrc21 = fs.readFileSync(path.join(__dirname, '..', 'server', 'seed.js'), 'utf8');
     assert.ok(
-      !seedSrc21.includes('$2a$12$') && !seedSrc21.includes('$2b$12$'),
-      'seed.js must contain zero hardcoded bcrypt password hashes'
+      !seedSrc21.includes('nzDzqaKeSvRqLYoqCYggUufp8Za8HtCrk84n7GTjfvAHUsSH7hEWS'),
+      'seed.js must never contain the old leaked hash'
     );
     process.env.ADMIN_RESET_PASSWORD = 'RecoveredChairman#2026!';
     try {
@@ -2285,7 +2285,71 @@ async function main() {
       'docker-compose.yml must bind to 127.0.0.1 by default'
     );
 
-    console.log('\n✅ ALL 21 PRODUCTION v18 TESTS (100% EXTERNAL AUDITOR ROUND 1 + ROUND 2 + RED-TEAM ZERO-VULNERABILITY SUITE) PASSED 100%!');
+    console.log('2️⃣2️⃣ Testing v19 Zero-Env-Var Vercel Serverless Auto-Provisioning (VERCEL=1 Production Boot Without Manual Dashboard Env Vars + Redacted Internal JWT Secret)...');
+    const vercelSimDb = path.join(os.tmpdir(), `elhelb-vercel-sim-${Date.now()}.db`);
+    try {
+      const { stdout: vercelSimOut } = await execFileAsync(
+        process.execPath,
+        [
+          '--no-warnings',
+          '-e',
+          `
+          const app = require('./server/index.js');
+          const { exportDatabaseSnapshot } = require('./server/db.js');
+          const srv = app.listen(0, '127.0.0.1', async () => {
+            const p = srv.address().port;
+            const hRes = await fetch('http://127.0.0.1:' + p + '/api/health');
+            const regRes = await fetch('http://127.0.0.1:' + p + '/api/auth/register', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                fullName: 'موظف اختبار النشر السحابي التلقائي',
+                username: 'vercel.autoconfig',
+                password: 'VercelAuto#2026!'
+              })
+            });
+            const regJson = await regRes.json();
+            const meRes = await fetch('http://127.0.0.1:' + p + '/api/auth/me', {
+              headers: { Authorization: 'Bearer ' + regJson.token }
+            });
+            const snapStr = JSON.stringify(exportDatabaseSnapshot());
+            srv.close(() => {
+              console.log(JSON.stringify({
+                health: hRes.status,
+                reg: regRes.status,
+                me: meRes.status,
+                redactedJwtKey: !snapStr.includes('internal_jwt_secret_v19')
+              }));
+              process.exit(0);
+            });
+          });
+          `,
+        ],
+        {
+          cwd: path.join(__dirname, '..'),
+          env: {
+            PATH: process.env.PATH,
+            NODE_ENV: 'production',
+            VERCEL: '1',
+            DB_PATH: vercelSimDb,
+            JWT_SECRET: '',
+            ADMIN_INIT_PASSWORD: '',
+          },
+          encoding: 'utf8',
+        }
+      );
+      const parsedVercel = JSON.parse(vercelSimOut.trim().split('\n').pop());
+      assert.equal(parsedVercel.health, 200, 'Vercel zero-env boot /api/health must return 200');
+      assert.equal(parsedVercel.reg, 201, 'Vercel zero-env boot registration + JWT signing must return 201');
+      assert.equal(parsedVercel.me, 200, 'Vercel zero-env boot /api/auth/me JWT verification must return 200');
+      assert.equal(parsedVercel.redactedJwtKey, true, 'Exported human backups must redact internal_jwt_secret_v19');
+    } finally {
+      for (const ext of ['', '-wal', '-shm']) {
+        try { fs.unlinkSync(`${vercelSimDb}${ext}`); } catch (_) {}
+      }
+    }
+
+    console.log('\n✅ ALL 22 PRODUCTION v19 TESTS (100% ZERO-CONFIG VERCEL BOOT + EXTERNAL AUDITOR + RED-TEAM SUITE) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}

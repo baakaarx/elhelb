@@ -435,6 +435,7 @@ const SNAPSHOT_TABLES_REVERSE = [...SNAPSHOT_TABLES_FORWARD].reverse();
 const SENSITIVE_SETTING_KEYS = new Set([
   'gmail_app_password',
   'google_client_secret',
+  'internal_jwt_secret_v19',
 ]);
 
 function getTableColumnSet(tableName) {
