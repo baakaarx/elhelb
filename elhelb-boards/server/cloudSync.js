@@ -537,7 +537,15 @@ async function syncAfterMutation({ coreChanged = true } = {}) {
   return nextTask;
 }
 
-function getStorageStatus() {
+function sanitizeSyncError(raw) {
+  if (!raw) return null;
+  return String(raw)
+    .replace(/Bearer\s+[^\s"']+/gi, 'Bearer [REDACTED]')
+    .replace(/https?:\/\/[^\s"']+/gi, '[URL]')
+    .slice(0, 160);
+}
+
+function getStorageStatus(includeInternal = false) {
   const cfg = resolveActiveProvider();
   const isServerless = Boolean(
     process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME
@@ -549,8 +557,8 @@ function getStorageStatus() {
       provider: cfg.type,
       label: cfg.label,
       ephemeralWarning: false,
-      syncedRev: syncedRev || null,
-      lastSyncError: lastSyncError || null,
+      syncedRev: includeInternal ? syncedRev || null : null,
+      lastSyncError: includeInternal ? sanitizeSyncError(lastSyncError) : null,
     };
   }
 

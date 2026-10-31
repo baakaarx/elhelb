@@ -343,7 +343,8 @@ router.get('/oauth/google/start', (req, res) => {
     return res.redirect('/?oauth_error=google_not_configured');
   }
   const redirectUri = `${getBaseOrigin(req)}/api/auth/oauth/google/callback`;
-  const prefDept = req.query.dept ? Number(req.query.dept) : null;
+  const rawDept = Number(req.query.dept);
+  const prefDept = Number.isInteger(rawDept) && rawDept > 0 ? rawDept : null;
   const nonce = crypto.randomBytes(16).toString('hex');
   const isHttps =
     req.secure ||

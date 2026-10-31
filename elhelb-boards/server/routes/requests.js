@@ -497,22 +497,27 @@ router.post('/requests/:id(\\d+)/review', async (req, res) => {
     approvedDuration = '8h';
   }
 
+  let alreadyReviewedRace = false;
   transaction(() => {
     if (decision === 'approved') {
       const modifier = DURATION_SQL_MODIFIERS[approvedDuration];
       const expiresAt = get(`SELECT datetime('now', ?) AS exp`, [modifier]).exp;
       const usesRemaining = approvedDuration === 'once' ? 1 : null;
 
-      run(
+      const updated = run(
         `UPDATE permission_requests
          SET status = 'approved',
              reviewed_by = ?,
              review_note = ?,
              approved_duration = ?,
              reviewed_at = datetime('now')
-         WHERE id = ?`,
+         WHERE id = ? AND status = 'pending'`,
         [req.user.id, reviewNote, approvedDuration, reqRow.id]
       );
+      if (updated.changes === 0) {
+        alreadyReviewedRace = true;
+        return;
+      }
 
       run(
         `INSERT INTO permission_grants (
@@ -546,15 +551,19 @@ router.post('/requests/:id(\\d+)/review', async (req, res) => {
         ]
       );
     } else {
-      run(
+      const updated = run(
         `UPDATE permission_requests
          SET status = 'rejected',
              reviewed_by = ?,
              review_note = ?,
              reviewed_at = datetime('now')
-         WHERE id = ?`,
+         WHERE id = ? AND status = 'pending'`,
         [req.user.id, reviewNote, reqRow.id]
       );
+      if (updated.changes === 0) {
+        alreadyReviewedRace = true;
+        return;
+      }
 
       run(
         `INSERT INTO notifications (user_id, type, title, message, link_tab)
@@ -568,6 +577,10 @@ router.post('/requests/:id(\\d+)/review', async (req, res) => {
       );
     }
   });
+
+  if (alreadyReviewedRace) {
+    return res.status(400).json({ error: 'تمت مراجعة هذا الطلب مسبقاً' });
+  }
 
   const isExclusiveReview = isChairmanExclusiveDepartment(reqRow.target_department_id);
 
@@ -631,6 +644,9 @@ router.post('/grants/:id(\\d+)/revoke', (req, res) => {
   );
 
   if (!grant) return res.status(404).json({ error: 'التصريح غير موجود' });
+  if (Number(grant.is_revoked)) {
+    return res.status(400).json({ error: 'تم سحب وإيقاف هذا التصريح مسبقاً' });
+  }
 
   const isExclusiveGrant = isChairmanExclusiveDepartment(grant.target_department_id);
   if (isExclusiveGrant && req.user.role_slug !== 'chairman') {
@@ -660,8 +676,16 @@ router.post('/grants/:id(\\d+)/revoke', (req, res) => {
     });
   }
 
+  let alreadyRevokedRace = false;
   transaction(() => {
-    run(`UPDATE permission_grants SET is_revoked = 1 WHERE id = ?`, [grant.id]);
+    const rev = run(
+      `UPDATE permission_grants SET is_revoked = 1 WHERE id = ? AND is_revoked = 0`,
+      [grant.id]
+    );
+    if (rev.changes === 0) {
+      alreadyRevokedRace = true;
+      return;
+    }
     if (grant.request_id) {
       run(`UPDATE permission_requests SET status = 'revoked' WHERE id = ?`, [grant.request_id]);
     }
@@ -675,6 +699,10 @@ router.post('/grants/:id(\\d+)/revoke', (req, res) => {
     );
   });
 
+  if (alreadyRevokedRace) {
+    return res.status(400).json({ error: 'تم سحب وإيقاف هذا التصريح مسبقاً' });
+  }
+
   writeAudit({
     user: req.user,
     action: 'سحب وإلغاء تصريح صلاحية مؤقت',
@@ -682,6 +710,8 @@ router.post('/grants/:id(\\d+)/revoke', (req, res) => {
     status: 'ALLOWED',
     req,
     details: `تم سحب (${grant.permission_name}) من ${grant.user_name}`,
+    departmentId: grant.target_department_id,
+    isChairmanExclusive: isExclusiveGrant,
   });
 
   res.json({ ok: true });

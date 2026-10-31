@@ -1587,7 +1587,210 @@ async function main() {
       'Other active device session (phone) must remain active when logging out from office PC'
     );
 
-    console.log('\n✅ ALL 18 PRODUCTION v16 TESTS (100% EXHAUSTIVE ZERO-VULNERABILITY AUDIT, IDOR MASKING, JTI LOGOUT, SOVEREIGN ISOLATION & INSTALLERS) PASSED 100%!');
+    console.log('1️⃣9️⃣ Testing v16.1 Deep Red-Team Fixes (HR Global-Scope Block, Atomic FK Backup Rollback, Sovereign Dept/Grant/Pending Audit Masking, Dept-Only Onboarding Isolation & LIKE Wildcard Safety)...');
+
+    // 19a. Server-side boards.view_all check when departmentId === null on POST/PATCH /api/admin/users + storage-status admin guard
+    const hrGlobalCreateTry = await api('POST', '/api/admin/users', hrTok, {
+      username: 'hr.global.escape',
+      password: 'Escape#2026',
+      fullName: 'محاولة إنشاء حساب عام بدون قسم',
+      roleId: empRoleRow.id,
+      departmentId: null,
+    });
+    assert.equal(
+      hrGlobalCreateTry.status,
+      403,
+      'HR manager without boards.view_all must NOT create a global (department_id = NULL) account'
+    );
+
+    const hrNormalUserRes = await api('POST', '/api/admin/users', hrTok, {
+      username: 'hr.scoped.emp',
+      password: 'Scoped#2026',
+      fullName: 'موظف مسكن بقسم التصدير',
+      roleId: empRoleRow.id,
+      departmentId: exportDeptRow17.id,
+    });
+    assert.equal(hrNormalUserRes.status, 201);
+
+    const hrGlobalPatchTry = await api(
+      'PATCH',
+      `/api/admin/users/${hrNormalUserRes.data.id}`,
+      hrTok,
+      { departmentId: null }
+    );
+    assert.equal(
+      hrGlobalPatchTry.status,
+      403,
+      'HR manager without boards.view_all must NOT move an employee to global (department_id = NULL) scope'
+    );
+
+    assert.equal(
+      (await api('GET', '/api/admin/storage-status', salesEmpTok)).status,
+      403,
+      'Non-admin staff must receive 403 on GET /api/admin/storage-status'
+    );
+    assert.equal(
+      (await api('GET', '/api/admin/storage-status', restoredChairmanTok)).status,
+      200,
+      'Chairman must receive 200 on GET /api/admin/storage-status'
+    );
+
+    // 19b. Atomic PRAGMA foreign_key_check & anti-lockout rollback on POST /api/admin/backup/import
+    const cleanSnap19 = await api('GET', '/api/admin/backup/export', restoredChairmanTok);
+    assert.equal(cleanSnap19.status, 200);
+    const corruptedFkSnap = JSON.parse(JSON.stringify(cleanSnap19.data.snapshot));
+    corruptedFkSnap.tables.boards.push({
+      id: 999991,
+      department_id: 888888, // Non-existent department FK!
+      title: 'لوحة معطوبة بعلاقة مكسورة',
+      description: '',
+      background: 'emerald',
+      is_archived: 0,
+      created_by: 1,
+      created_at: '2026-10-31 00:00:00',
+    });
+    const badImportRes = await api('POST', '/api/admin/backup/import', restoredChairmanTok, {
+      snapshot: corruptedFkSnap,
+    });
+    assert.equal(
+      badImportRes.status,
+      400,
+      'Snapshot with broken foreign keys must be rejected cleanly with 400'
+    );
+    // Live DB must have rolled back 100% cleanly — hr.scoped.emp created just before export is still intact!
+    const usersAfterRollback = await api('GET', '/api/admin/users', restoredChairmanTok);
+    assert.equal(usersAfterRollback.status, 200);
+    assert.ok(
+      usersAfterRollback.data.some((u) => u.username === 'hr.scoped.emp'),
+      'Failed backup import must roll back atomically without losing live database records'
+    );
+
+    // 19c. Sovereign Chairman-exclusive department create -> delete + pending AI reject + AI grant revoke audit masking!
+    const sovDeptRes = await api('POST', '/api/admin/departments', restoredChairmanTok, {
+      name: 'مكتب التخطيط السيادي الخاص 2027',
+      description: 'مكتب سري تابع لرئيس مجلس الإدارة',
+      color: '#92400e',
+      isChairmanExclusive: true,
+    });
+    assert.equal(sovDeptRes.status, 201);
+    assert.equal(
+      (await api('DELETE', `/api/admin/departments/${sovDeptRes.data.id}`, restoredChairmanTok)).status,
+      200
+    );
+
+    // Unconfirmed registrant (preferred_department_id IS NULL) must NOT be visible or deletable by a single-department manager
+    // Temporarily grant department.onboard_members to dept_manager to verify single-dept onboarding boundary
+    const allRoles19 = (await api('GET', '/api/admin/roles', restoredChairmanTok)).data.roles;
+    const deptMgrRole19 = allRoles19.find((r) => r.slug === 'dept_manager');
+    assert.equal(
+      (
+        await api('PUT', `/api/admin/roles/${deptMgrRole19.id}`, restoredChairmanTok, {
+          name: deptMgrRole19.name,
+          description: deptMgrRole19.description,
+          color: deptMgrRole19.color,
+          permissions: [...deptMgrRole19.permissions, 'department.onboard_members'],
+        })
+      ).status,
+      200
+    );
+
+    const unconfirmedReg = await api('POST', '/api/auth/register', null, {
+      fullName: 'مرشح سري قبل اختيار القسم',
+      username: 'unconfirmed.secret.cand',
+      password: 'Cand#2026',
+    });
+    assert.equal(unconfirmedReg.status, 201);
+    const salesMgrPending = await api('GET', '/api/onboarding/pending', salesMgrTok);
+    assert.equal(salesMgrPending.status, 200);
+    assert.ok(
+      !salesMgrPending.data.pendingUsers.some((u) => u.username === 'unconfirmed.secret.cand'),
+      'Single-department manager must not see unconfirmed registrants before they pick that department'
+    );
+    assert.equal(
+      (await api('DELETE', `/api/onboarding/${unconfirmedReg.data.user.id}`, salesMgrTok)).status,
+      403,
+      'Single-department manager must not delete an unconfirmed registrant'
+    );
+
+    // Approved employee must NEVER be able to call PATCH /api/onboarding/my-preference to cloak themselves under sovereign AI dept!
+    assert.equal(
+      (
+        await api('PATCH', '/api/onboarding/my-preference', salesEmpTok, {
+          preferredDepartmentId: aiDept.id,
+          jobTitle: 'انتحال صفة سيادية',
+        })
+      ).status,
+      403,
+      'Already-approved employee must receive 403 on PATCH /api/onboarding/my-preference (anti-sovereign-cloaking)'
+    );
+
+    // Candidate selects sovereign AI department -> Chairman rejects/deletes -> ZERO trace in GM/IT audit logs!
+    assert.equal(
+      (
+        await api('PATCH', '/api/onboarding/my-preference', unconfirmedReg.data.token, {
+          preferredDepartmentId: aiDept.id,
+          jobTitle: 'مهندس ذكاء اصطناعي',
+        })
+      ).status,
+      200
+    );
+    assert.equal(
+      (await api('DELETE', `/api/onboarding/${unconfirmedReg.data.user.id}`, restoredChairmanTok)).status,
+      200
+    );
+
+    const gmLogs19 = (await api('GET', '/api/admin/audit-logs', gmTok)).data;
+    const itLogs19 = (await api('GET', '/api/admin/audit-logs', itMgrTok)).data;
+    for (const logs of [gmLogs19, itLogs19]) {
+      assert.ok(
+        !logs.some(
+          (row) =>
+            String(row.details || '').includes('مكتب التخطيط السيادي الخاص') ||
+            String(row.details || '').includes('مرشح سري قبل اختيار القسم') ||
+            String(row.details || '').includes('unconfirmed.secret.cand')
+        ),
+        'Deleting sovereign departments or pending AI applicants must never leak into GM/IT audit logs'
+      );
+    }
+
+    // Gmail settings email syntax validation + literal SQLite LIKE wildcard (% / _) search check
+    assert.equal(
+      (
+        await api('PUT', '/api/admin/gmail-settings', restoredChairmanTok, {
+          gmailUser: 'not-an-email-address',
+        })
+      ).status,
+      400,
+      'Invalid Gmail sender address must return 400 Bad Request'
+    );
+
+    const wildcardSearch = await api(
+      'GET',
+      `/api/search?q=${encodeURIComponent('100%_literal_no_match')}`,
+      restoredChairmanTok
+    );
+    assert.equal(wildcardSearch.status, 200);
+    assert.equal(wildcardSearch.data.cards.length, 0);
+
+    // Railway config & Windows live-watch Node 22 safety check
+    const railwayCfg = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', 'railway.json'), 'utf8')
+    );
+    assert.equal(
+      railwayCfg.deploy.startCommand,
+      '/app/docker-entrypoint.sh',
+      'railway.json must invoke docker-entrypoint.sh so JWT_SECRET is auto-provisioned'
+    );
+    const liveWatchSrc = fs.readFileSync(
+      path.join(__dirname, '..', 'deploy', 'live-watch.js'),
+      'utf8'
+    );
+    assert.ok(
+      !liveWatchSrc.includes("'npm.cmd'"),
+      'live-watch.js must invoke Vite via process.execPath instead of spawning npm.cmd with shell:false on Node 22'
+    );
+
+    console.log('\n✅ ALL 19 PRODUCTION v16.1 TESTS (100% DEEP RED-TEAM ZERO-VULNERABILITY AUDIT, ATOMIC FK BACKUP, SOVEREIGN ISOLATION & INSTALLERS) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}

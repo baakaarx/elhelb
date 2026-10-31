@@ -35,7 +35,17 @@ const router = express.Router();
 router.use(authenticate);
 
 router.get('/storage-status', (req, res) => {
-  res.json(getStorageStatus());
+  const canViewStorage =
+    evaluatePermission(req.user, 'roles.manage').allowed ||
+    evaluatePermission(req.user, 'users.manage').allowed;
+  if (!canViewStorage) {
+    return denyPermission(req, res, {
+      permissionKey: 'roles.manage',
+      actionLabel: 'عرض حالة التخزين بالسيرفر',
+      canRequestElevation: false,
+    });
+  }
+  res.json(getStorageStatus(true));
 });
 
 function makeSlug(text, prefix = 'item') {
@@ -54,6 +64,19 @@ function canCallerModifyRank(caller, targetRank) {
 
 function deleteUserCompletely(targetId) {
   transaction(() => {
+    const sovereignMembership = get(
+      `SELECT 1 AS ok
+       FROM users u
+       LEFT JOIN departments d ON d.id = u.department_id
+       LEFT JOIN departments pd ON pd.id = u.preferred_department_id
+       WHERE u.id = ?
+         AND (COALESCE(d.is_chairman_exclusive, 0) = 1 OR COALESCE(pd.is_chairman_exclusive, 0) = 1)`,
+      [targetId]
+    );
+    if (sovereignMembership) {
+      run(`UPDATE audit_logs SET is_chairman_exclusive = 1 WHERE actor_id = ?`, [targetId]);
+    }
+
     run(`UPDATE users SET approved_by = NULL WHERE approved_by = ?`, [targetId]);
     run(`UPDATE boards SET created_by = NULL WHERE created_by = ?`, [targetId]);
     run(`UPDATE cards SET created_by = NULL WHERE created_by = ?`, [targetId]);
@@ -481,7 +504,13 @@ router.post('/users', async (req, res) => {
   }
 
   let dept = null;
-  if (departmentId !== null) {
+  if (departmentId === null) {
+    if (!req.user.permissionSet.has('boards.view_all')) {
+      return res.status(403).json({
+        error: 'لا تملك صلاحية إنشاء حساب عام بدون قسم؛ يرجى اختيار القسم المختص للموظف',
+      });
+    }
+  } else {
     dept = get(`SELECT * FROM departments WHERE id = ?`, [departmentId]);
     if (!dept) return res.status(400).json({ error: 'القسم المحدد غير موجود' });
     if (Number(dept.is_chairman_exclusive) && req.user.role_slug !== 'chairman') {
@@ -632,7 +661,16 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
     });
   }
 
-  if (departmentId !== null) {
+  if (departmentId === null) {
+    if (
+      existing.department_id !== null &&
+      !req.user.permissionSet.has('boards.view_all')
+    ) {
+      return res.status(403).json({
+        error: 'لا تملك صلاحية نقل حساب إلى الإدارة العليا بدون قسم؛ يرجى اختيار قسم محدد للموظف',
+      });
+    }
+  } else {
     const dept = get(`SELECT * FROM departments WHERE id = ?`, [departmentId]);
     if (!dept) return res.status(400).json({ error: 'القسم المحدد غير موجود' });
     if (
@@ -691,7 +729,8 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
   transaction(() => {
     run(
       `UPDATE users
-       SET full_name = ?, email = ?, job_title = ?, role_id = ?, department_id = ?,
+       SET full_name = ?, email = ?, job_title = ?, role_id = ?,
+           department_id = ?, preferred_department_id = ?,
            onboarding_status = ?,
            approved_by = COALESCE(approved_by, ?),
            approved_at = COALESCE(approved_at, datetime('now')),
@@ -702,6 +741,7 @@ router.patch('/users/:id(\\d+)', async (req, res) => {
         email,
         jobTitle,
         role.id,
+        departmentId,
         departmentId,
         nextOnboardingStatus,
         req.user.id,
@@ -934,6 +974,8 @@ router.post('/departments', (req, res) => {
     status: 'ALLOWED',
     req,
     details: name,
+    departmentId: id,
+    isChairmanExclusive: Boolean(isChairmanExclusive),
   });
 
   res.status(201).json(get(`SELECT * FROM departments WHERE id = ?`, [id]));
@@ -994,6 +1036,8 @@ router.patch('/departments/:id(\\d+)', (req, res) => {
     status: 'ALLOWED',
     req,
     details: name,
+    departmentId: dept.id,
+    isChairmanExclusive: Boolean(Number(dept.is_chairman_exclusive) || isChairmanExclusive),
   });
 
   res.json(get(`SELECT * FROM departments WHERE id = ?`, [dept.id]));
@@ -1026,6 +1070,7 @@ router.delete('/departments/:id(\\d+)', (req, res) => {
     });
   }
 
+  const wasExclusive = Boolean(Number(dept.is_chairman_exclusive));
   run(`DELETE FROM departments WHERE id = ?`, [dept.id]);
 
   writeAudit({
@@ -1035,6 +1080,8 @@ router.delete('/departments/:id(\\d+)', (req, res) => {
     status: 'ALLOWED',
     req,
     details: dept.name,
+    departmentId: dept.id,
+    isChairmanExclusive: wasExclusive,
   });
 
   res.json({ ok: true });
@@ -1143,7 +1190,11 @@ router.put('/gmail-settings', (req, res) => {
 
   const body = req.body || {};
   if (body.gmailUser !== undefined) {
-    setSetting('gmail_user', String(body.gmailUser || '').trim().toLowerCase());
+    const cleanGmail = String(body.gmailUser || '').trim().toLowerCase();
+    if (cleanGmail && !isDeliverableEmail(cleanGmail)) {
+      return res.status(400).json({ error: 'صيغة بريد Gmail المرسل غير صحيحة' });
+    }
+    setSetting('gmail_user', cleanGmail);
   }
   if (
     body.gmailAppPassword !== undefined &&
@@ -1151,20 +1202,27 @@ router.put('/gmail-settings', (req, res) => {
   ) {
     setSetting(
       'gmail_app_password',
-      String(body.gmailAppPassword).replace(/\s+/g, '')
+      String(body.gmailAppPassword).replace(/\s+/g, '').slice(0, 128)
     );
   }
   if (body.clearAppPassword) {
     setSetting('gmail_app_password', '');
   }
   if (body.senderName !== undefined) {
-    setSetting('gmail_sender_name', String(body.senderName || '').trim());
+    setSetting(
+      'gmail_sender_name',
+      String(body.senderName || '')
+        .replace(/[\r\n]+/g, ' ')
+        .trim()
+        .slice(0, 100)
+    );
   }
   if (body.adminNotifyEmail !== undefined) {
-    setSetting(
-      'gmail_admin_cc',
-      String(body.adminNotifyEmail || '').trim().toLowerCase()
-    );
+    const cleanAdminCc = String(body.adminNotifyEmail || '').trim().toLowerCase();
+    if (cleanAdminCc && !isDeliverableEmail(cleanAdminCc)) {
+      return res.status(400).json({ error: 'صيغة بريد استلام إشعارات الإدارة غير صحيحة' });
+    }
+    setSetting('gmail_admin_cc', cleanAdminCc);
   }
   if (body.enabled !== undefined) {
     setSetting('gmail_enabled', body.enabled ? '1' : '0');
@@ -1251,8 +1309,11 @@ router.get('/audit-logs', (req, res) => {
     params.push(statusFilter);
   }
   if (q) {
-    where.push('(al.actor_name LIKE ? OR al.action LIKE ? OR al.details LIKE ? OR al.permission_key LIKE ?)');
-    const p = `%${q}%`;
+    where.push(
+      "(al.actor_name LIKE ? ESCAPE '\\' OR al.action LIKE ? ESCAPE '\\' OR al.details LIKE ? ESCAPE '\\' OR al.permission_key LIKE ? ESCAPE '\\')"
+    );
+    const escapedQ = q.slice(0, 100).replace(/[\\%_]/g, '\\$&');
+    const p = `%${escapedQ}%`;
     params.push(p, p, p, p);
   }
 
@@ -1324,12 +1385,12 @@ router.post('/backup/import', (req, res) => {
   }
 
   try {
-    importDatabaseSnapshot(snapshot);
+    importDatabaseSnapshot(snapshot, { requireActiveChairman: true });
     seedIfNeeded();
     markCoreDataModified();
   } catch (err) {
     return res.status(400).json({
-      error: 'تعذر استعادة النسخة الاحتياطية — تأكد من سلامة بنية ملف الـ JSON وعدم تلفه',
+      error: 'تعذر استعادة النسخة الاحتياطية — تأكد من سلامة بنية ملف الـ JSON وتكامل العلاقات وعدم تلفه',
     });
   }
 

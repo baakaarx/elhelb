@@ -3,7 +3,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const rootDir = path.resolve(__dirname, '..');
-const npmBin = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const viteBin = path.join(rootDir, 'node_modules', 'vite', 'bin', 'vite.js');
 const watchFrontend = [
   path.join(rootDir, 'src'),
   path.join(rootDir, 'static'),
@@ -35,7 +35,7 @@ async function triggerFrontendBuild(changedFile) {
   }
   building = true;
   console.log(`\n🎨 [Live Frontend] تم رصد تعديل (${changedFile}) — جاري تحديث الواجهة Live...`);
-  const ok = await runCmd(npmBin, ['run', 'build']);
+  const ok = await runCmd(process.execPath, [viteBin, 'build']);
   if (ok) {
     console.log('✅ [Live Frontend] تم تحديث الواجهة بنجاح! اعمل Refresh للمتصفح لرؤية التعديل فوراً.');
   }
@@ -55,7 +55,11 @@ async function triggerBackendReload(changedFile) {
       return;
     }
   }
-  const pm2Ok = await runCmd(process.platform === 'win32' ? 'pm2.cmd' : 'pm2', ['reload', 'elhelb-boards', '--update-env']);
+  const pm2JsBin = path.join(rootDir, 'node_modules', 'pm2', 'bin', 'pm2');
+  const pm2Ok = fs.existsSync(pm2JsBin)
+    ? await runCmd(process.execPath, [pm2JsBin, 'reload', 'elhelb-boards', '--update-env'])
+    : process.platform !== 'win32' &&
+      (await runCmd('pm2', ['reload', 'elhelb-boards', '--update-env']));
   if (pm2Ok) {
     console.log('✅ [Live Backend] تم تحديث السيرفر عبر PM2 بنجاح مع بقاء قاعدة البيانات متصلة 100%.');
   } else {

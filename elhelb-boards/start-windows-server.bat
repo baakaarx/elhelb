@@ -43,7 +43,7 @@ if not exist "data" mkdir "data"
 
 if "%JWT_SECRET%"=="" if not exist "data\.jwt_secret" (
   echo [2/3] جاري توليد مفتاح تشفير الجلسات الفريد للسيرفر...
-  node -e "require('fs').writeFileSync('data\\.jwt_secret', require('crypto').randomBytes(48).toString('hex'), { mode: 0o600 })"
+  node -e "require('fs').writeFileSync('data\\.jwt_secret', require('crypto').randomBytes(48).toString('hex') + '\r\n', { mode: 0o600 })"
 )
 
 if "%JWT_SECRET%"=="" (

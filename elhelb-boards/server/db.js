@@ -476,10 +476,11 @@ function exportDatabaseSnapshot() {
   };
 }
 
-function importDatabaseSnapshot(snapshot) {
+function importDatabaseSnapshot(snapshot, options = {}) {
   if (!snapshot || typeof snapshot !== 'object' || !snapshot.tables) {
     throw new Error('Invalid database snapshot payload');
   }
+  const requireActiveChairman = Boolean(options && options.requireActiveChairman);
 
   runUntracked(() => {
     db.exec('PRAGMA foreign_keys = OFF;');
@@ -527,6 +528,28 @@ function importDatabaseSnapshot(snapshot) {
             if (item && item.name && item.seq !== undefined && item.seq !== null) {
               seqStmt.run(String(item.name), Number(item.seq));
             }
+          }
+        }
+
+        const fkViolations = db.prepare('PRAGMA foreign_key_check').all();
+        if (Array.isArray(fkViolations) && fkViolations.length > 0) {
+          throw new Error('SNAPSHOT_FOREIGN_KEY_VIOLATION');
+        }
+
+        if (requireActiveChairman) {
+          const validChairman = db
+            .prepare(
+              `SELECT u.id
+               FROM users u
+               JOIN roles r ON r.id = u.role_id
+               WHERE r.slug = 'chairman'
+                 AND u.is_active = 1
+                 AND u.onboarding_status = 'approved'
+               LIMIT 1`
+            )
+            .get();
+          if (!validChairman) {
+            throw new Error('SNAPSHOT_MISSING_ACTIVE_CHAIRMAN');
           }
         }
 

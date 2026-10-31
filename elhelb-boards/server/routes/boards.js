@@ -196,7 +196,8 @@ router.get('/search', (req, res) => {
   }
 
   const placeholders = Array.from(allowedBoardIds).map(() => '?').join(',');
-  const pattern = `%${q}%`;
+  const escapedQ = q.slice(0, 100).replace(/[\\%_]/g, '\\$&');
+  const pattern = `%${escapedQ}%`;
   const matchedCards = all(
     `SELECT c.id, c.title, c.priority, c.due_date, c.is_completed, c.board_id,
             l.title AS list_title,
@@ -207,7 +208,7 @@ router.get('/search', (req, res) => {
      JOIN boards b ON b.id = c.board_id
      JOIN departments d ON d.id = b.department_id
      WHERE c.board_id IN (${placeholders})
-       AND (c.title LIKE ? OR c.description LIKE ?)
+       AND (c.title LIKE ? ESCAPE '\\' OR c.description LIKE ? ESCAPE '\\')
      ORDER BY c.id DESC
      LIMIT 20`,
     [...Array.from(allowedBoardIds), pattern, pattern]
