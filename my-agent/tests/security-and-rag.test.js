@@ -7,7 +7,7 @@ const sharp = require('sharp');
 const app = require('../server/index');
 const { all } = require('../server/db');
 const { getAdminKey } = require('../server/adminAuth');
-const { analyzePlantPathologyPixels } = require('../server/visionEngine');
+const { analyzePlantPathologyPixels, getOcrResizeDimensions } = require('../server/visionEngine');
 const agriKnowledge = require('../shared/agriKnowledgeBase.json');
 
 const voiceSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'voiceEngine.js'), 'utf8');
@@ -202,6 +202,9 @@ async function generateTestProductLabelPngBuffer() {
 }
 
 async function runTests() {
+  const scaledOcr = getOcrResizeDimensions(6000, 4000);
+  assert.ok(scaledOcr.width <= 1800 && scaledOcr.height <= 1800, 'يجب تصغير الصور الكبيرة قبل OCR لتجنب تجاوز مهلة الخادم');
+  assert.ok(scaledOcr.width * scaledOcr.height <= 2_500_000);
   await testBrowserVoiceEngineWiring();
   await testStaticBrainConversationalBehavior();
   console.log('🧪 بدء اختبار الشات بوت العام لمجموعة الهلب (حماية الجمهور + عزل الجلسات + العيادة الزراعية + تحليل الصور + Mobile API)...\n');

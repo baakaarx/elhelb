@@ -597,7 +597,11 @@ async function generateCompanyResponse({
         }
 
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), provider === 'ollama' ? 50000 : 2000);
+        const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+        const providerTimeoutMs = provider === 'ollama'
+          ? (isServerless ? 20000 : 50000)
+          : 2000;
+        const timer = setTimeout(() => controller.abort(), providerTimeoutMs);
         const res = await fetch(`${check.normalizedUrl}/api/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

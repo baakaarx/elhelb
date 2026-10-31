@@ -9,6 +9,15 @@ const { DATA_DIR } = require('./dataDir');
 const TESS_DIR = path.join(DATA_DIR, 'tessdata');
 
 let ocrWorkerPromise = null;
+const MAX_OCR_EDGE = 1800;
+const MAX_OCR_PIXELS = 2_500_000;
+
+function getOcrResizeDimensions(width, height) {
+  const w = Math.max(1, Math.floor(Number(width) || 1));
+  const h = Math.max(1, Math.floor(Number(height) || 1));
+  const scale = Math.min(1, MAX_OCR_EDGE / Math.max(w, h), Math.sqrt(MAX_OCR_PIXELS / (w * h)));
+  return { width: Math.max(1, Math.floor(w * scale)), height: Math.max(1, Math.floor(h * scale)) };
+}
 
 function ensureLocalTessdata() {
   fs.mkdirSync(TESS_DIR, { recursive: true });
@@ -325,10 +334,15 @@ async function analyzeImageBuffer(input) {
   let rawOcrText = '';
   let ocrConfidence = 0;
   try {
-    const targetOcrWidth = width > 0 && width < 1000 ? Math.min(1600, width * 2) : undefined;
+    const ocrDimensions = getOcrResizeDimensions(width, height);
     let ocrPipeline = sharp(rawBuffer).rotate();
-    if (targetOcrWidth) {
-      ocrPipeline = ocrPipeline.resize({ width: targetOcrWidth, withoutEnlargement: false });
+    if (ocrDimensions.width !== width || ocrDimensions.height !== height) {
+      ocrPipeline = ocrPipeline.resize({
+        width: ocrDimensions.width,
+        height: ocrDimensions.height,
+        fit: 'inside',
+        withoutEnlargement: true,
+      });
     }
     const ocrReadyPng = await ocrPipeline.grayscale().normalize().sharpen().png().toBuffer();
 
@@ -376,4 +390,5 @@ async function analyzeImageBuffer(input) {
 module.exports = {
   analyzeImageBuffer,
   analyzePlantPathologyPixels,
+  getOcrResizeDimensions,
 };
