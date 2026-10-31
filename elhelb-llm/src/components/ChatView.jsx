@@ -526,7 +526,7 @@ export default function ChatView({ sessionId, onMessagesCountChange }) {
                 <strong>الفويس نوت جاهز</strong>
                 <audio controls preload="metadata" src={pendingVoiceUrl} />
                 {voiceTranscript && <div className="voice-note-transcript" dir="auto">التفريغ اللي هيوصل للمساعد: {voiceTranscript}</div>}
-                <small className="voice-note-transcript">يتبعت التسجيل مؤقتاً مع الطلب؛ المساعد يفهم التفريغ النصي فقط. التفريغ قد يعتمد على خدمة المتصفح، والنص فقط يُحفظ في السجل.</small>
+                <small className="voice-note-transcript">المساعد يفهم التفريغ النصي فقط؛ التسجيل لا يُحفظ في سجل المحادثة. التفريغ قد يعتمد على خدمة المتصفح.</small>
               </div>
               <button type="button" className="remove-img-btn" onClick={() => clearPendingVoice()} aria-label="حذف الفويس نوت"><X size={16} /></button>
             </div>

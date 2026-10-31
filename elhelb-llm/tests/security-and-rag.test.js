@@ -31,7 +31,25 @@ const offlineModule = { exports: {} };
 new Function('module', 'exports', offlineBundle)(offlineModule, offlineModule.exports);
 assert.match(offlineModule.exports.expandDialect('يا باشا الورق بيصفر'), /اصفرار/);
 assert.doesNotMatch(offlineModule.exports.expandDialect('يا باشا الورق بيصفر'), /باشا/);
-global.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+const localStorageEntries = new Map();
+global.localStorage = {
+  getItem: (key) => localStorageEntries.get(key) ?? null,
+  setItem: (key, value) => localStorageEntries.set(key, String(value)),
+  removeItem: (key) => localStorageEntries.delete(key),
+};
+
+async function testStaticBrainConversationalBehavior() {
+  const sessionId = 'static_voice_transcript_test';
+  const greeting = await offlineModule.exports.runStandaloneClientTurn({ sessionId, message: 'هلا' });
+  assert.match(greeting.reply, /فويس نوت/);
+  assert.match(greeting.reply, /هنا بالكتابة/);
+  assert.doesNotMatch(greeting.reply, /هرد عليك بالصوت|بالصوت أو بالكتابة/);
+
+  await offlineModule.exports.runStandaloneClientTurn({ sessionId, message: 'قولّي عن بيريبان' });
+  const acknowledgment = await offlineModule.exports.runStandaloneClientTurn({ sessionId, message: 'تمام' });
+  assert.match(acknowledgment.reply, /بيريبان/);
+  assert.ok(acknowledgment.suggestions.some((suggestion) => suggestion.includes('بيريبان')));
+}
 
 async function testBrowserVoiceEngineWiring() {
   const previousWindow = global.window;
@@ -176,6 +194,7 @@ async function generateTestProductLabelPngBuffer() {
 
 async function runTests() {
   await testBrowserVoiceEngineWiring();
+  await testStaticBrainConversationalBehavior();
   console.log('🧪 بدء اختبار الشات بوت العام لمجموعة الهلب (حماية الجمهور + عزل الجلسات + العيادة الزراعية + تحليل الصور + Mobile API)...\n');
 
   const server = app.listen(0, '127.0.0.1');
