@@ -81,8 +81,10 @@ async function testBrowserVoiceEngineWiring() {
     paused: false,
     cancel() {},
     getVoices: () => [
-      { name: 'Arabic', lang: 'ar-SA' },
-      { name: 'English', lang: 'en-US' },
+      { name: 'Arabic', lang: 'ar-SA', voiceURI: 'ar-sa-local', localService: true },
+      { name: 'English Standard', lang: 'en-US', voiceURI: 'en-standard', localService: true },
+      { name: 'English Natural', lang: 'en-US', voiceURI: 'en-natural', localService: true },
+      { name: 'Remote English', lang: 'en-US', voiceURI: 'en-remote', localService: false },
     ],
     speak(utterance) {
       utterances.push(utterance);
@@ -94,6 +96,9 @@ async function testBrowserVoiceEngineWiring() {
   };
   function MockUtterance(text) { this.text = text; }
   global.window = { speechSynthesis: synth, SpeechSynthesisUtterance: MockUtterance, isSecureContext: true };
+  const availableEnglishVoices = voiceModule.exports.getAvailableSpeechVoices('en-US');
+  assert.equal(availableEnglishVoices[0].name, 'English Natural', 'يجب تفضيل الصوت المحلي الأحدث عند توفره');
+  assert.ok(!availableEnglishVoices.some((voice) => voice.localService === false), 'يجب عدم إرسال النص إلى صوت خارجي');
   const arabicSpeechDone = new Promise((resolve, reject) => {
     voiceModule.exports.speakArabic('رد صوتي عربي 72%', {
       onStart: () => {},
@@ -114,8 +119,27 @@ async function testBrowserVoiceEngineWiring() {
     });
   });
   assert.equal(utterances[1].lang, 'en-US');
-  assert.equal(utterances[1].voice.lang, 'en-US', 'يجب اختيار صوت مطابق للغة الإنجليزية');
+  assert.equal(utterances[1].voice.name, 'English Natural', 'يجب اختيار الصوت الإنجليزي المحلي الأحدث افتراضياً');
   assert.match(utterances[1].text, /72 percent/);
+  await new Promise((resolve, reject) => {
+    voiceModule.exports.speakArabic('Selected device voice test.', {
+      lang: 'en-US',
+      voiceURI: 'en-standard',
+      onError: reject,
+      onEnd: resolve,
+    });
+  });
+  assert.equal(utterances[2].voice.voiceURI, 'en-standard', 'يجب احترام اختيار المستخدم للصوت المثبت');
+  const savedGetVoices = synth.getVoices;
+  synth.getVoices = () => [];
+  let missingArabicVoiceError = '';
+  voiceModule.exports.speakArabic('اختبار عربي', {
+    lang: 'ar-SA',
+    onError: (error) => { missingArabicVoiceError = error.message; },
+  });
+  assert.match(missingArabicVoiceError, /لا يوجد صوت محلي مثبت للغة العربية/);
+  assert.equal(utterances.length, 3, 'لا يُسمح بالرجوع إلى صوت غير محلي عند غياب العربية');
+  synth.getVoices = savedGetVoices;
   global.window = previousWindow;
 }
 

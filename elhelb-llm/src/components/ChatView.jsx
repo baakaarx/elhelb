@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Send,
   ImagePlus,
@@ -18,6 +18,7 @@ import {
 import { apiRequest } from '../api';
 import {
   isVoiceOutputSupported,
+  getAvailableSpeechVoices,
   getVoiceDiagnostics,
   speakArabic,
   stopSpeaking,
@@ -141,6 +142,11 @@ export default function ChatView({
     }
   });
   const voiceLanguageRef = useRef(voiceLanguage);
+  const [voiceSelections, setVoiceSelections] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('elhelb_speech_voices') || '{}'); } catch { return {}; }
+  });
+  const voiceSelectionsRef = useRef(voiceSelections);
+  const [systemVoiceVersion, setSystemVoiceVersion] = useState(0);
   const callActiveRef = useRef(false);
   const callRecRef = useRef(null);
   const callRetryTimerRef = useRef(null);
@@ -165,10 +171,40 @@ export default function ChatView({
     return () => window.clearInterval(timer);
   }, [isMicListening, isRecordingVoice]);
 
+  const availableSpeechVoices = useMemo(
+    () => getAvailableSpeechVoices(voiceLanguage),
+    [voiceLanguage, systemVoiceVersion]
+  );
+  const activeSpeechVoiceURI = availableSpeechVoices.some((voice) => voice.voiceURI === voiceSelections[voiceLanguage])
+    ? voiceSelections[voiceLanguage]
+    : availableSpeechVoices[0]?.voiceURI || '';
+
   useEffect(() => {
     voiceLanguageRef.current = voiceLanguage;
     try { localStorage.setItem('elhelb_voice_language', voiceLanguage); } catch {}
   }, [voiceLanguage]);
+
+  useEffect(() => {
+    voiceSelectionsRef.current = voiceSelections;
+    try { localStorage.setItem('elhelb_speech_voices', JSON.stringify(voiceSelections)); } catch {}
+  }, [voiceSelections]);
+
+  useEffect(() => {
+    const synth = window.speechSynthesis;
+    if (!synth) return undefined;
+    const refreshVoices = () => setSystemVoiceVersion((version) => version + 1);
+    refreshVoices();
+    if (synth.addEventListener) {
+      synth.addEventListener('voiceschanged', refreshVoices);
+      return () => synth.removeEventListener?.('voiceschanged', refreshVoices);
+    }
+    const previousHandler = synth.onvoiceschanged;
+    synth.onvoiceschanged = (...args) => {
+      previousHandler?.(...args);
+      refreshVoices();
+    };
+    return () => { if (synth.onvoiceschanged) synth.onvoiceschanged = previousHandler || null; };
+  }, []);
 
   useEffect(() => {
     apiRequest(`/api/chat/history?sessionId=${encodeURIComponent(sessionId)}`)
@@ -224,6 +260,12 @@ export default function ChatView({
     }, delay);
   }
 
+  function selectedSpeechVoiceURI() {
+    const language = voiceLanguageRef.current;
+    const requestedURI = voiceSelectionsRef.current[language] || '';
+    return getAvailableSpeechVoices(language).some((voice) => voice.voiceURI === requestedURI) ? requestedURI : '';
+  }
+
   function openVoiceCall() {
     voiceCallStartedRef.current = true;
     callActiveRef.current = true;
@@ -270,6 +312,7 @@ export default function ChatView({
           let speechFailed = false;
           speakArabic(toSpeak, {
             lang: voiceLanguageRef.current,
+            voiceURI: selectedSpeechVoiceURI(),
             onStart: () => {
               if (callActiveRef.current && generation === callGenerationRef.current) setCallStage('speaking');
             },
@@ -317,11 +360,15 @@ export default function ChatView({
     callRecRef.current = null;
     callFatalErrorRef.current = false;
     setCallError('');
-    setLastBotSubtitle('ده اختبار للصوت. لو سامعني، اتكلم بعد ما أخلص.');
+    const testSpeech = voiceLanguageRef.current.startsWith('en')
+      ? 'This is a voice test. If you can hear me, speak after I finish.'
+      : 'هذا اختبار للصوت. إذا كنت تسمعني، فتحدث بعد انتهائي.';
+    setLastBotSubtitle(testSpeech);
     setCallStage('speaking');
     let speechFailed = false;
-    speakArabic('ده اختبار للصوت. لو سامعني، اتكلم بعد ما أخلص.', {
+    speakArabic(testSpeech, {
       lang: voiceLanguageRef.current,
+      voiceURI: selectedSpeechVoiceURI(),
       onStart: () => {
         if (callActiveRef.current && generation === callGenerationRef.current) setCallStage('speaking');
       },
@@ -406,6 +453,7 @@ export default function ChatView({
     setSpeakingMsgId(msg.id);
     speakArabic(textToRead, {
       lang: voiceLanguageRef.current,
+      voiceURI: selectedSpeechVoiceURI(),
       onError: (err) => setError(err?.message || 'تعذر تشغيل الصوت؛ يمكنك قراءة الرد على الشاشة.'),
       onEnd: () => setSpeakingMsgId(null),
     });
@@ -500,6 +548,7 @@ export default function ChatView({
         setSpeakingMsgId(res.assistantMessage.id);
         speakArabic(res.speechText || res.assistantMessage.content, {
           lang: voiceLanguageRef.current,
+          voiceURI: selectedSpeechVoiceURI(),
           onError: (err) => setError(err?.message || 'تعذر تشغيل الصوت؛ يمكنك قراءة الرد على الشاشة.'),
           onEnd: () => setSpeakingMsgId(null),
         });
@@ -786,6 +835,28 @@ export default function ChatView({
                   <option value="en-US">English</option>
                 </select>
               </label>
+              <label className="voice-language-control">
+                صوت الجهاز
+                <select
+                  value={activeSpeechVoiceURI}
+                  disabled={!availableSpeechVoices.length}
+                  onChange={(event) => setVoiceSelections((current) => ({ ...current, [voiceLanguage]: event.target.value }))}
+                >
+                  {availableSpeechVoices.length ? availableSpeechVoices.map((voice) => (
+                    <option key={voice.voiceURI} value={voice.voiceURI}>
+                      {voice.name} ({voice.lang}) — محلي
+                    </option>
+                  )) : <option value="">لا يوجد صوت محلي لهذه اللغة</option>}
+                </select>
+              </label>
+              <button type="button" className="voice-refresh-btn" onClick={() => setSystemVoiceVersion((version) => version + 1)}>
+                تحديث قائمة الأصوات
+              </button>
+              <div className="voice-privacy-note">
+                {availableSpeechVoices.length
+                  ? 'النطق يستخدم صوتاً محلياً مثبتاً على جهازك؛ غيّر الصوت من القائمة لو النطق غير واضح.'
+                  : 'لا يظهر صوت محلي لهذه اللغة. نزّل بيانات صوت اللغة من إعدادات تحويل النص إلى كلام في الجهاز، ثم حدّث القائمة أو أعد فتح الصفحة.'}
+              </div>
             </div>
 
             <div className={`voice-orb-container ${callStage}`}>
