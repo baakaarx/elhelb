@@ -15,10 +15,16 @@ const router = express.Router();
 
 function countReviewablePendingRequests(user) {
   if (!user.permissionSet || user.onboarding_status === 'pending') return 0;
+  const isChairman = user.role_slug === 'chairman';
   if (user.permissionSet.has('requests.review_all')) {
     const r = get(
-      `SELECT COUNT(*) AS cnt FROM permission_requests WHERE status = 'pending' AND requester_id != ?`,
-      [user.id]
+      `SELECT COUNT(*) AS cnt
+       FROM permission_requests pr
+       LEFT JOIN departments td ON td.id = pr.target_department_id
+       WHERE pr.status = 'pending'
+         AND pr.requester_id != ?
+         AND (COALESCE(td.is_chairman_exclusive, 0) = 0 OR ? = 1)`,
+      [user.id, isChairman ? 1 : 0]
     );
     return r ? r.cnt : 0;
   }
@@ -27,10 +33,12 @@ function countReviewablePendingRequests(user) {
       `SELECT pr.id, pr.permission_key
        FROM permission_requests pr
        JOIN users u ON u.id = pr.requester_id
+       LEFT JOIN departments td ON td.id = pr.target_department_id
        WHERE pr.status = 'pending'
          AND pr.requester_id != ?
          AND pr.target_department_id = ?
-         AND u.department_id = ?`,
+         AND u.department_id = ?
+         AND COALESCE(td.is_chairman_exclusive, 0) = 0`,
       [user.id, user.department_id, user.department_id]
     );
     return rows.filter((r) => user.permissionSet.has(r.permission_key)).length;
@@ -40,18 +48,28 @@ function countReviewablePendingRequests(user) {
 
 function countPendingOnboardingUsers(user) {
   if (!user.permissionSet || user.onboarding_status === 'pending') return 0;
+  const isChairman = user.role_slug === 'chairman';
   if (user.permissionSet.has('users.manage')) {
     const r = get(
-      `SELECT COUNT(*) AS cnt FROM users WHERE onboarding_status = 'pending' AND is_active = 1`
+      `SELECT COUNT(*) AS cnt
+       FROM users u
+       LEFT JOIN departments pd ON pd.id = u.preferred_department_id
+       WHERE u.onboarding_status = 'pending'
+         AND u.is_active = 1
+         AND (COALESCE(pd.is_chairman_exclusive, 0) = 0 OR ? = 1)`,
+      [isChairman ? 1 : 0]
     );
     return r ? r.cnt : 0;
   }
   if (user.permissionSet.has('department.onboard_members') && user.department_id) {
     const r = get(
-      `SELECT COUNT(*) AS cnt FROM users
-       WHERE onboarding_status = 'pending'
-         AND is_active = 1
-         AND (preferred_department_id IS NULL OR preferred_department_id = ?)`,
+      `SELECT COUNT(*) AS cnt
+       FROM users u
+       LEFT JOIN departments pd ON pd.id = u.preferred_department_id
+       WHERE u.onboarding_status = 'pending'
+         AND u.is_active = 1
+         AND COALESCE(pd.is_chairman_exclusive, 0) = 0
+         AND (u.preferred_department_id IS NULL OR u.preferred_department_id = ?)`,
       [user.department_id]
     );
     return r ? r.cnt : 0;

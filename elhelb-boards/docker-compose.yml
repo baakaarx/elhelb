@@ -1,0 +1,18 @@
+services:
+  elhelb-boards:
+    build: .
+    container_name: elhelb-boards
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - HOST=0.0.0.0
+      - PORT=3000
+      - DB_PATH=/data/elhelb-boards.db
+      - JWT_SECRET=${JWT_SECRET:-elhelb-sovereign-prod-server-secret-2026}
+    volumes:
+      - elhelb_boards_data:/data
+
+volumes:
+  elhelb_boards_data:

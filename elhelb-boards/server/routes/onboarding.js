@@ -111,10 +111,12 @@ router.patch('/my-preference', async (req, res) => {
     const managerEmails = [];
 
     if (req.user.onboarding_status === 'pending') {
+      const isExclusiveDept = Boolean(Number(dept.is_chairman_exclusive));
       const notifyManagers = all(
-        `SELECT u.id, u.email, u.department_id,
+        `SELECT u.id, u.email, u.department_id, r.slug AS role_slug,
                 MAX(CASE WHEN rp.permission_key = 'users.manage' THEN 1 ELSE 0 END) AS has_global_users_manage
          FROM users u
+         JOIN roles r ON r.id = u.role_id
          JOIN role_permissions rp ON rp.role_id = u.role_id
          WHERE u.is_active = 1
            AND u.onboarding_status = 'approved'
@@ -123,10 +125,11 @@ router.patch('/my-preference', async (req, res) => {
       );
 
       for (const m of notifyManagers) {
-        const shouldNotify =
-          Boolean(m.has_global_users_manage) ||
-          !m.department_id ||
-          Number(m.department_id) === Number(dept.id);
+        const shouldNotify = isExclusiveDept
+          ? m.role_slug === 'chairman'
+          : Boolean(m.has_global_users_manage) ||
+            !m.department_id ||
+            Number(m.department_id) === Number(dept.id);
 
         if (shouldNotify) {
           run(
@@ -198,6 +201,7 @@ router.get('/pending', (req, res) => {
 
   const myDeptId = req.user.department_id || null;
   const callerRank = Number(req.user.roleRank || 0);
+  const isChairman = req.user.role_slug === 'chairman';
 
   const pendingUsers = canManageAll
     ? all(
@@ -211,8 +215,11 @@ router.get('/pending', (req, res) => {
            pd.color AS preferred_department_color
          FROM users u
          LEFT JOIN departments pd ON pd.id = u.preferred_department_id
-         WHERE u.onboarding_status = 'pending' AND u.is_active = 1
-         ORDER BY u.department_confirmed DESC, u.id DESC`
+         WHERE u.onboarding_status = 'pending'
+           AND u.is_active = 1
+           AND (COALESCE(pd.is_chairman_exclusive, 0) = 0 OR ? = 1)
+         ORDER BY u.department_confirmed DESC, u.id DESC`,
+        [isChairman ? 1 : 0]
       )
     : all(
         `SELECT
@@ -227,6 +234,7 @@ router.get('/pending', (req, res) => {
          LEFT JOIN departments pd ON pd.id = u.preferred_department_id
          WHERE u.onboarding_status = 'pending'
            AND u.is_active = 1
+           AND COALESCE(pd.is_chairman_exclusive, 0) = 0
            AND (u.preferred_department_id IS NULL OR u.preferred_department_id = ?)
          ORDER BY
            CASE WHEN u.preferred_department_id = ? THEN 0 ELSE 1 END ASC,
@@ -236,9 +244,20 @@ router.get('/pending', (req, res) => {
       );
 
   const assignableDepartments = canManageAll
-    ? all(`SELECT id, slug, name, color FROM departments ORDER BY id ASC`)
+    ? all(
+        `SELECT id, slug, name, color, is_chairman_exclusive
+         FROM departments
+         WHERE is_chairman_exclusive = 0 OR ? = 1
+         ORDER BY id ASC`,
+        [isChairman ? 1 : 0]
+      )
     : myDeptId
-    ? all(`SELECT id, slug, name, color FROM departments WHERE id = ?`, [myDeptId])
+    ? all(
+        `SELECT id, slug, name, color, is_chairman_exclusive
+         FROM departments
+         WHERE id = ? AND is_chairman_exclusive = 0`,
+        [myDeptId]
+      )
     : [];
 
   const assignableRoles = all(
@@ -248,7 +267,7 @@ router.get('/pending', (req, res) => {
        AND rank_level > 0
        AND rank_level < ?
      ORDER BY rank_level DESC, id ASC`,
-    [req.user.role_slug === 'chairman' ? 101 : callerRank]
+    [isChairman ? 101 : callerRank]
   );
 
   const rawTeamMembers = canManageAll
@@ -256,15 +275,18 @@ router.get('/pending', (req, res) => {
         `SELECT
            u.id, u.username, u.email, u.full_name, u.job_title, u.avatar_color,
            u.auth_provider, u.department_id, u.approved_at, u.is_active,
-           d.name AS department_name, d.color AS department_color,
+           d.name AS department_name, d.color AS department_color, d.is_chairman_exclusive,
            r.slug AS role_slug, r.name AS role_name, r.color AS role_color, r.rank_level,
            approver.full_name AS approved_by_name
          FROM users u
          JOIN roles r ON r.id = u.role_id
          LEFT JOIN departments d ON d.id = u.department_id
          LEFT JOIN users approver ON approver.id = u.approved_by
-         WHERE u.onboarding_status = 'approved' AND u.is_active = 1
-         ORDER BY u.department_id ASC, r.rank_level DESC, u.id ASC`
+         WHERE u.onboarding_status = 'approved'
+           AND u.is_active = 1
+           AND (COALESCE(d.is_chairman_exclusive, 0) = 0 OR ? = 1)
+         ORDER BY u.department_id ASC, r.rank_level DESC, u.id ASC`,
+        [isChairman ? 1 : 0]
       )
     : myDeptId
     ? all(
@@ -366,6 +388,19 @@ router.post('/:userId(\\d+)/claim', async (req, res) => {
     const dept = get(`SELECT * FROM departments WHERE id = ?`, [Number(targetDeptId)]);
     if (!dept) {
       return res.status(400).json({ error: 'يرجى تحديد القسم الذي سينضم إليه الموظف' });
+    }
+
+    if (Number(dept.is_chairman_exclusive) && req.user.role_slug !== 'chairman') {
+      writeAudit({
+        user: req.user,
+        action: `محاولة تسكين موظف في قسم سيادي خاص برئيس مجلس الإدارة (${dept.name})`,
+        permissionKey: 'users.manage',
+        status: 'DENIED',
+        req,
+      });
+      return res.status(403).json({
+        error: 'حماية سيادية: هذا القسم خاص ومرتبط مباشرةً برئيس مجلس الإدارة فقط ولا يمكن التسكين فيه إلا من حساب رئيس مجلس الإدارة شخصياً.',
+      });
     }
 
     const role = get(`SELECT * FROM roles WHERE id = ?`, [requestedRoleId]);
@@ -486,6 +521,17 @@ router.delete('/:userId(\\d+)', (req, res) => {
     return res.status(403).json({
       error: 'لا يمكنك حذف طلب انضمام موجه لقسم آخر',
     });
+  }
+
+  if (targetUser.preferred_department_id && req.user.role_slug !== 'chairman') {
+    const prefDept = get(`SELECT is_chairman_exclusive FROM departments WHERE id = ?`, [
+      targetUser.preferred_department_id,
+    ]);
+    if (prefDept && Number(prefDept.is_chairman_exclusive)) {
+      return res.status(403).json({
+        error: 'حماية سيادية: طلبات الانضمام للقسم الخاص برئيس مجلس الإدارة تُراجع من رئيس مجلس الإدارة فقط',
+      });
+    }
   }
 
   adminRoutes.deleteUserCompletely(targetUser.id);

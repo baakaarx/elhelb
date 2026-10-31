@@ -500,9 +500,16 @@ export default function WaitingOnboardingView({
                             flexShrink: 0,
                           }}
                         />
-                        <span style={{ fontWeight: 800, fontSize: 13.5, color: '#0f172a' }}>
-                          {d.name}
-                        </span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                          <span style={{ fontWeight: 800, fontSize: 13.5, color: '#0f172a' }}>
+                            {d.name}
+                          </span>
+                          {Boolean(d.is_chairman_exclusive) && (
+                            <span style={{ fontSize: 11, fontWeight: 800, color: '#b45309' }}>
+                              👑 يتبع مكتب رئيس مجلس الإدارة مباشرةً
+                            </span>
+                          )}
+                        </div>
                       </div>
                       {selected && <CheckCircle2 size={17} color={d.color || '#0a6fa8'} />}
                     </button>

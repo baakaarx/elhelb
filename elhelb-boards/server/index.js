@@ -34,7 +34,7 @@ app.use(
   })
 );
 app.use(cookieParser());
-app.use(express.json({ limit: '256kb' }));
+app.use(express.json({ limit: '5mb' }));
 
 // Strict zero-caching on ALL API endpoints + Cloud Persistent DB Sync across Serverless containers
 app.use('/api', async (req, res, next) => {

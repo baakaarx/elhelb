@@ -367,6 +367,19 @@ export default function KanbanBoardView({
               >
                 {board.department_name}
               </span>
+              {Boolean(board.department_chairman_exclusive) && (
+                <span
+                  className="badge"
+                  style={{
+                    background: 'linear-gradient(135deg, #d97706 0%, #b45309 100%)',
+                    color: '#fff',
+                    border: '1px solid rgba(254,243,199,0.55)',
+                    fontWeight: 800,
+                  }}
+                >
+                  👑 خاص برئيس مجلس الإدارة فقط
+                </span>
+              )}
               {board.accessViaGrant && (
                 <span
                   className="badge"

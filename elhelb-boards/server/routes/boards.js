@@ -45,27 +45,34 @@ function computeBoardCapabilities(user, board) {
   };
 }
 
-// Public directory of company departments (names & colors ONLY — zero private board details!)
+// Public directory of company departments (hides Chairman-Exclusive departments from outsiders!)
 router.get('/departments/directory', (req, res) => {
+  const isChairman = req.user.role_slug === 'chairman';
   const depts = all(
-    `SELECT d.id, d.slug, d.name, d.description, d.color, d.icon
+    `SELECT d.id, d.slug, d.name, d.description, d.color, d.icon, d.is_chairman_exclusive
      FROM departments d
-     ORDER BY d.id ASC`
+     WHERE d.is_chairman_exclusive = 0 OR ? = 1 OR d.id = ?
+     ORDER BY d.id ASC`,
+    [isChairman ? 1 : 0, req.user.department_id || -1]
   );
   res.json(
-    depts.map((d) => ({
-      ...d,
-      isMyDepartment: req.user.department_id === d.id,
-      canViewBoards:
-        req.user.permissionSet.has('boards.view_all') ||
-        (req.user.department_id === d.id && req.user.permissionSet.has('boards.view_department')) ||
-        req.user.activeGrants.some(
-          (g) =>
-            g.permission_key === 'boards.view_department' &&
-            g.scope_type === 'department' &&
-            Number(g.target_department_id) === Number(d.id)
-        ),
-    }))
+    depts.map((d) => {
+      const isExclusive = Boolean(Number(d.is_chairman_exclusive));
+      return {
+        ...d,
+        is_chairman_exclusive: isExclusive,
+        isMyDepartment: req.user.department_id === d.id,
+        canViewBoards:
+          (req.user.permissionSet.has('boards.view_all') && (!isExclusive || isChairman)) ||
+          (req.user.department_id === d.id && req.user.permissionSet.has('boards.view_department')) ||
+          req.user.activeGrants.some(
+            (g) =>
+              g.permission_key === 'boards.view_department' &&
+              g.scope_type === 'department' &&
+              Number(g.target_department_id) === Number(d.id)
+          ),
+      };
+    })
   );
 });
 
@@ -79,20 +86,30 @@ router.get('/boards/executive-summary', (req, res) => {
     });
   }
 
+  const isChairman = req.user.role_slug === 'chairman';
+
   const departmentStats = all(
     `SELECT
-       d.id, d.slug, d.name, d.color, d.icon,
+       d.id, d.slug, d.name, d.color, d.icon, d.is_chairman_exclusive,
        (SELECT COUNT(*) FROM users u WHERE u.department_id = d.id AND u.is_active = 1 AND u.onboarding_status = 'approved') AS members_count,
        (SELECT COUNT(*) FROM boards b WHERE b.department_id = d.id AND b.is_archived = 0) AS boards_count,
        (SELECT COUNT(*) FROM cards c JOIN boards b ON b.id = c.board_id WHERE b.department_id = d.id AND b.is_archived = 0) AS cards_count,
        (SELECT COUNT(*) FROM cards c JOIN boards b ON b.id = c.board_id WHERE b.department_id = d.id AND b.is_archived = 0 AND c.is_completed = 1) AS completed_cards_count,
        (SELECT COUNT(*) FROM cards c JOIN boards b ON b.id = c.board_id WHERE b.department_id = d.id AND b.is_archived = 0 AND c.priority = 'urgent' AND c.is_completed = 0) AS urgent_cards_count
      FROM departments d
-     ORDER BY d.id ASC`
+     WHERE d.is_chairman_exclusive = 0 OR ? = 1
+     ORDER BY d.id ASC`,
+    [isChairman ? 1 : 0]
   );
 
   const pendingOnboarding = get(
-    `SELECT COUNT(*) AS cnt FROM users WHERE onboarding_status = 'pending' AND is_active = 1`
+    `SELECT COUNT(*) AS cnt
+     FROM users u
+     LEFT JOIN departments pd ON pd.id = u.preferred_department_id
+     WHERE u.onboarding_status = 'pending'
+       AND u.is_active = 1
+       AND (COALESCE(pd.is_chairman_exclusive, 0) = 0 OR ? = 1)`,
+    [isChairman ? 1 : 0]
   );
 
   res.json({
@@ -109,6 +126,7 @@ router.get('/boards', (req, res) => {
             d.color AS department_color,
             d.slug AS department_slug,
             d.icon AS department_icon,
+            d.is_chairman_exclusive AS department_chairman_exclusive,
             u.full_name AS creator_name,
             (SELECT COUNT(*) FROM lists l WHERE l.board_id = b.id) AS lists_count,
             (SELECT COUNT(*) FROM cards c WHERE c.board_id = b.id) AS cards_count,
@@ -128,6 +146,7 @@ router.get('/boards', (req, res) => {
     if (access.allowed) {
       visibleBoards.push({
         ...board,
+        department_chairman_exclusive: Boolean(Number(board.department_chairman_exclusive)),
         is_starred: Boolean(board.is_starred),
         accessViaGrant: access.viaGrant
           ? {
@@ -151,7 +170,8 @@ router.get('/search', (req, res) => {
 
   const allBoards = all(
     `SELECT b.id, b.title, b.description, b.department_id, b.background,
-            d.name AS department_name, d.color AS department_color
+            d.name AS department_name, d.color AS department_color,
+            d.is_chairman_exclusive AS department_chairman_exclusive
      FROM boards b
      JOIN departments d ON d.id = b.department_id
      WHERE b.is_archived = 0`
@@ -395,19 +415,33 @@ router.get('/boards/:id(\\d+)', (req, res) => {
     grantedCardPermissions: cardGrantMap.get(c.id) || [],
   }));
 
-  // Members who belong to this board's department (or company-wide managers) for assignment dropdown
-  const departmentMembers = all(
-    `SELECT u.id, u.full_name, u.job_title, u.avatar_color, r.name AS role_name
-     FROM users u
-     JOIN roles r ON r.id = u.role_id
-     WHERE u.is_active = 1
-       AND u.onboarding_status = 'approved'
-       AND (u.department_id = ? OR EXISTS (
-         SELECT 1 FROM role_permissions rp
-         WHERE rp.role_id = u.role_id AND rp.permission_key = 'boards.view_all'
-       ))
-     ORDER BY u.department_id IS NULL ASC, u.id ASC`,
-    [board.department_id]
+  // Members who belong to this board's department (for Chairman-Exclusive boards, ONLY dept members + Chairman!)
+  const isBoardExclusive = Boolean(Number(board.department_chairman_exclusive));
+  const departmentMembers = (
+    isBoardExclusive
+      ? all(
+          `SELECT u.id, u.full_name, u.job_title, u.avatar_color, r.name AS role_name
+           FROM users u
+           JOIN roles r ON r.id = u.role_id
+           WHERE u.is_active = 1
+             AND u.onboarding_status = 'approved'
+             AND (u.department_id = ? OR r.slug = 'chairman')
+           ORDER BY u.department_id IS NULL ASC, u.id ASC`,
+          [board.department_id]
+        )
+      : all(
+          `SELECT u.id, u.full_name, u.job_title, u.avatar_color, r.name AS role_name
+           FROM users u
+           JOIN roles r ON r.id = u.role_id
+           WHERE u.is_active = 1
+             AND u.onboarding_status = 'approved'
+             AND (u.department_id = ? OR EXISTS (
+               SELECT 1 FROM role_permissions rp
+               WHERE rp.role_id = u.role_id AND rp.permission_key = 'boards.view_all'
+             ))
+           ORDER BY u.department_id IS NULL ASC, u.id ASC`,
+          [board.department_id]
+        )
   ).map((m) => ({
     id: m.id,
     fullName: m.full_name,

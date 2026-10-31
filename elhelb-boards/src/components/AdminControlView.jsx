@@ -123,6 +123,16 @@ export default function AdminControlView({ user, onRefreshMe, showToast }) {
               سجل المراقبة الأمنية (Audit)
             </button>
           )}
+          {user.roleSlug === 'chairman' && (
+            <button
+              type="button"
+              className={`btn btn-sm ${subTab === 'backup' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setSubTab('backup')}
+            >
+              <Database size={15} />
+              نسخ ونقل الداتا للسيرفر
+            </button>
+          )}
         </div>
       </div>
 
@@ -133,11 +143,14 @@ export default function AdminControlView({ user, onRefreshMe, showToast }) {
         <UsersManagementPanel currentUser={user} onRefreshMe={onRefreshMe} showToast={showToast} />
       )}
       {subTab === 'departments' && canDepts && (
-        <DepartmentsManagementPanel showToast={showToast} />
+        <DepartmentsManagementPanel currentUser={user} showToast={showToast} />
       )}
       {subTab === 'gmail' && canRoles && <GmailSettingsPanel showToast={showToast} />}
       {subTab === 'oauth' && canRoles && <OAuthSettingsPanel showToast={showToast} />}
       {subTab === 'audit' && canAudit && <AuditLogsPanel showToast={showToast} />}
+      {subTab === 'backup' && user.roleSlug === 'chairman' && (
+        <SovereignBackupPanel onRefreshMe={onRefreshMe} showToast={showToast} />
+      )}
     </div>
   );
 }
@@ -1229,11 +1242,13 @@ function UsersManagementPanel({ currentUser, onRefreshMe, showToast }) {
 /* ==========================================
    3. DEPARTMENTS MANAGEMENT
    ========================================== */
-function DepartmentsManagementPanel({ showToast }) {
+function DepartmentsManagementPanel({ currentUser, showToast }) {
+  const isChairman = currentUser && currentUser.roleSlug === 'chairman';
   const [departments, setDepartments] = useState([]);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [color, setColor] = useState('#0a6fa8');
+  const [isChairmanExclusive, setIsChairmanExclusive] = useState(false);
 
   async function loadDepts() {
     try {
@@ -1253,14 +1268,33 @@ function DepartmentsManagementPanel({ showToast }) {
     try {
       await apiFetch('/api/admin/departments', {
         method: 'POST',
-        body: { name, description, color },
+        body: { name, description, color, isChairmanExclusive: isChairman && isChairmanExclusive },
       });
       setName('');
       setDescription('');
+      setIsChairmanExclusive(false);
       await loadDepts();
       showToast('تم إنشاء القسم الجديد بنجاح', 'success');
     } catch (err) {
       showToast(err.message || 'تعذر إنشاء القسم', 'error');
+    }
+  }
+
+  async function handleToggleExclusive(dept) {
+    try {
+      await apiFetch(`/api/admin/departments/${dept.id}`, {
+        method: 'PATCH',
+        body: { isChairmanExclusive: !dept.is_chairman_exclusive },
+      });
+      await loadDepts();
+      showToast(
+        !dept.is_chairman_exclusive
+          ? `تم تحويل «${dept.name}» إلى قسم سيادي خاص برئيس مجلس الإدارة فقط`
+          : `تم فتح «${dept.name}» للإدارة العامة والـ HR`,
+        'success'
+      );
+    } catch (err) {
+      showToast(err.message || 'تعذر تحديث خصوصية القسم', 'error');
     }
   }
 
@@ -1319,6 +1353,34 @@ function DepartmentsManagementPanel({ showToast }) {
               ))}
             </div>
           </div>
+          {isChairman && (
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 8,
+                background: '#fffbeb',
+                border: '1px solid #fde68a',
+                borderRadius: 10,
+                padding: '10px 12px',
+                marginBottom: 14,
+                cursor: 'pointer',
+                fontSize: 12.5,
+                color: '#92400e',
+                fontWeight: 700,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={isChairmanExclusive}
+                onChange={(e) => setIsChairmanExclusive(e.target.checked)}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                👑 قسم سيادي خاص برئيس مجلس الإدارة فقط (مخفي تماماً عن المدير العام، الـ HR، والـ IT)
+              </span>
+            </label>
+          )}
           <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
             <Plus size={15} />
             إنشاء القسم
@@ -1345,27 +1407,54 @@ function DepartmentsManagementPanel({ showToast }) {
               {departments.map((d) => (
                 <tr key={d.id}>
                   <td>
-                    <span className="badge" style={{ background: d.color, color: '#fff' }}>
-                      {d.name}
-                    </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-start' }}>
+                      <span className="badge" style={{ background: d.color, color: '#fff' }}>
+                        {d.name}
+                      </span>
+                      {Boolean(d.is_chairman_exclusive) && (
+                        <span
+                          className="badge"
+                          style={{
+                            background: '#fffbeb',
+                            color: '#92400e',
+                            border: '1px solid #f59e0b',
+                            fontSize: 11,
+                          }}
+                        >
+                          👑 خاص برئيس مجلس الإدارة فقط
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td style={{ fontSize: 12.5, color: '#475569' }}>{d.description}</td>
                   <td style={{ fontWeight: 800 }}>{d.users_count}</td>
                   <td style={{ fontWeight: 800 }}>{d.boards_count}</td>
                   <td>
-                    <button
-                      type="button"
-                      className="btn btn-danger-soft btn-sm"
-                      disabled={d.users_count > 0 || d.boards_count > 0}
-                      title={
-                        d.users_count > 0 || d.boards_count > 0
-                          ? 'لا يمكن حذف قسم مرتبط بلوحات أو موظفين'
-                          : 'حذف القسم'
-                      }
-                      onClick={() => handleDelete(d)}
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {isChairman && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          title="تبديل الخصوصية السيادية (خاص برئيس مجلس الإدارة فقط / عام)"
+                          onClick={() => handleToggleExclusive(d)}
+                        >
+                          👑
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-danger-soft btn-sm"
+                        disabled={d.users_count > 0 || d.boards_count > 0}
+                        title={
+                          d.users_count > 0 || d.boards_count > 0
+                            ? 'لا يمكن حذف قسم مرتبط بلوحات أو موظفين'
+                            : 'حذف القسم'
+                        }
+                        onClick={() => handleDelete(d)}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -2004,3 +2093,141 @@ function AuditLogsPanel({ showToast }) {
     </div>
   );
 }
+
+/* ==========================================
+   7. SOVEREIGN DATA BACKUP & SERVER MIGRATION (رئيس مجلس الإدارة فقط)
+   ========================================== */
+function SovereignBackupPanel({ onRefreshMe, showToast }) {
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+
+  async function handleExportBackup() {
+    setExporting(true);
+    try {
+      const res = await apiFetch('/api/admin/backup/export');
+      const blob = new Blob([JSON.stringify(res.snapshot, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      a.href = url;
+      a.download = `elhelb-boards-backup-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('تم تحميل النسخة الاحتياطية الكاملة بنجاح إلى جهازك', 'success');
+    } catch (err) {
+      showToast(err.message || 'تعذر تصدير النسخة الاحتياطية', 'error');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function handleImportFile(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setImporting(true);
+    try {
+      const rawText = await file.text();
+      const parsed = JSON.parse(rawText);
+      const res = await apiFetch('/api/admin/backup/import', {
+        method: 'POST',
+        body: { snapshot: parsed.snapshot || parsed },
+      });
+      await onRefreshMe();
+      showToast(res.message || 'تم استعادة كافة بيانات الشركة بنجاح', 'success');
+    } catch (err) {
+      showToast(err.message || 'تأكد من صحة ملف النسخة الاحتياطية (.json)', 'error');
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <div className="card-box">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <Crown size={20} color="#d4a90a" />
+        <h3 style={{ margin: 0, fontSize: 17, fontWeight: 900, color: '#071e14' }}>
+          النسخ الاحتياطي الكامل ونقل بيانات الشركة إلى السيرفر (حصري لرئيس مجلس الإدارة)
+        </h3>
+      </div>
+      <p style={{ margin: '0 0 18px', fontSize: 13.5, color: '#475569', lineHeight: 1.7 }}>
+        يمكنك من هنا تحميل ملف يحتوي على جميع حسابات الموظفين، الأقسام، مصفوفة الصلاحيات، لوحات العمل، القوائم، الكروت، والتعليقات بضغطة واحدة، ورفعه في أي وقت على السيرفر الجديد دون فقدان أي بيان.
+      </p>
+
+      <div className="form-grid-2" style={{ gap: 16 }}>
+        <div
+          style={{
+            padding: 18,
+            borderRadius: 14,
+            border: '1px solid #cbd5e1',
+            background: '#f8fafc',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            gap: 14,
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 900, fontSize: 15, color: '#0f172a', marginBottom: 4 }}>
+              1️⃣ تحميل نسخة احتياطية كاملة (.json)
+            </div>
+            <div style={{ fontSize: 12.5, color: '#64748b' }}>
+              يحفظ نسخة فورية من قاعدة البيانات بالكامل على جهازك للاحتفاظ بها أو نقلها للسيرفر.
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleExportBackup}
+            disabled={exporting}
+          >
+            <Save size={16} />
+            {exporting ? 'جاري تجهيز النسخة...' : 'تحميل النسخة الاحتياطية الآن'}
+          </button>
+        </div>
+
+        <div
+          style={{
+            padding: 18,
+            borderRadius: 14,
+            border: '1px solid #cbd5e1',
+            background: '#f8fafc',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+            gap: 14,
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 900, fontSize: 15, color: '#0f172a', marginBottom: 4 }}>
+              2️⃣ استعادة / رفع نسخة احتياطية على السيرفر
+            </div>
+            <div style={{ fontSize: 12.5, color: '#64748b' }}>
+              ارفع ملف النسخة الاحتياطية هنا لنقل كل الموظفين واللوحات والمهام فوراً إلى السيرفر.
+            </div>
+          </div>
+          <label
+            className="btn btn-secondary"
+            style={{ cursor: importing ? 'wait' : 'pointer', justifyContent: 'center' }}
+          >
+            <Plus size={16} />
+            {importing ? 'جاري استعادة البيانات...' : 'اختيار ملف النسخة واستعادته'}
+            <input
+              type="file"
+              accept=".json,application/json"
+              style={{ display: 'none' }}
+              disabled={importing}
+              onChange={handleImportFile}
+            />
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+

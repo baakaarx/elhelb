@@ -656,6 +656,26 @@ function BoardTile({ board, onOpen, onToggleStar }) {
       </div>
 
       <div className="board-tile-body">
+        {Boolean(board.department_chairman_exclusive) && (
+          <div
+            style={{
+              background: 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)',
+              border: '1px solid #f59e0b',
+              color: '#92400e',
+              borderRadius: 8,
+              padding: '5px 10px',
+              fontSize: 11.5,
+              fontWeight: 800,
+              marginBottom: 8,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              alignSelf: 'flex-start',
+            }}
+          >
+            👑 ارتباط مباشر برئيس مجلس الإدارة فقط
+          </div>
+        )}
         <div style={{ fontSize: 12.5, color: '#64748b', lineHeight: 1.6, minHeight: 38 }}>
           {board.description || 'لوحة متابعة مهام ومراحل العمل الخاصة بالقسم.'}
         </div>
