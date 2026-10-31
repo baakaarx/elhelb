@@ -3,12 +3,12 @@ FROM node:22-slim
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --include=dev --no-fund --loglevel=error
+RUN npm ci --include=dev --ignore-scripts --no-fund --loglevel=error
 
 COPY . .
 RUN chmod +x /app/docker-entrypoint.sh \
  && npm run build \
- && npm prune --omit=dev \
+ && npm prune --omit=dev --ignore-scripts \
  && mkdir -p /data \
  && chown -R node:node /app /data
 

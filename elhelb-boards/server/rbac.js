@@ -13,24 +13,9 @@ function resolveJwtSecret() {
     return envSecret;
   }
 
-  // Serverless cloud fallback ONLY if an authenticated cloud storage token is present
-  const cloudToken = (
-    process.env.BLOB_READ_WRITE_TOKEN ||
-    process.env.KV_REST_API_TOKEN ||
-    process.env.UPSTASH_REDIS_REST_TOKEN ||
-    process.env.TURSO_AUTH_TOKEN ||
-    ''
-  ).trim();
-  if (process.env.VERCEL && cloudToken.length >= 24) {
-    return crypto
-      .createHmac('sha256', cloudToken)
-      .update('elhelb-jwt-signing-key-v14')
-      .digest('hex');
-  }
-
   if (process.env.NODE_ENV === 'production') {
     throw new Error(
-      'FATAL SECURITY ERROR: JWT_SECRET environment variable (min 32 chars) is required in production. Use setup-from-zip.sh, start-windows-server.bat, or docker compose up.'
+      'FATAL SECURITY ERROR: JWT_SECRET environment variable (min 32 chars, separate from storage tokens) is required in production.'
     );
   }
 
@@ -309,20 +294,11 @@ function canAccessBoard(user, board) {
     return { allowed: true, viaGrant: null };
   }
 
-  // Check active temporary grant for viewing this board or its department
-  const viewGrant =
-    findMatchingGrant(user, 'boards.view_department', {
-      departmentId: board.department_id,
-      boardId: board.id,
-    }) ||
-    // Also allow viewing the board if user holds a board-specific action grant on this exact board
-    user.activeGrants.find(
-      (g) =>
-        (g.scope_type === 'board' && Number(g.target_board_id) === Number(board.id)) ||
-        (g.scope_type === 'department' &&
-          Number(g.target_department_id) === Number(board.department_id) &&
-          g.permission_key === 'boards.view_department')
-    );
+  // Check active temporary grant explicitly authorizing viewing this board or its department
+  const viewGrant = findMatchingGrant(user, 'boards.view_department', {
+    departmentId: board.department_id,
+    boardId: board.id,
+  });
 
   if (viewGrant) {
     return { allowed: true, viaGrant: viewGrant };
@@ -335,7 +311,12 @@ function canAccessBoard(user, board) {
  * Every mutating or reading route MUST verify permissions through this function.
  */
 function evaluatePermission(user, permissionKey, target = {}) {
-  const { departmentId = null, boardId = null, cardId = null } = target;
+  const {
+    departmentId = null,
+    boardId = null,
+    cardId = null,
+    departmentChairmanExclusive = undefined,
+  } = target;
 
   // Global permissions (not tied to a single department)
   if (GLOBAL_PERMISSIONS.has(permissionKey)) {
@@ -349,7 +330,9 @@ function evaluatePermission(user, permissionKey, target = {}) {
 
   // Scoped permissions (Boards, Lists, Cards, Comments, Department Requests)
   const isExclusive =
-    departmentId !== null ? isChairmanExclusiveDepartment(departmentId) : false;
+    departmentId !== null
+      ? isChairmanExclusiveDepartment(departmentId, departmentChairmanExclusive)
+      : false;
   const hasCompanyWideScope =
     user.permissionSet.has('boards.view_all') &&
     (!isExclusive || user.role_slug === 'chairman');
@@ -397,8 +380,12 @@ function consumeGrantIfOneTime(grant) {
 function detectExclusiveAuditScope({ user, req, details, action, departmentId, isChairmanExclusive }) {
   if (isChairmanExclusive) return 1;
   if (departmentId && isChairmanExclusiveDepartment(departmentId)) return 1;
-  if (user && user.department_id && isChairmanExclusiveDepartment(user.department_id)) return 1;
-  if (user && user.preferred_department_id && isChairmanExclusiveDepartment(user.preferred_department_id)) {
+  if (
+    user &&
+    user.onboarding_status === 'approved' &&
+    user.department_id &&
+    isChairmanExclusiveDepartment(user.department_id)
+  ) {
     return 1;
   }
 
@@ -653,6 +640,47 @@ function validatePasswordStrength(password, username = '') {
   return null;
 }
 
+const RESERVED_TITLE_PATTERNS = [
+  /رئيس\s*مجلس/,
+  /رييس\s*مجلس/,
+  /مجلس\s*ال[اإآ]دار[هة]/,
+  /المدير\s*العام/,
+  /\bchairman\b/i,
+  /\bsuper\s*admin\b/i,
+  /\bsystem\s*admin\b/i,
+];
+
+function sanitizeDisplayText(str, maxLen = 100) {
+  return String(str || '')
+    .replace(/[\u0000-\u001F\u007F\u200E\u200F\u202A-\u202E\u2066-\u2069]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLen);
+}
+
+function validateEmployeeFullName(fullName, { allowExecutiveTitles = false, minLen = 2 } = {}) {
+  const clean = sanitizeDisplayText(fullName, 100);
+  if (clean.length < minLen || clean.length > 100) {
+    return {
+      ok: false,
+      clean,
+      error: `يرجى كتابة الاسم الكامل للموظف (${minLen} إلى 100 حرف)`,
+    };
+  }
+  if (!allowExecutiveTitles) {
+    for (const rx of RESERVED_TITLE_PATTERNS) {
+      if (rx.test(clean)) {
+        return {
+          ok: false,
+          clean,
+          error: 'الاسم المدخل يحتوي على مسمى سيادي محجوز — يرجى كتابة اسمك الشخصي الثلاثي الحقيقي',
+        };
+      }
+    }
+  }
+  return { ok: true, clean, error: null };
+}
+
 function deriveSettingsVaultKey() {
   const seedMaterial = (process.env.SETTINGS_ENCRYPTION_KEY || JWT_SECRET || '').trim();
   return crypto
@@ -699,6 +727,8 @@ module.exports = {
   GLOBAL_PERMISSIONS,
   isSecureRequest,
   extractCandidateTokens,
+  sanitizeDisplayText,
+  validateEmployeeFullName,
   validatePasswordStrength,
   encryptSecretValue,
   decryptSecretValue,

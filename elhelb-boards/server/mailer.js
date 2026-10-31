@@ -43,8 +43,16 @@ function getGmailConfig() {
 
 function isDeliverableEmail(email) {
   const clean = String(email || '').trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean)) return false;
-  if (clean.endsWith('@example.com')) return false;
+  if (!clean || clean.length > 160) return false;
+  if (/["'<>,;\\\s\r\n\0]/.test(clean) || clean.includes('..')) return false;
+  if (!/^[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}$/.test(clean)) return false;
+  if (
+    clean.endsWith('@example.com') ||
+    clean.endsWith('.invalid') ||
+    clean.endsWith('.localhost')
+  ) {
+    return false;
+  }
   return true;
 }
 

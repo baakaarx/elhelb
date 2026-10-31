@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { get, run, transaction, getSetting, setSetting } = require('./db');
 
@@ -489,6 +490,26 @@ function seedIfNeeded() {
   const existingUsers = get(`SELECT COUNT(*) AS cnt FROM users`);
   if (existingUsers && existingUsers.cnt > 0) {
     transaction(() => {
+      // Optional emergency owner password recovery via private server env var ADMIN_RESET_PASSWORD
+      const resetAdminPw = String(process.env.ADMIN_RESET_PASSWORD || '').trim();
+      if (resetAdminPw.length >= 10) {
+        const chRow = get(
+          `SELECT u.id, u.password_hash
+           FROM users u
+           JOIN roles r ON r.id = u.role_id
+           WHERE r.slug = 'chairman'
+           ORDER BY u.id ASC LIMIT 1`
+        );
+        if (chRow && (!chRow.password_hash || !bcrypt.compareSync(resetAdminPw, chRow.password_hash))) {
+          run(
+            `UPDATE users
+             SET password_hash = ?, is_active = 1, has_custom_credentials = 1, token_version = token_version + 1
+             WHERE id = ?`,
+            [bcrypt.hashSync(resetAdminPw, 12), chRow.id]
+          );
+        }
+      }
+
       // Safe migration 1: ensure hr_manager role exists in pre-existing local databases
       const existingHrRole = get(`SELECT id FROM roles WHERE slug = 'hr_manager'`);
       if (!existingHrRole) {
@@ -532,10 +553,21 @@ function seedIfNeeded() {
     return;
   }
 
-  // Sovereign Chairman (admin) irreversible bcrypt hash (cost=12) — override via ADMIN_INIT_PASSWORD if desired
-  const adminPasswordHash = process.env.ADMIN_INIT_PASSWORD
-    ? bcrypt.hashSync(process.env.ADMIN_INIT_PASSWORD, 12)
-    : '$2a$12$nzDzqaKeSvRqLYoqCYggUufp8Za8HtCrk84n7GTjfvAHUsSH7hEWS';
+  // Sovereign Chairman (admin) password — strictly from ADMIN_INIT_PASSWORD in production (zero hardcoded hash in repo)
+  const envInitPassword = String(process.env.ADMIN_INIT_PASSWORD || '').trim();
+  if (process.env.NODE_ENV === 'production' && envInitPassword.length < 10) {
+    throw new Error(
+      'FATAL SECURITY ERROR: ADMIN_INIT_PASSWORD environment variable (min 10 chars) is required in production to initialize the sovereign admin account.'
+    );
+  }
+  const effectiveInitPassword =
+    envInitPassword.length >= 10
+      ? envInitPassword
+      : `Dev#${crypto.randomBytes(16).toString('base64url')}`;
+  if (!envInitPassword && process.env.NODE_ENV !== 'test') {
+    console.warn(`[DEV] ADMIN_INIT_PASSWORD not set — generated ephemeral dev password for @admin: ${effectiveInitPassword}`);
+  }
+  const adminPasswordHash = bcrypt.hashSync(effectiveInitPassword, 12);
 
   transaction(() => {
     // 1. Official ELHELB GROUP Departments (14 departments including Sovereign AI Office)

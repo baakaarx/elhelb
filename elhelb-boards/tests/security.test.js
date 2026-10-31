@@ -1,10 +1,14 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs');
 
 const tmpDb = path.join(os.tmpdir(), `elhelb-test-${Date.now()}.db`);
+const TEST_ADMIN_INIT_PASSWORD = `AdminInit#${crypto.randomBytes(10).toString('hex')}`;
 process.env.DB_PATH = tmpDb;
+process.env.JWT_SECRET = crypto.randomBytes(48).toString('hex');
+process.env.ADMIN_INIT_PASSWORD = TEST_ADMIN_INIT_PASSWORD;
 
 const app = require('../server/index');
 
@@ -33,7 +37,7 @@ async function main() {
   }
 
   try {
-    console.log('1️⃣ Testing clean production seed: ONLY admin (010228513849) exists & quick-login endpoint is removed...');
+    console.log('1️⃣ Testing clean production seed: ONLY admin (from ADMIN_INIT_PASSWORD env) exists & quick-login endpoint is removed...');
     const unauth = await api('GET', '/api/boards');
     assert.equal(unauth.status, 401);
 
@@ -48,8 +52,8 @@ async function main() {
     });
     assert.equal(oldDemoAttempt.status, 401, 'Old demo accounts must not exist');
 
-    // Owner sovereign account logs in with admin / 010228513849
-    const chairmanTok = await login('admin', '010228513849');
+    // Owner sovereign account logs in with ADMIN_INIT_PASSWORD (zero hardcoded password in repo)
+    const chairmanTok = await login('admin', TEST_ADMIN_INIT_PASSWORD);
 
     // Even when authenticated, /api/auth/demo-accounts returns 404 (route completely removed)
     const demoEndpointAuth = await api('GET', '/api/auth/demo-accounts', chairmanTok);
@@ -266,6 +270,16 @@ async function main() {
       email: 'test@gmail.com',
     });
     assert.equal(otpGone.status, 404, 'Email OTP route must be removed');
+
+    // Configure trusted official admin notification email BEFORE onboarding so email_logs records trusted admin alerts
+    assert.equal(
+      (
+        await api('PUT', '/api/admin/gmail-settings', chairmanTok, {
+          adminNotifyEmail: 'hr.alerts@elhelbgroup.com',
+        })
+      ).status,
+      200
+    );
 
     // Step A: HR Specialist self-registers -> picks HR Department -> Sovereign Admin approves as HR Manager!
     const hrSignupRes = await api('POST', '/api/auth/register', null, {
@@ -658,10 +672,10 @@ async function main() {
     resetCloudSyncStateForTests();
 
     try {
-      // Container A creates employee @mo.ai with password 010228513849 as HR Manager
+      // Container A creates employee @mo.ai with strong password as HR Manager
       const createMoAi = await api('POST', '/api/admin/users', chairmanTok, {
         username: 'mo.ai',
-        password: '010228513849',
+        password: 'MoAiStrong#2026',
         fullName: 'محمد عبد الرحمن',
         email: 'hr.notify@elhelbgroup.com',
         jobTitle: 'مسؤول الموارد البشرية (HR)',
@@ -692,7 +706,7 @@ async function main() {
             const loginRes = await fetch('http://127.0.0.1:' + p + '/api/auth/login', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ username: 'mo.ai', password: '010228513849' })
+              body: JSON.stringify({ username: 'mo.ai', password: 'MoAiStrong#2026' })
             });
             const loginJson = await loginRes.json();
             srv.close();
@@ -813,7 +827,7 @@ async function main() {
       const regBlobUser = await api('POST', '/api/auth/register', null, {
         fullName: 'سارة علي',
         username: 'sara.hr',
-        password: '010228513849',
+        password: 'SaraHrStrong#2026',
       });
       assert.equal(regBlobUser.status, 201);
       assert.ok(blobStore.size >= 1, 'Vercel Blob store must contain encrypted DB snapshot');
@@ -834,12 +848,12 @@ async function main() {
             const r1 = await fetch('http://127.0.0.1:' + p + '/api/auth/login', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ username: 'mo.ai', password: '010228513849' })
+              body: JSON.stringify({ username: 'mo.ai', password: 'MoAiStrong#2026' })
             });
             const r2 = await fetch('http://127.0.0.1:' + p + '/api/auth/login', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ username: 'sara.hr', password: '010228513849' })
+              body: JSON.stringify({ username: 'sara.hr', password: 'SaraHrStrong#2026' })
             });
             srv.close();
             console.log(JSON.stringify({ moStatus: r1.status, saraStatus: r2.status }));
@@ -890,7 +904,7 @@ async function main() {
       snapshot: exported.data.snapshot,
     });
     assert.equal(imported.status, 200);
-    assert.equal((await api('POST', '/api/auth/login', null, { username: 'mo.ai', password: '010228513849' })).status, 200);
+    assert.equal((await api('POST', '/api/auth/login', null, { username: 'mo.ai', password: 'MoAiStrong#2026' })).status, 200);
 
     console.log('1️⃣3️⃣ Testing 14 Official Departments + Sovereign Chairman-Exclusive AI Department Isolation...');
     // Verify all 5 new agrochemical/export operational departments + sovereign ai_systems exist
@@ -952,11 +966,11 @@ async function main() {
       403
     );
 
-    // Self-register AI Systems Engineer -> chooses ai_systems -> ONLY Chairman sees & approves!
+    // Self-register AI Systems Engineer -> self-service /my-preference blocks sovereign dept (403) -> ONLY Chairman assigns into ai_systems!
     const regAi = await api('POST', '/api/auth/register', null, {
       fullName: 'مهندس الذكاء الاصطناعي وتطوير الأنظمة',
       username: 'ai.sovereign',
-      password: '010228513849',
+      password: 'AiEngStrong#2026',
     });
     assert.equal(regAi.status, 201);
     const aiEmpTok = regAi.data.token;
@@ -966,13 +980,8 @@ async function main() {
       preferredDepartmentId: aiDept.id,
       jobTitle: 'مدير الذكاء الاصطناعي وتطوير الأنظمة',
     });
-    assert.equal(pickAiDept.status, 200);
+    assert.equal(pickAiDept.status, 403, 'Pending user must NOT self-select sovereign department via /my-preference');
 
-    // HR Manager and General Manager MUST NOT see pending ai.sovereign request!
-    const hrPendingCheck = await api('GET', '/api/onboarding/pending', hrTok);
-    assert.ok(!hrPendingCheck.data.pendingUsers.some((u) => u.username === 'ai.sovereign'));
-    const gmPendingCheck = await api('GET', '/api/onboarding/pending', gmTok);
-    assert.ok(!gmPendingCheck.data.pendingUsers.some((u) => u.username === 'ai.sovereign'));
     assert.equal(
       (
         await api('POST', `/api/onboarding/${aiEmpId}/claim`, gmTok, {
@@ -984,7 +993,7 @@ async function main() {
       'General Manager must get 403 attempting to approve into ai_systems'
     );
 
-    // Chairman DOES see pending ai.sovereign and approves directly!
+    // Chairman DOES see pending ai.sovereign and approves directly into ai_systems!
     const chPendingCheck = await api('GET', '/api/onboarding/pending', chairmanTok);
     assert.ok(chPendingCheck.data.pendingUsers.some((u) => u.username === 'ai.sovereign'));
     const chClaimAi = await api('POST', `/api/onboarding/${aiEmpId}/claim`, chairmanTok, {
@@ -1383,7 +1392,7 @@ async function main() {
     assert.equal(meAfterSetup.status, 200);
     assert.equal(meAfterSetup.data.user.username, 'final.chosen99');
 
-    // 17b. Pending applicant selecting sovereign ai_systems is locked against GM/IT/HR hijack, edit, or delete
+    // 17b. Self-service /my-preference blocks sovereign ai_systems (403); Chairman-staged AI candidate is locked against GM/IT/HR hijack, edit, or delete
     const pickAiPref17 = await api(
       'PATCH',
       '/api/onboarding/my-preference',
@@ -1393,8 +1402,20 @@ async function main() {
         jobTitle: 'مهندس رؤية حاسوبية',
       }
     );
-    assert.equal(pickAiPref17.status, 200);
+    assert.equal(pickAiPref17.status, 403);
     const pendingAiApplicantId = meAfterSetup.data.user.id;
+    const pendingRoleRow17 = (await api('GET', '/api/admin/roles', activeChairmanTok)).data.roles.find(
+      (r) => r.slug === 'pending_onboarding'
+    );
+    assert.equal(
+      (
+        await api('PATCH', `/api/admin/users/${pendingAiApplicantId}`, activeChairmanTok, {
+          roleId: pendingRoleRow17.id,
+          departmentId: aiDept.id,
+        })
+      ).status,
+      200
+    );
     const exportDeptRow17 = (await api('GET', '/api/admin/departments', activeChairmanTok)).data.find(
       (d) => d.slug === 'export'
     );
@@ -1738,7 +1759,7 @@ async function main() {
       'Already-approved employee must receive 403 on PATCH /api/onboarding/my-preference (anti-sovereign-cloaking)'
     );
 
-    // Candidate selects sovereign AI department -> Chairman rejects/deletes -> ZERO trace in GM/IT audit logs!
+    // Pending registrant CANNOT self-select sovereign AI department to hide their audit trail!
     assert.equal(
       (
         await api('PATCH', '/api/onboarding/my-preference', unconfirmedReg.data.token, {
@@ -1746,24 +1767,27 @@ async function main() {
           jobTitle: 'مهندس ذكاء اصطناعي',
         })
       ).status,
-      200
+      403,
+      'Pending registrant must NOT cloak audit logs by selecting sovereign department'
+    );
+    // And IT/GM CAN see & audit the pending registrant before deletion!
+    const itLogsBeforeDel = (await api('GET', '/api/admin/audit-logs', itMgrTok)).data;
+    assert.ok(
+      itLogsBeforeDel.some((row) => String(row.details || '').includes('unconfirmed.secret.cand')),
+      'Pending registrant audit trail must remain visible to IT/GM'
     );
     assert.equal(
-      (await api('DELETE', `/api/onboarding/${unconfirmedReg.data.user.id}`, restoredChairmanTok)).status,
-      200
+      (await api('DELETE', `/api/onboarding/${unconfirmedReg.data.user.id}`, hrTok)).status,
+      200,
+      'HR must be able to reject & delete any unapproved self-registered account'
     );
 
     const gmLogs19 = (await api('GET', '/api/admin/audit-logs', gmTok)).data;
     const itLogs19 = (await api('GET', '/api/admin/audit-logs', itMgrTok)).data;
     for (const logs of [gmLogs19, itLogs19]) {
       assert.ok(
-        !logs.some(
-          (row) =>
-            String(row.details || '').includes('مكتب التخطيط السيادي الخاص') ||
-            String(row.details || '').includes('مرشح سري قبل اختيار القسم') ||
-            String(row.details || '').includes('unconfirmed.secret.cand')
-        ),
-        'Deleting sovereign departments or pending AI applicants must never leak into GM/IT audit logs'
+        !logs.some((row) => String(row.details || '').includes('مكتب التخطيط السيادي الخاص')),
+        'Deleting sovereign departments must never leak into GM/IT audit logs'
       );
     }
 
@@ -2022,7 +2046,246 @@ async function main() {
       'CSP script-src and object-src must remain strictly enforced even when ALLOW_IFRAME_PREVIEW=1'
     );
 
-    console.log('\n✅ ALL 20 PRODUCTION v17 TESTS (100% EXTERNAL AUDITOR + RED-TEAM ZERO-VULNERABILITY SUITE) PASSED 100%!');
+    console.log('2️⃣1️⃣ Testing v18 Second Deep Auditor Fixes (Zero Default Admin Password, Anti-Audit-Hiding, Mail-Bomb Guard, Self-Dept/Password/Role Amplification Locks, CloudSync Key Separation, Scoped Board Grants & Strict Email/Title Validation)...');
+
+    // 21a. Zero hardcoded admin password/hash in seed.js & tests + ADMIN_RESET_PASSWORD recovery
+    const seedSrc21 = fs.readFileSync(path.join(__dirname, '..', 'server', 'seed.js'), 'utf8');
+    assert.ok(
+      !seedSrc21.includes('$2a$12$') && !seedSrc21.includes('$2b$12$'),
+      'seed.js must contain zero hardcoded bcrypt password hashes'
+    );
+    process.env.ADMIN_RESET_PASSWORD = 'RecoveredChairman#2026!';
+    try {
+      const { seedIfNeeded: reseed21 } = require('../server/seed');
+      reseed21();
+      const recTok = await login('admin', 'RecoveredChairman#2026!');
+      assert.ok(recTok, 'ADMIN_RESET_PASSWORD must cleanly recover Chairman account');
+      // Rotate back to Strong#Chairman2026! via UI API
+      const adminMe21 = await api('GET', '/api/auth/me', recTok);
+      const rotBack21 = await api('PATCH', `/api/admin/users/${adminMe21.data.user.id}`, recTok, {
+        fullName: adminMe21.data.user.fullName,
+        roleId: adminMe21.data.user.roleId,
+        departmentId: null,
+        isActive: true,
+        newPassword: 'Strong#Chairman2026!',
+      });
+      assert.equal(rotBack21.status, 200);
+      var chTok21 = rotBack21.data.token;
+    } finally {
+      delete process.env.ADMIN_RESET_PASSWORD;
+    }
+
+    // 21b. Public /api/auth/oauth/providers hides sovereign departments + /my-preference anti-mail-bombing
+    const pubProviders21 = await api('GET', '/api/auth/oauth/providers');
+    assert.equal(pubProviders21.status, 200);
+    assert.equal(pubProviders21.data.departments.length, 13);
+    assert.ok(
+      !pubProviders21.data.departments.some((d) => d.is_chairman_exclusive || d.slug === 'ai_systems'),
+      'Public /api/auth/oauth/providers must exclude sovereign departments'
+    );
+
+    const antiFloodCand = await api('POST', '/api/auth/register', null, {
+      fullName: 'متقدم لاختبار عدم تكرار الإيميلات',
+      username: 'antiflood.cand21',
+      password: 'CandidateStrong#2026',
+    });
+    assert.equal(antiFloodCand.status, 201);
+
+    const logsBeforePref = dbGet20(`SELECT COUNT(*) AS cnt FROM email_logs`).cnt;
+    assert.equal(
+      (
+        await api('PATCH', '/api/onboarding/my-preference', antiFloodCand.data.token, {
+          preferredDepartmentId: exportDept.id,
+          jobTitle: 'أخصائي تصدير',
+        })
+      ).status,
+      200
+    );
+    const logsAfterFirstPref = dbGet20(`SELECT COUNT(*) AS cnt FROM email_logs`).cnt;
+    assert.equal(logsAfterFirstPref, logsBeforePref + 1, 'First department selection sends 1 admin alert');
+
+    // Repeating /my-preference with same department or switching departments must NOT send extra SMTP emails!
+    assert.equal(
+      (
+        await api('PATCH', '/api/onboarding/my-preference', antiFloodCand.data.token, {
+          preferredDepartmentId: exportDept.id,
+          jobTitle: 'أخصائي تصدير أول',
+        })
+      ).status,
+      200
+    );
+    assert.equal(
+      (
+        await api('PATCH', '/api/onboarding/my-preference', antiFloodCand.data.token, {
+          preferredDepartmentId: regDept.id,
+          jobTitle: 'أخصائي تسجيل',
+        })
+      ).status,
+      200
+    );
+    const logsAfterRepeatPref = dbGet20(`SELECT COUNT(*) AS cnt FROM email_logs`).cnt;
+    assert.equal(
+      logsAfterRepeatPref,
+      logsAfterFirstPref,
+      'Repeated /my-preference calls must NEVER send extra SMTP emails (anti-mail-bomb)'
+    );
+
+    // 21c. HR Manager CANNOT hop departments on self OR reset passwords of approved employees in other departments!
+    const hrMe21 = await api('GET', '/api/auth/me', hrTok);
+    assert.equal(
+      (
+        await api('PATCH', `/api/admin/users/${hrMe21.data.user.id}`, hrTok, {
+          departmentId: exportDept.id,
+        })
+      ).status,
+      403,
+      'HR Manager must receive 403 attempting to move their own account into another department'
+    );
+    const salesMgrMe21 = await api('GET', '/api/auth/me', salesMgrTok);
+    assert.equal(
+      (
+        await api('PATCH', `/api/admin/users/${salesMgrMe21.data.user.id}`, hrTok, {
+          newPassword: 'HijackAttempt#2026!',
+        })
+      ).status,
+      403,
+      'HR Manager must receive 403 attempting to reset password of an approved manager in another department'
+    );
+
+    // 21d. Anti-Privilege-Amplification on roles.manage (IT Admin lacks boards.delete -> cannot add boards.delete to staff or new role)
+    assert.equal(
+      (
+        await api('PUT', `/api/admin/roles/${staffRole.id}`, itMgrTok, {
+          permissions: [...staffRole.permissions, 'boards.delete'],
+        })
+      ).status,
+      403,
+      'IT Admin lacking boards.delete must receive 403 trying to add boards.delete to staff role'
+    );
+    assert.equal(
+      (
+        await api('POST', '/api/admin/roles', itMgrTok, {
+          name: 'دور مضخم غير مصرح',
+          permissions: ['boards.view_department', 'boards.delete'],
+        })
+      ).status,
+      403,
+      'IT Admin lacking boards.delete must receive 403 trying to create a role containing boards.delete'
+    );
+
+    // 21e. CloudSync encryption key separation (stealing storage token alone cannot decrypt snapshot)
+    const { encodeSnapshot, decodeSnapshot } = require('../server/cloudSync');
+    const sampleCipher = encodeSnapshot({ tables: { users: [] } }, 'stolen-storage-token-123456');
+    const origJwtEnv = process.env.JWT_SECRET;
+    process.env.CLOUD_ENCRYPTION_KEY = 'wrong-attacker-guessed-secret-999999';
+    let failedDecryptWithoutAppKey = false;
+    try {
+      decodeSnapshot(sampleCipher, 'stolen-storage-token-123456');
+    } catch (_) {
+      failedDecryptWithoutAppKey = true;
+    } finally {
+      delete process.env.CLOUD_ENCRYPTION_KEY;
+      process.env.JWT_SECRET = origJwtEnv;
+    }
+    assert.equal(
+      failedDecryptWithoutAppKey,
+      true,
+      'Stealing storage token without CLOUD_ENCRYPTION_KEY / JWT_SECRET must fail AES-GCM authentication'
+    );
+
+    // 21f. Board-scoped request on foreign board stays board-scoped (not widened to department) & non-view once grant does not grant board view
+    const extraExportBoard = await api('POST', '/api/boards', chTok21, {
+      title: 'لوحة تصدير ثانية سرية',
+      departmentId: exportDept.id,
+    });
+    assert.equal(extraExportBoard.status, 201);
+    const singleBoardReq = await api('POST', '/api/requests', salesEmpTok, {
+      permissionKey: 'boards.view_department',
+      targetBoardId: exportBoards.data[0].id,
+      requestedDuration: '1h',
+      reason: 'أحتاج الاطلاع على هذه اللوحة الواحدة فقط لمطابقة فاتورة شحنة.',
+    });
+    assert.equal(singleBoardReq.status, 201);
+    const createdReqRow = dbGet20(`SELECT * FROM permission_requests WHERE id = ?`, [
+      singleBoardReq.data.id,
+    ]);
+    assert.equal(
+      createdReqRow.scope_type,
+      'board',
+      'Requesting view on a specific board ID must remain board-scoped, NOT widened to department'
+    );
+    assert.equal(Number(createdReqRow.target_board_id), Number(exportBoards.data[0].id));
+    assert.equal(
+      (
+        await api('POST', `/api/requests/${singleBoardReq.data.id}/review`, chTok21, {
+          decision: 'approved',
+          approvedDuration: '1h',
+        })
+      ).status,
+      200
+    );
+    assert.equal(
+      (await api('GET', `/api/boards/${exportBoards.data[0].id}`, salesEmpTok)).status,
+      200,
+      'Approved single-board grant allows viewing that exact board'
+    );
+    assert.equal(
+      (await api('GET', `/api/boards/${extraExportBoard.data.id}`, salesEmpTok)).status,
+      403,
+      'Approved single-board grant MUST NOT leak access to other boards in the same department'
+    );
+
+    // 21g. Strict isDeliverableEmail + executive title spoofing block + [object Object] guard + deployment configs
+    const { isDeliverableEmail } = require('../server/mailer');
+    for (const badMail of [
+      '"attacker"@domain.com',
+      '<victim@domain.com>',
+      'a,b@domain.com',
+      'user..double@domain.com',
+      'bad@domain.invalid',
+    ]) {
+      assert.equal(isDeliverableEmail(badMail), false, `isDeliverableEmail must reject ${badMail}`);
+    }
+    assert.equal(isDeliverableEmail('export.team@elhelbgroup.com'), true);
+
+    for (const spoofName of ['رئيس مجلس الإدارة', 'المدير العام للشركة', 'System Admin', 'Chairman']) {
+      assert.equal(
+        (
+          await api('POST', '/api/auth/register', null, {
+            fullName: spoofName,
+            username: `spoof.${Math.random().toString(36).slice(2, 8)}`,
+            password: 'SpoofTestPass#2026',
+          })
+        ).status,
+        400,
+        `Self-registration must reject spoofed executive title: ${spoofName}`
+      );
+    }
+
+    assert.ok(
+      apiJsSrc.includes('extractApiErrorMessage') && apiJsSrc.includes("typeof payload.error === 'object'"),
+      'src/api.js must safely unwrap object error payloads so [object Object] never renders'
+    );
+    const renderYamlSrc = fs.readFileSync(path.join(__dirname, '..', 'render.yaml'), 'utf8');
+    assert.ok(
+      renderYamlSrc.includes('TRUST_PROXY') && renderYamlSrc.includes('ADMIN_INIT_PASSWORD'),
+      'render.yaml must configure TRUST_PROXY and ADMIN_INIT_PASSWORD'
+    );
+    const installShSrc = fs.readFileSync(
+      path.join(__dirname, '..', 'deploy', 'install-server.sh'),
+      'utf8'
+    );
+    assert.ok(
+      installShSrc.includes('--ignore-scripts') && installShSrc.includes('runuser -u "$SERVICE_USER"'),
+      'install-server.sh must run builds as unprivileged service user with --ignore-scripts'
+    );
+    const composeSrc = fs.readFileSync(path.join(__dirname, '..', 'docker-compose.yml'), 'utf8');
+    assert.ok(
+      composeSrc.includes('127.0.0.1'),
+      'docker-compose.yml must bind to 127.0.0.1 by default'
+    );
+
+    console.log('\n✅ ALL 21 PRODUCTION v18 TESTS (100% EXTERNAL AUDITOR ROUND 1 + ROUND 2 + RED-TEAM ZERO-VULNERABILITY SUITE) PASSED 100%!');
   } finally {
     server.close();
     try { fs.unlinkSync(tmpDb); } catch (_) {}

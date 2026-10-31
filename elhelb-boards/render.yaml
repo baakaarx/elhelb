@@ -1,9 +1,10 @@
+# ملاحظة هامة: خطة Render المجانية تستخدم قرصاً مؤقتاً؛ للاحتفاظ الدائم بالبيانات على Render اربط متغيرات Upstash KV أو قرصاً دائماً (Disk).
 services:
   - type: web
     name: elhelb-boards
     runtime: node
     plan: free
-    buildCommand: npm install --include=dev && npm run build
+    buildCommand: npm ci --include=dev --ignore-scripts && npm run build && npm prune --omit=dev --ignore-scripts
     startCommand: npm start
     healthCheckPath: /health
     envVars:
@@ -11,5 +12,13 @@ services:
         value: "22"
       - key: NODE_ENV
         value: production
+      - key: TRUST_PROXY
+        value: "1"
       - key: JWT_SECRET
         generateValue: true
+      - key: SETTINGS_ENCRYPTION_KEY
+        generateValue: true
+      - key: CLOUD_ENCRYPTION_KEY
+        generateValue: true
+      - key: ADMIN_INIT_PASSWORD
+        sync: false

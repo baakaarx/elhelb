@@ -678,7 +678,12 @@ router.post('/cards/:id(\\d+)/assignees', async (req, res) => {
     }
   });
 
-  if (newlyAssigned && targetUser.id !== req.user.id && targetUser.email) {
+  if (
+    newlyAssigned &&
+    targetUser.id !== req.user.id &&
+    targetUser.email &&
+    Number(targetUser.email_verified) === 1
+  ) {
     await sendElhelbEmail({
       to: [targetUser.email],
       ccAdmin: false,

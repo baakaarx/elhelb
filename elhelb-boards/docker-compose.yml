@@ -3,16 +3,18 @@ services:
     build: .
     container_name: elhelb-boards
     restart: always
+    # يرتبط افتراضياً بـ 127.0.0.1 ليتم تمريره عبر Reverse Proxy مؤمّن بـ HTTPS (مثل Caddy أو Nginx)
     ports:
-      - "3000:3000"
+      - "${BIND_IP:-127.0.0.1}:${PORT:-3000}:3000"
     environment:
       - NODE_ENV=production
       - HOST=0.0.0.0
       - PORT=3000
       - DB_PATH=/data/elhelb-boards.db
       - JWT_SECRET=${JWT_SECRET:-}
+      - SETTINGS_ENCRYPTION_KEY=${SETTINGS_ENCRYPTION_KEY:-}
       - ADMIN_INIT_PASSWORD=${ADMIN_INIT_PASSWORD:-}
-      - TRUST_PROXY=${TRUST_PROXY:-0}
+      - TRUST_PROXY=${TRUST_PROXY:-1}
     volumes:
       - elhelb_boards_data:/data
 

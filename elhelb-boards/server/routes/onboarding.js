@@ -1,10 +1,12 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const rateLimit = require('express-rate-limit');
 const { all, get, run, transaction } = require('../db');
 const {
   COOKIE_NAME,
   LEGACY_COOKIE_NAMES,
   isSecureRequest,
+  validateEmployeeFullName,
   validatePasswordStrength,
   signUserToken,
   authenticate,
@@ -17,6 +19,15 @@ const adminRoutes = require('./admin');
 
 const router = express.Router();
 router.use(authenticate);
+
+const preferenceLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: process.env.NODE_ENV === 'test' ? 40 : 6,
+  keyGenerator: (req) => `${req.ip || 'unknown'}::${req.user ? req.user.id : 'anon'}`,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'تم تغيير القسم عدة مرات، يرجى الانتظار قليلاً قبل التعديل مجدداً' },
+});
 
 // Step 1: Pending employee sets initial credentials (OAuth) or updates pending credentials (with currentPassword)
 router.post('/setup-credentials', async (req, res) => {
@@ -68,11 +79,14 @@ router.post('/setup-credentials', async (req, res) => {
     if (pwErr) {
       return res.status(400).json({ error: pwErr });
     }
-    if (fullName.length < 2 || fullName.length > 100) {
-      return res.status(400).json({
-        error: 'يرجى التأكد من كتابة اسمك الكامل بشكل صحيح',
-      });
+    const nameCheck = validateEmployeeFullName(fullName, {
+      allowExecutiveTitles: false,
+      minLen: 2,
+    });
+    if (!nameCheck.ok) {
+      return res.status(400).json({ error: nameCheck.error });
     }
+    const safeFullName = nameCheck.clean;
 
     const duplicate = get(
       `SELECT id FROM users WHERE LOWER(username) = LOWER(?) AND id != ?`,
@@ -94,7 +108,7 @@ router.post('/setup-credentials', async (req, res) => {
            has_custom_credentials = 1,
            token_version = token_version + 1
        WHERE id = ?`,
-      [username, passwordHash, fullName, req.user.id]
+      [username, passwordHash, safeFullName, req.user.id]
     );
 
     const updatedSelf = get(`SELECT * FROM users WHERE id = ?`, [req.user.id]);
@@ -109,7 +123,7 @@ router.post('/setup-credentials', async (req, res) => {
     });
 
     writeAudit({
-      user: { ...req.user, full_name: fullName },
+      user: { ...req.user, full_name: `${safeFullName} (@${username})` },
       action: 'إنشاء اسم مستخدم وكلمة مرور خاصة بالموظف',
       status: 'ALLOWED',
       req,
@@ -120,7 +134,7 @@ router.post('/setup-credentials', async (req, res) => {
       ok: true,
       token: refreshedToken,
       username,
-      fullName,
+      fullName: safeFullName,
     });
   } catch (err) {
     console.error('Setup credentials error:', err);
@@ -129,7 +143,7 @@ router.post('/setup-credentials', async (req, res) => {
 });
 
 // Step 2: Employee selects their Department -> notifies HR (الموارد البشرية) & Top Management!
-router.patch('/my-preference', async (req, res) => {
+router.patch('/my-preference', preferenceLimiter, async (req, res) => {
   try {
     if (req.user.onboarding_status !== 'pending') {
       return res.status(403).json({
@@ -150,10 +164,25 @@ router.patch('/my-preference', async (req, res) => {
       return res.status(400).json({ error: 'القسم المختار غير موجود' });
     }
 
+    // Sovereign protection: self-service pending users CANNOT select sovereign departments
+    // (nor use them to hide their audit trail or evade HR/IT review)
+    if (Boolean(Number(dept.is_chairman_exclusive))) {
+      return res.status(403).json({
+        error: 'حماية سيادية: التسكين في هذا القسم يتم مباشرةً من حساب رئيس مجلس الإدارة فقط',
+      });
+    }
+
     const cleanJobTitle =
       typeof jobTitle === 'string' ? jobTitle.trim().slice(0, 100) : req.user.job_title;
 
-    const isExclusiveDept = Boolean(Number(dept.is_chairman_exclusive));
+    const prevSelf = get(
+      `SELECT preferred_department_id, department_confirmed FROM users WHERE id = ?`,
+      [req.user.id]
+    );
+    const deptActuallyChanged =
+      !prevSelf ||
+      !Number(prevSelf.department_confirmed) ||
+      Number(prevSelf.preferred_department_id || 0) !== Number(dept.id);
 
     run(
       `UPDATE users
@@ -163,67 +192,77 @@ router.patch('/my-preference', async (req, res) => {
        WHERE id = ?`,
       [dept.id, cleanJobTitle || '', req.user.id]
     );
-    if (isExclusiveDept) {
-      run(`UPDATE audit_logs SET is_chairman_exclusive = 1 WHERE actor_id = ?`, [req.user.id]);
-    }
 
-    const managerEmails = [];
-
-    if (req.user.onboarding_status === 'pending') {
-      const notifyManagers = all(
-        `SELECT u.id, u.email, u.department_id, r.slug AS role_slug,
-                MAX(CASE WHEN rp.permission_key = 'users.manage' THEN 1 ELSE 0 END) AS has_global_users_manage
-         FROM users u
-         JOIN roles r ON r.id = u.role_id
-         JOIN role_permissions rp ON rp.role_id = u.role_id
-         WHERE u.is_active = 1
-           AND u.onboarding_status = 'approved'
-           AND rp.permission_key IN ('department.onboard_members', 'users.manage')
-         GROUP BY u.id`
+    // Anti-mail-bombing & anti-notification-flood:
+    // Only notify managers when the department actually changed, and cap SMTP onboarding email to ONCE per pending account!
+    if (deptActuallyChanged) {
+      const priorNotifCountRow = get(
+        `SELECT COUNT(*) AS cnt FROM notifications
+         WHERE type = 'onboarding_pref' AND message LIKE ? ESCAPE '\\'`,
+        [`%— @${String(req.user.username || '').replace(/[\\%_]/g, '\\$&')})%`]
       );
+      const priorNotifCount = priorNotifCountRow ? Number(priorNotifCountRow.cnt) : 0;
 
-      for (const m of notifyManagers) {
-        const shouldNotify = isExclusiveDept
-          ? m.role_slug === 'chairman'
-          : Boolean(m.has_global_users_manage) ||
+      if (priorNotifCount < 3) {
+        const managerEmails = [];
+        const notifyManagers = all(
+          `SELECT u.id, u.email, u.email_verified, u.department_id, r.slug AS role_slug,
+                  MAX(CASE WHEN rp.permission_key = 'users.manage' THEN 1 ELSE 0 END) AS has_global_users_manage
+           FROM users u
+           JOIN roles r ON r.id = u.role_id
+           JOIN role_permissions rp ON rp.role_id = u.role_id
+           WHERE u.is_active = 1
+             AND u.onboarding_status = 'approved'
+             AND rp.permission_key IN ('department.onboard_members', 'users.manage')
+           GROUP BY u.id`
+        );
+
+        for (const m of notifyManagers) {
+          const shouldNotify =
+            Boolean(m.has_global_users_manage) ||
             !m.department_id ||
             Number(m.department_id) === Number(dept.id);
 
-        if (shouldNotify) {
-          run(
-            `INSERT INTO notifications (user_id, type, title, message, link_tab)
-             VALUES (?, 'onboarding_pref', 'طلب تسكين موظف جديد بانتظار اعتماد الـ HR', ?, 'onboarding')`,
-            [
-              m.id,
-              `الموظف (${req.user.full_name} — @${req.user.username}) سجل حسابه وطلب الانضمام إلى (${dept.name}) وبانتظار القبول والتسكين.`,
-            ]
-          );
-          if (m.email) managerEmails.push(m.email);
+          if (shouldNotify) {
+            run(
+              `INSERT INTO notifications (user_id, type, title, message, link_tab)
+               VALUES (?, 'onboarding_pref', 'طلب تسكين موظف جديد بانتظار اعتماد الـ HR', ?, 'onboarding')`,
+              [
+                m.id,
+                `الموظف (${req.user.full_name} — @${req.user.username}) سجل حسابه وطلب الانضمام إلى (${dept.name}) وبانتظار القبول والتسكين.`,
+              ]
+            );
+            if (m.email && Number(m.email_verified) === 1) {
+              managerEmails.push(m.email);
+            }
+          }
+        }
+
+        // Send external SMTP alert at most ONCE for the initial department selection
+        if (priorNotifCount === 0) {
+          await sendElhelbEmail({
+            to: managerEmails,
+            ccAdmin: true,
+            isChairmanExclusive: false,
+            eventType: 'onboarding_request',
+            subject: `👤 طلب تسكين موظف جديد في (${dept.name}) — ${req.user.full_name} (@${req.user.username})`,
+            badgeText: 'طلب تسكين موظف جديد (HR)',
+            badgeColor: '#d97706',
+            heading: `قام (${req.user.full_name} — @${req.user.username}) بالتسجيل وتحديد قسمه في مجموعة الهلب`,
+            bodyLines: [
+              `أنشأ الموظف حسابه وحدد أنه تابع لـ (${dept.name}).`,
+              `يرجى الدخول إلى تبويب "تسكين وقبول الموظفين (HR)" لاعتماده وتحديد دوره الوظيفي.`,
+            ],
+            details: [
+              ['الاسم الكامل للموظف', req.user.full_name],
+              ['اسم المستخدم المختار', `@${req.user.username}`],
+              ['البريد الإلكتروني', req.user.email || '—'],
+              ['القسم المطلوب الانضمام إليه', dept.name],
+              ['المسمى الوظيفي', cleanJobTitle || 'غير محدد بعد'],
+            ],
+          });
         }
       }
-
-      // Optional background Gmail notification (strictly Chairman-only if department is sovereign)
-      await sendElhelbEmail({
-        to: managerEmails,
-        ccAdmin: !isExclusiveDept,
-        isChairmanExclusive: isExclusiveDept,
-        eventType: 'onboarding_request',
-        subject: `👤 طلب تسكين موظف جديد في (${dept.name}) — ${req.user.full_name}`,
-        badgeText: 'طلب تسكين موظف جديد (HR)',
-        badgeColor: '#d97706',
-        heading: `قام (${req.user.full_name}) بالتسجيل وتحديد قسمه في مجموعة الهلب`,
-        bodyLines: [
-          `أنشأ الموظف حسابه وحدد أنه تابع لـ (${dept.name}).`,
-          `يرجى الدخول إلى تبويب "تسكين وقبول الموظفين (HR)" لاعتماده وتحديد دوره الوظيفي.`,
-        ],
-        details: [
-          ['الاسم الكامل للموظف', req.user.full_name],
-          ['اسم المستخدم المختار', `@${req.user.username}`],
-          ['البريد الإلكتروني', req.user.email || '—'],
-          ['القسم المطلوب الانضمام إليه', dept.name],
-          ['المسمى الوظيفي', cleanJobTitle || 'غير محدد بعد'],
-        ],
-      });
     }
 
     return res.json({
@@ -543,7 +582,7 @@ router.post('/:userId(\\d+)/claim', async (req, res) => {
     });
 
     await sendElhelbEmail({
-      to: targetUser.email ? [targetUser.email] : [],
+      to: targetUser.email && Number(targetUser.email_verified) === 1 ? [targetUser.email] : [],
       ccAdmin: !isExclusiveClaim,
       isChairmanExclusive: isExclusiveClaim,
       eventType: 'onboarding_approved',

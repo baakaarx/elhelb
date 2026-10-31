@@ -17,26 +17,42 @@ function resolvePm2DbPath() {
   return path.join(localDir, 'elhelb-boards.db');
 }
 
-function resolvePm2JwtSecret(dbPath) {
-  if (process.env.JWT_SECRET && process.env.JWT_SECRET.trim().length >= 32) {
-    return process.env.JWT_SECRET.trim();
-  }
-  const secretFile = path.join(path.dirname(dbPath), '.jwt_secret');
+function resolveOrGenerateSecretFile(filePath, generatorFn, minLen = 16) {
   try {
-    if (fs.existsSync(secretFile)) {
-      const existing = fs.readFileSync(secretFile, 'utf8').trim();
-      if (existing.length >= 32) return existing;
+    if (fs.existsSync(filePath)) {
+      const existing = fs.readFileSync(filePath, 'utf8').trim();
+      if (existing.length >= minLen) return existing;
     }
-    const generated = crypto.randomBytes(48).toString('hex');
-    fs.writeFileSync(secretFile, generated, { mode: 0o600 });
+    const generated = generatorFn();
+    fs.writeFileSync(filePath, generated, { mode: 0o600 });
     return generated;
   } catch (_) {
-    return crypto.randomBytes(48).toString('hex');
+    return generatorFn();
   }
 }
 
 const resolvedDbPath = resolvePm2DbPath();
-const resolvedJwtSecret = resolvePm2JwtSecret(resolvedDbPath);
+const dataDir = path.dirname(resolvedDbPath);
+
+const resolvedJwtSecret =
+  process.env.JWT_SECRET && process.env.JWT_SECRET.trim().length >= 32
+    ? process.env.JWT_SECRET.trim()
+    : resolveOrGenerateSecretFile(
+        path.join(dataDir, '.jwt_secret'),
+        () => crypto.randomBytes(48).toString('hex'),
+        32
+      );
+
+const resolvedAdminInitPassword =
+  process.env.ADMIN_INIT_PASSWORD && process.env.ADMIN_INIT_PASSWORD.trim().length >= 10
+    ? process.env.ADMIN_INIT_PASSWORD.trim()
+    : !fs.existsSync(resolvedDbPath)
+    ? resolveOrGenerateSecretFile(
+        path.join(dataDir, '.admin_init_password'),
+        () => `Adm-${crypto.randomBytes(12).toString('base64url')}`,
+        10
+      )
+    : '';
 
 module.exports = {
   apps: [
@@ -51,11 +67,12 @@ module.exports = {
       max_memory_restart: '512M',
       env: {
         NODE_ENV: 'production',
-        HOST: process.env.HOST || '0.0.0.0',
+        HOST: process.env.HOST || '127.0.0.1',
         PORT: process.env.PORT || 3000,
         DB_PATH: resolvedDbPath,
         JWT_SECRET: resolvedJwtSecret,
-        TRUST_PROXY: process.env.TRUST_PROXY || '0',
+        ADMIN_INIT_PASSWORD: resolvedAdminInitPassword,
+        TRUST_PROXY: process.env.TRUST_PROXY || '1',
       },
     },
   ],
